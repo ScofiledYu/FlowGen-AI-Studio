@@ -1,0 +1,5 @@
+{
+  "name": "FlowGen AI Studio",
+  "description": "A professional node-based visual editor for AI workflows featuring drag-and-drop mechanics, custom node types, and dynamic connections similar to OIIOII.ai.",
+  "requestFramePermissions": []
+}

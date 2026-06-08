@@ -1,0 +1,155 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* React Flow Base Styles Override */
+.react-flow__handle {
+  width: 10px;
+  height: 10px;
+  background: #6366f1;
+  border: 2px solid #ffffff;
+}
+.react-flow__handle:hover {
+  background: #4f46e5;
+  transform: scale(1.2);
+  transition: transform 0.2s;
+}
+.react-flow__attribution {
+  background: transparent !important;
+  opacity: 0.5;
+}
+
+/* 导航图：高于选中节点（elevateNodesOnSelect 约 1000），避免拖动时被盖住 */
+.react-flow__panel.react-flow__minimap {
+  z-index: 2000;
+}
+
+/*
+ * Portal 挂载到小地图：React Flow Panel 在框选(userSelectionActive)时会内联 pointer-events:none，
+ * 拖动画布时也可能让用户误以为「导航不见了」；此处强制可交互并抬高层级。
+ */
+[data-flowgen-minimap-portal='1'] {
+  isolation: isolate;
+}
+[data-flowgen-minimap-portal='1'] .react-flow__panel.react-flow__minimap {
+  pointer-events: auto !important;
+  z-index: 6000 !important;
+  position: relative !important;
+  bottom: auto !important;
+  right: auto !important;
+  left: auto !important;
+  top: auto !important;
+  width: 100% !important;
+  height: 100% !important;
+  margin: 0 !important;
+}
+
+/* 平移/缩放画布：关闭滤镜过渡与 hover 放大，减轻卡顿 */
+.flowgen-viewport-moving .react-flow__node img,
+.flowgen-viewport-moving .react-flow__node video {
+  transition: none !important;
+  transform: none !important;
+  filter: none !important;
+}
+.flowgen-viewport-moving .react-flow__node.group:hover img {
+  transform: none !important;
+}
+.flowgen-viewport-moving .react-flow__node [class*='backdrop-blur'] {
+  backdrop-filter: none !important;
+}
+
+/* 导航内节点与选中高亮（与主画布 brand 色系一致） */
+.react-flow__minimap-node {
+  opacity: 0.95;
+}
+.react-flow__minimap-node.selected {
+  stroke: #22d3ee !important;
+  stroke-width: 3px !important;
+  filter: drop-shadow(0 0 6px rgba(34, 211, 238, 0.85));
+}
+
+/* Ensure node wrapper doesn't clip thumbnails */
+.react-flow__node {
+  overflow: visible !important;
+}
+
+.react-flow__node-wrapper {
+  overflow: visible !important;
+}
+
+.react-flow__node-default {
+  overflow: visible !important;
+}
+
+/* Custom Context Menu Animation */
+@keyframes scaleIn {
+  from { transform: scale(0.9); opacity: 0; }
+  to { transform: scale(1); opacity: 1; }
+}
+@keyframes fadeIn {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+/* Custom Scrollbar */
+.custom-scrollbar {
+  /* Firefox */
+  scrollbar-width: auto;
+  scrollbar-color: #6b7280 #111827;
+  /* Keep gutter reserved so thumb is easier to grab */
+  scrollbar-gutter: stable;
+}
+.custom-scrollbar::-webkit-scrollbar {
+  width: 12px;
+  height: 12px;
+}
+.custom-scrollbar::-webkit-scrollbar-track {
+  background: #111827;
+  border-radius: 8px;
+}
+.custom-scrollbar::-webkit-scrollbar-thumb {
+  background: #6b7280;
+  border-radius: 8px;
+  border: 2px solid #111827;
+  min-height: 28px;
+}
+.custom-scrollbar::-webkit-scrollbar-thumb:hover {
+  background: #9ca3af;
+}
+.custom-scrollbar::-webkit-scrollbar-thumb:active {
+  background: #d1d5db;
+}
+
+/* Advanced Chat Panel Animations */
+@keyframes slideIn {
+  from { 
+    transform: translateY(10px); 
+    opacity: 0; 
+  }
+  to { 
+    transform: translateY(0); 
+    opacity: 1; 
+  }
+}
+
+@keyframes glow {
+  0%, 100% {
+    box-shadow: 0 0 20px rgba(99, 102, 241, 0.1);
+  }
+  50% {
+    box-shadow: 0 0 30px rgba(99, 102, 241, 0.3);
+  }
+}
+
+/* Message animation */
+.chat-message {
+  animation: slideIn 0.3s ease-out;
+}
+
+/* Gradient text effect */
+.gradient-text {
+  background: linear-gradient(135deg, #6366f1 0%, #8b5cf6 100%);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+}

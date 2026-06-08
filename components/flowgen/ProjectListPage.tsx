@@ -1,0 +1,1534 @@
+import React, { useEffect, useState, useRef } from 'react';
+import type { FlowgenUser } from '../../services/flowgenApi';
+import { 
+  listProjects, 
+  isAdminRole,
+  canManageAssignedProject,
+  getStoredUser, 
+  patchProject,
+  uploadProjectCover,
+  clearProjectCover,
+  deleteProject,
+  createProject,
+  clearSession,
+  listUsers,
+  listMemberCandidates,
+  listMembers,
+  addMember,
+  removeMember,
+  projectCoverDisplayUrl,
+} from '../../services/flowgenApi';
+import {
+  mergeProjectSkillIntoExtendedJson,
+  parseProjectSkill,
+  PROJECT_SKILL_OUTPUT_TABLE_HINT_EXAMPLE,
+} from '../../utils/projectSkill';
+import {
+  DIRECTOR_STORYBOARD_ADVANCED_MD,
+  DIRECTOR_STORYBOARD_CORE_MD,
+} from '../../utils/storyboardPresets';
+import { 
+  Plus, 
+  MoreVertical, 
+  Trash2, 
+  Edit2, 
+  Image as ImageIcon, 
+  Copy,
+  FolderOpen,
+  Search,
+  X,
+  LogOut,
+  Users,
+  Sparkles,
+} from 'lucide-react';
+
+interface ProjectItem {
+  id: string;
+  name: string;
+  status: string;
+  coverImage?: string | null;
+  extendedJson?: Record<string, unknown>;
+  createdAt?: string;
+  updatedAt?: string;
+}
+
+type MemberPickerUser = {
+  id: string;
+  username: string;
+  role: string;
+  displayName?: string;
+};
+
+function userToPickerOption(u: FlowgenUser): MemberPickerUser {
+  const dn =
+    (u.displayName && String(u.displayName).trim()) ||
+    (typeof u.extendedJson?.displayName === 'string' && u.extendedJson.displayName.trim()) ||
+    '';
+  return {
+    id: u.id,
+    username: u.username,
+    role: u.role,
+    displayName: dn || undefined,
+  };
+}
+
+// Member Selector Component with Search（用户名 + 中文名）
+function MemberSelector({
+  availableUsers,
+  selectedMembers,
+  onChange,
+}: {
+  availableUsers: MemberPickerUser[];
+  selectedMembers: Set<string>;
+  onChange: (members: Set<string>) => void;
+}) {
+  const [isOpen, setIsOpen] = useState(false);
+  const [searchQuery, setSearchQuery] = useState('');
+  const dropdownRef = useRef<HTMLDivElement>(null);
+
+  const filteredUsers = availableUsers.filter((u) => {
+    const q = searchQuery.trim().toLowerCase();
+    if (!q) return true;
+    const un = u.username.toLowerCase();
+    const dn = (u.displayName || '').toLowerCase();
+    return un.includes(q) || dn.includes(q);
+  });
+
+  // Close dropdown when clicking outside
+  useEffect(() => {
+    function handleClickOutside(e: MouseEvent) {
+      if (dropdownRef.current && !dropdownRef.current.contains(e.target as Node)) {
+        setIsOpen(false);
+      }
+    }
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, []);
+
+  if (availableUsers.length === 0) {
+    return (
+      <div className="p-4 bg-white/5 border border-white/10 rounded-xl text-center">
+        <p className="text-sm text-gray-500">暂无可添加的用户</p>
+      </div>
+    );
+  }
+
+  return (
+    <div ref={dropdownRef} className="relative">
+      {/* Dropdown Trigger */}
+      <button
+        onClick={() => setIsOpen(!isOpen)}
+        className="w-full flex items-center justify-between px-4 py-3 
+          bg-white/5 border border-white/10 rounded-xl
+          hover:border-brand-500/50 hover:bg-white/[0.07]
+          transition-all text-left"
+      >
+        <span className="text-gray-400">
+          {selectedMembers.size > 0 
+            ? `已选择 ${selectedMembers.size} 人` 
+            : '点击选择成员...'}
+        </span>
+        <div className="flex items-center gap-2">
+          {selectedMembers.size > 0 && (
+            <span className="px-2 py-0.5 rounded-full bg-brand-500/20 text-brand-400 text-xs">
+              {selectedMembers.size}
+            </span>
+          )}
+          <svg 
+            className={`w-5 h-5 text-gray-500 transition-transform ${isOpen ? 'rotate-180' : ''}`}
+            fill="none" 
+            viewBox="0 0 24 24" 
+            stroke="currentColor"
+          >
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+          </svg>
+        </div>
+      </button>
+
+      {/* Dropdown Menu */}
+      {isOpen && (
+        <div className="absolute z-50 w-full mt-2 bg-gray-900 border border-white/10 
+          rounded-xl shadow-xl shadow-black/50 overflow-hidden">
+          {/* Search Input */}
+          <div className="p-3 border-b border-white/10">
+            <div className="relative">
+              <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-500" />
+              <input
+                type="text"
+                placeholder="搜索用户名或中文名…"
+                value={searchQuery}
+                onChange={(e) => setSearchQuery(e.target.value)}
+                className="w-full pl-9 pr-3 py-2 bg-white/5 border border-white/10 rounded-lg
+                  text-sm text-white placeholder:text-gray-500
+                  focus:outline-none focus:border-brand-500/50"
+                autoFocus
+              />
+            </div>
+          </div>
+
+          {/* User List */}
+          <div className="max-h-60 overflow-y-auto">
+            {filteredUsers.length === 0 ? (
+              <p className="p-4 text-sm text-gray-500 text-center">未找到匹配的用户</p>
+            ) : (
+              filteredUsers.map((u) => {
+                const isSelected = selectedMembers.has(u.id);
+                return (
+                  <button
+                    key={u.id}
+                    onClick={() => {
+                      const newSet = new Set(selectedMembers);
+                      if (isSelected) {
+                        newSet.delete(u.id);
+                      } else {
+                        newSet.add(u.id);
+                      }
+                      onChange(newSet);
+                    }}
+                    className={`w-full flex items-center gap-3 px-4 py-3 text-left transition-colors
+                      ${isSelected 
+                        ? 'bg-brand-500/10 hover:bg-brand-500/20' 
+                        : 'hover:bg-white/5'
+                      }`}
+                  >
+                    {/* Checkbox */}
+                    <div className={`w-5 h-5 rounded border flex items-center justify-center transition-colors
+                      ${isSelected 
+                        ? 'bg-brand-500 border-brand-500' 
+                        : 'border-gray-600'
+                      }`}
+                    >
+                      {isSelected && (
+                        <svg className="w-3.5 h-3.5 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={3} d="M5 13l4 4L19 7" />
+                        </svg>
+                      )}
+                    </div>
+                    
+                    {/* Avatar */}
+                    <div className="w-8 h-8 rounded-full bg-gradient-to-br from-gray-700 to-gray-900 
+                      flex items-center justify-center text-sm font-medium">
+                      {(u.displayName?.[0] || u.username[0])?.toUpperCase()}
+                    </div>
+                    
+                    {/* Info */}
+                    <div className="flex-1 min-w-0">
+                      <p className="text-sm font-medium text-white truncate">{u.username}</p>
+                      <p className="text-xs text-gray-500 truncate">
+                        {u.displayName?.trim() ? u.displayName : u.role}
+                      </p>
+                    </div>
+
+                    {/* Selected indicator */}
+                    {isSelected && (
+                      <span className="text-xs text-brand-400">已选</span>
+                    )}
+                  </button>
+                );
+              })
+            )}
+          </div>
+
+          {/* Footer */}
+          <div className="p-3 border-t border-white/10 bg-white/[0.02]">
+            <button
+              onClick={() => setIsOpen(false)}
+              className="w-full py-2 rounded-lg bg-white/5 hover:bg-white/10 
+                text-sm text-gray-400 hover:text-white transition-colors"
+            >
+              完成选择
+            </button>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+export function ProjectListPage({
+  onOpen,
+  onAdminUsers,
+  onLogout,
+}: {
+  onOpen: (projectId: string) => void;
+  onAdminUsers: () => void;
+  onLogout?: () => void;
+}) {
+  const [items, setItems] = useState<ProjectItem[]>([]);
+  const [filteredItems, setFilteredItems] = useState<ProjectItem[]>([]);
+  const [err, setErr] = useState('');
+  const [loading, setLoading] = useState(true);
+  const [searchQuery, setSearchQuery] = useState('');
+  const [coverLoadFailedIds, setCoverLoadFailedIds] = useState<Set<string>>(() => new Set());
+  const [menuOpen, setMenuOpen] = useState<string | null>(null);
+  const [createModalOpen, setCreateModalOpen] = useState(false);
+  const [renameModalOpen, setRenameModalOpen] = useState(false);
+  const [coverModalOpen, setCoverModalOpen] = useState(false);
+  const [membersModalOpen, setMembersModalOpen] = useState(false);
+  const [skillModalOpen, setSkillModalOpen] = useState(false);
+  const [skillEnabled, setSkillEnabled] = useState(false);
+  const [skillTitle, setSkillTitle] = useState('');
+  const [skillContent, setSkillContent] = useState('');
+  const [skillOutputFormatHint, setSkillOutputFormatHint] = useState('');
+  const [skillSaving, setSkillSaving] = useState(false);
+  const [membersModalProject, setMembersModalProject] = useState<ProjectItem | null>(null);
+  const [membersOnProject, setMembersOnProject] = useState<
+    Array<{ userId: string; username: string; displayName?: string; role: string }>
+  >([]);
+  const [memberCandidates, setMemberCandidates] = useState<MemberPickerUser[]>([]);
+  const [membersAddSelected, setMembersAddSelected] = useState<Set<string>>(new Set());
+  const [membersListLoading, setMembersListLoading] = useState(false);
+  const [membersBusy, setMembersBusy] = useState(false);
+  const [selectedProject, setSelectedProject] = useState<ProjectItem | null>(null);
+  const [newProjectName, setNewProjectName] = useState('');
+  const [newCoverUrl, setNewCoverUrl] = useState('');
+  const menuRef = useRef<HTMLDivElement>(null);
+  
+  // 创建项目相关状态
+  const [createCoverPreview, setCreateCoverPreview] = useState<string | null>(null);
+  const [createCoverFile, setCreateCoverFile] = useState<File | null>(null);
+  const [availableUsers, setAvailableUsers] = useState<MemberPickerUser[]>([]);
+  const [selectedMembers, setSelectedMembers] = useState<Set<string>>(new Set());
+  const [createStep, setCreateStep] = useState(1); // 1: 基本信息, 2: 添加成员
+  const [isDraggingCreate, setIsDraggingCreate] = useState(false);
+  const createFileInputRef = useRef<HTMLInputElement>(null);
+  
+  const user = getStoredUser();
+  const isAdmin = isAdminRole(user?.role);
+  /** 平台管理员或项目管理员：对所分配项目显示 ⋮ 菜单（打开/重命名/封面/成员/Skill） */
+  const canManageProjectMenu = canManageAssignedProject(user?.role);
+
+  // 加载项目列表
+  useEffect(() => {
+    let cancelled = false;
+    setLoading(true);
+    (async () => {
+      try {
+        const r = await listProjects();
+        if (!cancelled) {
+          setItems(r.projects);
+          setFilteredItems(r.projects);
+          setCoverLoadFailedIds(new Set());
+        }
+      } catch (e) {
+        if (!cancelled) setErr(e instanceof Error ? e.message : '加载失败');
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  // 搜索过滤
+  useEffect(() => {
+    if (!searchQuery.trim()) {
+      setFilteredItems(items);
+      return;
+    }
+    const q = searchQuery.toLowerCase();
+    setFilteredItems(items.filter(p => p.name.toLowerCase().includes(q)));
+  }, [searchQuery, items]);
+
+  // 点击外部关闭菜单
+  useEffect(() => {
+    function handleClickOutside(e: MouseEvent) {
+      if (menuRef.current && !menuRef.current.contains(e.target as Node)) {
+        setMenuOpen(null);
+      }
+    }
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, []);
+
+  // 创建项目
+  const handleCreate = async () => {
+    if (!newProjectName.trim()) return;
+    try {
+      await createProject(newProjectName.trim());
+      setCreateModalOpen(false);
+      setNewProjectName('');
+      // 刷新列表
+      const r = await listProjects();
+      setItems(r.projects);
+      setFilteredItems(r.projects);
+    } catch (e) {
+      alert(e instanceof Error ? e.message : '创建失败');
+    }
+  };
+
+  // 删除项目
+  const handleDelete = async (project: ProjectItem) => {
+    if (!confirm(`确定要删除项目 "${project.name}" 吗？此操作不可恢复。`)) return;
+    try {
+      await deleteProject(project.id);
+      setItems(prev => prev.filter(p => p.id !== project.id));
+      setFilteredItems(prev => prev.filter(p => p.id !== project.id));
+      setMenuOpen(null);
+    } catch (e) {
+      alert(e instanceof Error ? e.message : '删除失败');
+    }
+  };
+
+  // 重命名项目
+  const handleRename = async () => {
+    if (!selectedProject || !newProjectName.trim()) return;
+    try {
+      await patchProject(selectedProject.id, { name: newProjectName.trim() });
+      setRenameModalOpen(false);
+      setNewProjectName('');
+      setSelectedProject(null);
+      // 刷新列表
+      const r = await listProjects();
+      setItems(r.projects);
+      setFilteredItems(r.projects);
+      setMenuOpen(null);
+    } catch (e) {
+      alert(e instanceof Error ? e.message : '重命名失败');
+    }
+  };
+
+  // 修改封面 - 使用本地文件上传
+  const [coverPreview, setCoverPreview] = useState<string | null>(null);
+  const [coverFile, setCoverFile] = useState<File | null>(null);
+  const [isDragging, setIsDragging] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+
+  const handleFileSelect = (file: File) => {
+    if (!file.type.startsWith('image/')) {
+      alert('请选择图片文件');
+      return;
+    }
+    setCoverFile(file);
+    const reader = new FileReader();
+    reader.onload = (e) => {
+      setCoverPreview(e.target?.result as string);
+    };
+    reader.readAsDataURL(file);
+  };
+
+  const handleDrop = (e: React.DragEvent) => {
+    e.preventDefault();
+    setIsDragging(false);
+    const file = e.dataTransfer.files[0];
+    if (file) handleFileSelect(file);
+  };
+
+  const handleDragOver = (e: React.DragEvent) => {
+    e.preventDefault();
+    setIsDragging(true);
+  };
+
+  const handleDragLeave = (e: React.DragEvent) => {
+    e.preventDefault();
+    setIsDragging(false);
+  };
+
+  const handleUpdateCover = async () => {
+    if (!selectedProject) return;
+    try {
+      if (coverFile) {
+        await uploadProjectCover(selectedProject.id, coverFile);
+      } else if (!coverPreview) {
+        await clearProjectCover(selectedProject.id);
+      }
+      
+      setCoverModalOpen(false);
+      setCoverPreview(null);
+      setCoverFile(null);
+      setSelectedProject(null);
+      
+      // 刷新列表
+      const r = await listProjects();
+      setItems(r.projects);
+      setFilteredItems(r.projects);
+      setMenuOpen(null);
+    } catch (e) {
+      alert(e instanceof Error ? e.message : '修改封面失败');
+    }
+  };
+
+  const openCoverModal = (project: ProjectItem) => {
+    setSelectedProject(project);
+    setCoverPreview(project.coverImage || null);
+    setCoverFile(null);
+    setCoverModalOpen(true);
+    setMenuOpen(null);
+  };
+
+  const openSkillModal = (project: ProjectItem) => {
+    const skill = parseProjectSkill(project.extendedJson);
+    setSelectedProject(project);
+    setSkillEnabled(skill?.enabled ?? false);
+    setSkillTitle(skill?.title ?? '');
+    setSkillContent(skill?.content ?? '');
+    setSkillOutputFormatHint(skill?.outputFormatHint ?? '');
+    setSkillModalOpen(true);
+    setMenuOpen(null);
+  };
+
+  const handleSaveSkill = async () => {
+    if (!selectedProject) return;
+    if (skillEnabled && !skillTitle.trim()) {
+      alert('启用 Skill 时请填写标题（成员将看到「已启用 · 标题」）');
+      return;
+    }
+    if (skillEnabled && !skillContent.trim()) {
+      alert('启用 Skill 时请填写 Skill 正文');
+      return;
+    }
+    setSkillSaving(true);
+    try {
+      const nextSkill = {
+        enabled: skillEnabled,
+        title: skillTitle.trim(),
+        content: skillContent,
+        outputFormatHint: skillOutputFormatHint.trim() || undefined,
+        updatedAt: new Date().toISOString(),
+      };
+      const extendedJson = mergeProjectSkillIntoExtendedJson(selectedProject.extendedJson, nextSkill);
+      await patchProject(selectedProject.id, { extendedJson });
+      window.dispatchEvent(
+        new CustomEvent('flowgen:project-skill-updated', {
+          detail: { projectId: selectedProject.id },
+        })
+      );
+      setSkillModalOpen(false);
+      setSelectedProject(null);
+      const r = await listProjects();
+      setItems(r.projects);
+      setFilteredItems(
+        searchQuery.trim()
+          ? r.projects.filter((p) => p.name.toLowerCase().includes(searchQuery.toLowerCase()))
+          : r.projects
+      );
+      setMenuOpen(null);
+    } catch (e) {
+      alert(e instanceof Error ? e.message : '保存 Skill 失败');
+    } finally {
+      setSkillSaving(false);
+    }
+  };
+
+  // 打开菜单
+  const openMenu = (e: React.MouseEvent, project: ProjectItem) => {
+    e.stopPropagation();
+    setMenuOpen(menuOpen === project.id ? null : project.id);
+    setSelectedProject(project);
+  };
+
+  // 打开重命名弹窗
+  const openRenameModal = (project: ProjectItem) => {
+    setSelectedProject(project);
+    setNewProjectName(project.name);
+    setRenameModalOpen(true);
+    setMenuOpen(null);
+  };
+
+  const closeMembersModal = () => {
+    setMembersModalOpen(false);
+    setMembersModalProject(null);
+    setMembersOnProject([]);
+    setMemberCandidates([]);
+    setMembersAddSelected(new Set());
+    setMembersListLoading(false);
+    setMembersBusy(false);
+  };
+
+  const refreshMembersModal = async (projectId: string) => {
+    const membersRes = await listMembers(projectId);
+    setMembersOnProject(membersRes.members);
+    const memberIds = new Set(membersRes.members.map((m) => m.userId));
+    if (isAdmin) {
+      const usersRes = await listUsers();
+      setMemberCandidates(
+        (usersRes.users || []).filter((u) => !memberIds.has(u.id)).map((u) => userToPickerOption(u))
+      );
+    } else {
+      const candRes = await listMemberCandidates(projectId);
+      setMemberCandidates(
+        (candRes.users || []).map((u) => ({
+          id: u.id,
+          username: u.username,
+          displayName: u.displayName,
+          role: u.role,
+        }))
+      );
+    }
+    setMembersAddSelected(new Set());
+  };
+
+  const openMembersModal = async (e: React.MouseEvent, project: ProjectItem) => {
+    e.stopPropagation();
+    setMenuOpen(null);
+    setMembersModalProject(project);
+    setMembersModalOpen(true);
+    setMembersListLoading(true);
+    setMembersAddSelected(new Set());
+    try {
+      await refreshMembersModal(project.id);
+    } catch (err) {
+      alert(err instanceof Error ? err.message : '加载成员失败');
+      closeMembersModal();
+    } finally {
+      setMembersListLoading(false);
+    }
+  };
+
+  const handleRemoveMemberFromProject = async (userId: string) => {
+    if (!membersModalProject) return;
+    if (!window.confirm('确定从本项目中移除该成员？')) return;
+    setMembersBusy(true);
+    try {
+      await removeMember(membersModalProject.id, userId);
+      await refreshMembersModal(membersModalProject.id);
+    } catch (e) {
+      alert(e instanceof Error ? e.message : '移除失败');
+    } finally {
+      setMembersBusy(false);
+    }
+  };
+
+  const handleConfirmAddMembersToProject = async () => {
+    if (!membersModalProject || membersAddSelected.size === 0) return;
+    setMembersBusy(true);
+    try {
+      for (const uid of membersAddSelected) {
+        await addMember(membersModalProject.id, uid, 'editor');
+      }
+      await refreshMembersModal(membersModalProject.id);
+    } catch (e) {
+      alert(e instanceof Error ? e.message : '添加失败');
+    } finally {
+      setMembersBusy(false);
+    }
+  };
+
+  // 格式化日期
+  const formatDate = (dateStr?: string) => {
+    if (!dateStr) return '';
+    const date = new Date(dateStr);
+    return date.toLocaleDateString('zh-CN', { 
+      year: 'numeric', 
+      month: '2-digit', 
+      day: '2-digit' 
+    });
+  };
+
+  return (
+    <div className="min-h-screen bg-[#0a0a0a] text-white">
+      {/* Header */}
+      <header className="sticky top-0 z-50 bg-[#0a0a0a]/90 backdrop-blur-md border-b border-white/10">
+        <div className="max-w-[1600px] mx-auto px-6 py-4">
+          <div className="flex items-center justify-between gap-4">
+            {/* Logo & Title */}
+            <div className="flex items-center gap-3">
+              <div className="w-8 h-8 rounded-lg bg-gradient-to-br from-brand-500 to-brand-700 flex items-center justify-center">
+                <span className="text-sm font-bold">F</span>
+              </div>
+              <h1 className="text-xl font-bold">我的项目</h1>
+            </div>
+
+            {/* Search Bar */}
+            <div className="flex-1 max-w-md">
+              <div className="relative">
+                <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-500" />
+                <input
+                  type="text"
+                  placeholder="搜索项目..."
+                  value={searchQuery}
+                  onChange={(e) => setSearchQuery(e.target.value)}
+                  className="w-full pl-10 pr-4 py-2 bg-white/5 border border-white/10 rounded-full text-sm 
+                    focus:outline-none focus:border-brand-500/50 focus:bg-white/10 transition-all"
+                />
+                {searchQuery && (
+                  <button
+                    onClick={() => setSearchQuery('')}
+                    className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-500 hover:text-white"
+                  >
+                    <X className="w-4 h-4" />
+                  </button>
+                )}
+              </div>
+            </div>
+
+            {/* Admin Actions */}
+            <div className="flex items-center gap-3">
+              {isAdmin && (
+                <button
+                  onClick={onAdminUsers}
+                  className="group relative px-5 py-2.5 rounded-xl overflow-hidden
+                    bg-gradient-to-br from-white/10 to-white/5 
+                    border border-white/20 hover:border-brand-400/50
+                    backdrop-blur-sm
+                    transition-all duration-300
+                    hover:shadow-lg hover:shadow-brand-500/20
+                    hover:scale-[1.02]"
+                >
+                  <div className="absolute inset-0 bg-gradient-to-r from-brand-500/0 via-brand-500/10 to-brand-500/0 
+                    translate-x-[-100%] group-hover:translate-x-[100%] transition-transform duration-700" />
+                  <span className="relative text-sm font-medium text-gray-300 group-hover:text-white transition-colors">
+                    用户管理
+                  </span>
+                </button>
+              )}
+              <div className="flex items-center gap-2 ml-4 pl-4 border-l border-white/10">
+                <div className="w-8 h-8 rounded-full bg-gradient-to-br from-gray-700 to-gray-900 
+                  flex items-center justify-center text-sm font-medium">
+                  {user?.username?.[0]?.toUpperCase() || 'U'}
+                </div>
+                <span className="text-sm text-gray-400 hidden sm:block max-w-[80px] truncate">
+                  {user?.username}
+                </span>
+                <button
+                  onClick={() => {
+                    clearSession();
+                    onLogout?.();
+                  }}
+                  className="flex items-center gap-1.5 ml-1 px-3 py-1.5 rounded-lg 
+                    text-gray-400 hover:text-red-400 hover:bg-red-500/10 
+                    border border-transparent hover:border-red-500/30
+                    transition-all text-xs font-medium"
+                  title="退出登录"
+                >
+                  <LogOut className="w-3.5 h-3.5" />
+                  <span className="hidden sm:inline">退出</span>
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      </header>
+
+      {/* Main Content */}
+      <main className="max-w-[1600px] mx-auto px-6 py-8">
+        {err && (
+          <div className="mb-6 p-4 bg-red-500/10 border border-red-500/20 rounded-xl text-red-400 text-sm">
+            {err}
+          </div>
+        )}
+
+        {loading ? (
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-5 gap-6">
+            {[...Array(8)].map((_, i) => (
+              <div key={i} className="aspect-[4/3] rounded-2xl bg-white/5 animate-pulse" />
+            ))}
+          </div>
+        ) : (
+          <>
+            {filteredItems.length === 0 && searchQuery && (
+              <p className="text-center text-gray-500 text-sm mb-6">没有找到匹配的项目</p>
+            )}
+            {items.length === 0 && !searchQuery && !isAdmin && (
+              <div className="flex flex-col items-center justify-center py-20 text-gray-500">
+                <div className="w-20 h-20 rounded-2xl bg-white/5 flex items-center justify-center mb-4">
+                  <FolderOpen className="w-10 h-10" />
+                </div>
+                <p className="text-lg">暂无项目</p>
+                <p className="text-sm mt-2">请联系管理员分配项目</p>
+              </div>
+            )}
+            {(isAdmin || filteredItems.length > 0) && (
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-5 gap-6">
+            {isAdmin && (
+              <div
+                onClick={() => setCreateModalOpen(true)}
+                className="group relative aspect-[4/3] rounded-2xl overflow-hidden cursor-pointer
+                  bg-gradient-to-br from-gray-800 to-gray-900 border border-white/10
+                  hover:border-brand-500/50 hover:shadow-xl hover:shadow-brand-500/10
+                  transition-all duration-300 flex flex-col items-center justify-center"
+              >
+                <div className="flex flex-col items-center gap-3">
+                  <div className="w-12 h-12 rounded-full bg-white/10 flex items-center justify-center
+                    group-hover:bg-brand-500/20 group-hover:scale-110 transition-all duration-300">
+                    <Plus className="w-6 h-6 text-gray-400 group-hover:text-brand-400 transition-colors" />
+                  </div>
+                  <span className="text-sm font-medium text-gray-400 group-hover:text-white transition-colors">
+                    创建项目
+                  </span>
+                </div>
+              </div>
+            )}
+            {filteredItems.map((project) => (
+              <div
+                key={project.id}
+                onClick={() => onOpen(project.id)}
+                className="group relative aspect-[4/3] rounded-2xl overflow-visible cursor-pointer
+                  border border-white/10
+                  hover:border-brand-500/50 hover:shadow-xl hover:shadow-brand-500/10
+                  transition-all duration-300"
+              >
+                <div className="absolute inset-0 rounded-2xl overflow-hidden pointer-events-none
+                  bg-gradient-to-br from-gray-900 to-gray-800">
+                  {/* Cover Image */}
+                  {project.coverImage && !coverLoadFailedIds.has(project.id) ? (
+                    <img
+                      src={projectCoverDisplayUrl(project.coverImage, project.updatedAt)}
+                      alt={project.name}
+                      className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-500"
+                      onError={() =>
+                        setCoverLoadFailedIds((prev) => {
+                          const next = new Set(prev);
+                          next.add(project.id);
+                          return next;
+                        })
+                      }
+                    />
+                  ) : (
+                    <div className="w-full h-full flex items-center justify-center bg-gradient-to-br 
+                      from-gray-800 to-gray-900">
+                      <div className="w-16 h-16 rounded-2xl bg-white/5 flex items-center justify-center">
+                        <ImageIcon className="w-8 h-8 text-gray-600" />
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Overlay Gradient */}
+                  <div className="absolute inset-0 bg-gradient-to-t from-black/80 via-black/20 to-transparent 
+                    opacity-60 group-hover:opacity-80 transition-opacity" />
+
+                  {/* Project Info */}
+                  <div className="absolute bottom-0 left-0 right-0 p-4">
+                    <h3 className="font-semibold text-lg truncate group-hover:text-brand-400 transition-colors">
+                      {project.name}
+                    </h3>
+                    <p className="text-sm text-gray-400 mt-1">
+                      {formatDate(project.createdAt)}
+                    </p>
+                  </div>
+                </div>
+
+                {/* Actions Menu（平台管理员 / 项目管理员） */}
+                {canManageProjectMenu && (
+                  <div className="absolute top-3 right-3 z-30 opacity-0 group-hover:opacity-100 transition-opacity">
+                    <button
+                      onClick={(e) => openMenu(e, project)}
+                      className="p-2 rounded-xl bg-black/50 hover:bg-black/70 backdrop-blur-sm
+                        text-white/70 hover:text-white transition-colors"
+                    >
+                      <MoreVertical className="w-4 h-4" />
+                    </button>
+                  </div>
+                )}
+
+                {/* Dropdown Menu（外层 overflow-visible，避免裁切「删除项目」等项） */}
+                {menuOpen === project.id && (
+                  <div
+                    ref={menuRef}
+                    className="absolute top-12 right-3 z-[60] w-52 bg-gray-900 border border-white/10 
+                      rounded-xl shadow-xl shadow-black/50 overflow-hidden"
+                  >
+                    <button
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        onOpen(project.id);
+                      }}
+                      className="w-full px-4 py-3 text-left text-sm hover:bg-white/5 flex items-center gap-3"
+                    >
+                      <FolderOpen className="w-4 h-4 text-gray-400" />
+                      打开
+                    </button>
+                    <button
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        openRenameModal(project);
+                      }}
+                      className="w-full px-4 py-3 text-left text-sm hover:bg-white/5 flex items-center gap-3"
+                    >
+                      <Edit2 className="w-4 h-4 text-gray-400" />
+                      重命名
+                    </button>
+                    <button
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        openCoverModal(project);
+                      }}
+                      className="w-full px-4 py-3 text-left text-sm hover:bg-white/5 flex items-center gap-3"
+                    >
+                      <ImageIcon className="w-4 h-4 text-gray-400" />
+                      修改封面
+                    </button>
+                    <button
+                      onClick={(e) => void openMembersModal(e, project)}
+                      className="w-full px-4 py-3 text-left text-sm hover:bg-white/5 flex items-center gap-3"
+                    >
+                      <Users className="w-4 h-4 text-gray-400" />
+                      成员管理
+                    </button>
+                    <button
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        openSkillModal(project);
+                      }}
+                      className="w-full px-4 py-3 text-left text-sm hover:bg-white/5 flex items-center gap-3"
+                    >
+                      <Sparkles className="w-4 h-4 text-emerald-400" />
+                      项目 Skill
+                    </button>
+                    {isAdmin && (
+                    <>
+                    <div className="border-t border-white/10" />
+                    <button
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        handleDelete(project);
+                      }}
+                      className="w-full px-4 py-3 text-left text-sm hover:bg-white/5 flex items-center gap-3 text-red-400"
+                    >
+                      <Trash2 className="w-4 h-4" />
+                      删除项目
+                    </button>
+                    </>
+                    )}
+                  </div>
+                )}
+              </div>
+            ))}
+          </div>
+            )}
+          </>
+        )}
+      </main>
+
+      {/* Create Project Modal - Multi Step */}
+      {createModalOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm p-4">
+          <div className="w-full max-w-lg bg-gray-900 border border-white/10 rounded-2xl p-6">
+            {/* Header */}
+            <div className="flex items-center justify-between mb-6">
+              <h2 className="text-xl font-bold">
+                {createStep === 1 ? '创建新项目' : '添加项目成员'}
+              </h2>
+              <div className="flex items-center gap-2">
+                <div className={`w-2 h-2 rounded-full ${createStep === 1 ? 'bg-brand-500' : 'bg-gray-600'}`} />
+                <div className="w-8 h-px bg-gray-700" />
+                <div className={`w-2 h-2 rounded-full ${createStep === 2 ? 'bg-brand-500' : 'bg-gray-600'}`} />
+              </div>
+            </div>
+
+            {createStep === 1 ? (
+              <>
+                {/* Step 1: Project Name & Cover */}
+                <div className="space-y-4">
+                  {/* Project Name */}
+                  <div>
+                    <label className="block text-xs text-gray-400 mb-2 uppercase tracking-wider">
+                      项目名称
+                    </label>
+                    <input
+                      type="text"
+                      placeholder="输入项目名称"
+                      value={newProjectName}
+                      onChange={(e) => setNewProjectName(e.target.value)}
+                      className="w-full px-4 py-3 bg-white/5 border border-white/10 rounded-xl 
+                        focus:outline-none focus:border-brand-500/50"
+                      autoFocus
+                    />
+                  </div>
+
+                  {/* Cover Upload */}
+                  <div>
+                    <label className="block text-xs text-gray-400 mb-2 uppercase tracking-wider">
+                      项目封面
+                    </label>
+                    
+                    {/* Preview */}
+                    <div 
+                      className={`aspect-video rounded-xl bg-white/5 mb-3 overflow-hidden relative
+                        ${isDraggingCreate ? 'ring-2 ring-brand-500 ring-offset-2 ring-offset-gray-900' : ''}`}
+                      onDrop={(e) => {
+                        e.preventDefault();
+                        setIsDraggingCreate(false);
+                        const file = e.dataTransfer.files[0];
+                        if (file && file.type.startsWith('image/')) {
+                          setCreateCoverFile(file);
+                          const reader = new FileReader();
+                          reader.onload = (ev) => setCreateCoverPreview(ev.target?.result as string);
+                          reader.readAsDataURL(file);
+                        }
+                      }}
+                      onDragOver={(e) => { e.preventDefault(); setIsDraggingCreate(true); }}
+                      onDragLeave={(e) => { e.preventDefault(); setIsDraggingCreate(false); }}
+                    >
+                      {createCoverPreview ? (
+                        <img src={createCoverPreview} alt="封面预览" className="w-full h-full object-cover" />
+                      ) : (
+                        <div className="w-full h-full flex flex-col items-center justify-center text-gray-500">
+                          <ImageIcon className="w-10 h-10 mb-2" />
+                          <span className="text-sm">暂无封面</span>
+                        </div>
+                      )}
+                    </div>
+
+                    {/* Upload Area */}
+                    <div 
+                      className={`border-2 border-dashed rounded-xl p-4 text-center transition-colors
+                        ${isDraggingCreate ? 'border-brand-500 bg-brand-500/10' : 'border-white/20 hover:border-white/40'}`}
+                      onDrop={(e) => {
+                        e.preventDefault();
+                        setIsDraggingCreate(false);
+                        const file = e.dataTransfer.files[0];
+                        if (file && file.type.startsWith('image/')) {
+                          setCreateCoverFile(file);
+                          const reader = new FileReader();
+                          reader.onload = (ev) => setCreateCoverPreview(ev.target?.result as string);
+                          reader.readAsDataURL(file);
+                        }
+                      }}
+                      onDragOver={(e) => { e.preventDefault(); setIsDraggingCreate(true); }}
+                      onDragLeave={(e) => { e.preventDefault(); setIsDraggingCreate(false); }}
+                    >
+                      <input
+                        ref={createFileInputRef}
+                        type="file"
+                        accept="image/*"
+                        onChange={(e) => {
+                          const file = e.target.files?.[0];
+                          if (file && file.type.startsWith('image/')) {
+                            setCreateCoverFile(file);
+                            const reader = new FileReader();
+                            reader.onload = (ev) => setCreateCoverPreview(ev.target?.result as string);
+                            reader.readAsDataURL(file);
+                          }
+                        }}
+                        className="hidden"
+                      />
+                      <p className="text-sm text-gray-400">
+                        拖放图片到这里，或{' '}
+                        <button
+                          type="button"
+                          onClick={() => createFileInputRef.current?.click()}
+                          className="text-brand-400 hover:text-brand-300 underline"
+                        >
+                          点击选择
+                        </button>
+                      </p>
+                      <p className="text-xs text-gray-600 mt-1">支持 JPG、PNG、GIF</p>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Actions */}
+                <div className="flex gap-3 mt-6">
+                  <button
+                    onClick={() => {
+                      setCreateModalOpen(false);
+                      setNewProjectName('');
+                      setCreateCoverPreview(null);
+                      setCreateCoverFile(null);
+                      setCreateStep(1);
+                    }}
+                    className="flex-1 px-4 py-2.5 rounded-xl border border-white/10 hover:bg-white/5 transition-colors"
+                  >
+                    取消
+                  </button>
+                  <button
+                    onClick={() => {
+                      if (!newProjectName.trim()) return;
+                      // Load users for step 2
+                      listUsers().then((r) =>
+                        setAvailableUsers(
+                          r.users.filter((u) => u.id !== user?.id).map((u) => userToPickerOption(u))
+                        )
+                      );
+                      setCreateStep(2);
+                    }}
+                    disabled={!newProjectName.trim()}
+                    className="flex-1 px-4 py-2.5 rounded-xl bg-brand-600 hover:bg-brand-500 
+                      disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+                  >
+                    下一步
+                  </button>
+                </div>
+              </>
+            ) : (
+              <>
+                {/* Step 2: Add Members - Searchable Dropdown */}
+                <div className="space-y-4">
+                  <p className="text-sm text-gray-400">
+                    选择要添加到项目的成员（可选）
+                  </p>
+                  
+                  {/* Searchable Dropdown */}
+                  <MemberSelector 
+                    availableUsers={availableUsers}
+                    selectedMembers={selectedMembers}
+                    onChange={setSelectedMembers}
+                  />
+
+                  {/* Selected Members Tags */}
+                  {selectedMembers.size > 0 && (
+                    <div className="flex flex-wrap gap-2">
+                      {Array.from(selectedMembers).map(userId => {
+                        const u = availableUsers.find(user => user.id === userId);
+                        if (!u) return null;
+                        return (
+                          <span 
+                            key={u.id}
+                            className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full 
+                              bg-brand-500/20 text-brand-300 text-sm"
+                          >
+                            <span className="w-5 h-5 rounded-full bg-brand-500/30 
+                              flex items-center justify-center text-xs font-medium">
+                              {(u.displayName?.[0] || u.username[0])?.toUpperCase()}
+                            </span>
+                            <span className="truncate max-w-[140px]">{u.username}</span>
+                            {u.displayName?.trim() && (
+                              <span className="text-brand-200/80 truncate max-w-[100px] text-xs">
+                                {u.displayName}
+                              </span>
+                            )}
+                            <button
+                              onClick={() => {
+                                const newSet = new Set(selectedMembers);
+                                newSet.delete(u.id);
+                                setSelectedMembers(newSet);
+                              }}
+                              className="ml-1 p-0.5 hover:bg-brand-500/30 rounded-full transition-colors"
+                            >
+                              <X className="w-3.5 h-3.5" />
+                            </button>
+                          </span>
+                        );
+                      })}
+                    </div>
+                  )}
+                </div>
+
+                {/* Actions */}
+                <div className="flex gap-3 mt-6">
+                  <button
+                    onClick={() => setCreateStep(1)}
+                    className="px-4 py-2.5 rounded-xl border border-white/10 hover:bg-white/5 transition-colors"
+                  >
+                    上一步
+                  </button>
+                  <button
+                    onClick={async () => {
+                      try {
+                        // 先创建项目
+                        const newProject = await createProject(newProjectName.trim());
+                        
+                        // 如果有封面，更新封面
+                        if (createCoverFile) {
+                          await uploadProjectCover(newProject.id, createCoverFile);
+                        }
+                        
+                        // 添加选中的成员
+                        for (const userId of selectedMembers) {
+                          await addMember(newProject.id, userId, 'editor');
+                        }
+                        
+                        // 重置状态
+                        setCreateModalOpen(false);
+                        setNewProjectName('');
+                        setCreateCoverPreview(null);
+                        setCreateCoverFile(null);
+                        setSelectedMembers(new Set());
+                        setCreateStep(1);
+                        
+                        // 刷新列表
+                        const r = await listProjects();
+                        setItems(r.projects);
+                        setFilteredItems(r.projects);
+                      } catch (e) {
+                        alert(e instanceof Error ? e.message : '创建失败');
+                      }
+                    }}
+                    className="flex-1 px-4 py-2.5 rounded-xl bg-brand-600 hover:bg-brand-500 transition-colors"
+                  >
+                    创建项目
+                  </button>
+                </div>
+              </>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* Rename Modal */}
+      {renameModalOpen && selectedProject && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm p-4">
+          <div className="w-full max-w-md bg-gray-900 border border-white/10 rounded-2xl p-6">
+            <h2 className="text-xl font-bold mb-4">重命名项目</h2>
+            <input
+              type="text"
+              placeholder="输入新名称"
+              value={newProjectName}
+              onChange={(e) => setNewProjectName(e.target.value)}
+              onKeyDown={(e) => e.key === 'Enter' && handleRename()}
+              className="w-full px-4 py-3 bg-white/5 border border-white/10 rounded-xl 
+                focus:outline-none focus:border-brand-500/50 mb-4"
+              autoFocus
+            />
+            <div className="flex gap-3">
+              <button
+                onClick={() => {
+                  setRenameModalOpen(false);
+                  setNewProjectName('');
+                  setSelectedProject(null);
+                }}
+                className="flex-1 px-4 py-2 rounded-xl border border-white/10 hover:bg-white/5 transition-colors"
+              >
+                取消
+              </button>
+              <button
+                onClick={handleRename}
+                disabled={!newProjectName.trim()}
+                className="flex-1 px-4 py-2 rounded-xl bg-brand-600 hover:bg-brand-500 
+                  disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+              >
+                保存
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* 项目成员：查看 / 移除 / 搜索添加 */}
+      {membersModalOpen && membersModalProject && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm p-4"
+          onClick={closeMembersModal}
+        >
+          <div
+            className="w-full max-w-lg max-h-[90vh] overflow-y-auto bg-gray-900 border border-white/10 rounded-2xl p-6"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-center justify-between mb-4">
+              <h2 className="text-xl font-bold">成员管理</h2>
+              <button
+                type="button"
+                onClick={closeMembersModal}
+                className="p-2 rounded-lg text-gray-400 hover:text-white hover:bg-white/10"
+                aria-label="关闭"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+            <p className="text-sm text-gray-400 mb-4">
+              项目「<span className="text-gray-200 font-medium">{membersModalProject.name}</span>
+              」：与「用户管理」中的关联项目为同一套成员数据。
+            </p>
+
+            <h3 className="text-xs font-medium text-gray-500 uppercase tracking-wider mb-2">当前成员</h3>
+            {membersListLoading ? (
+              <p className="text-sm text-gray-500 py-4">加载中…</p>
+            ) : membersOnProject.length === 0 ? (
+              <p className="text-sm text-gray-500 py-3 border border-white/10 rounded-xl px-3">暂无成员</p>
+            ) : (
+              <ul className="max-h-48 overflow-y-auto rounded-xl border border-white/10 divide-y divide-white/5 mb-6">
+                {membersOnProject.map((m) => (
+                  <li
+                    key={m.userId}
+                    className="flex items-center justify-between gap-3 px-3 py-2.5 hover:bg-white/[0.03]"
+                  >
+                    <div className="min-w-0 flex-1">
+                      <p className="text-sm text-white font-medium truncate">{m.username}</p>
+                      {(m.displayName && m.displayName.trim()) ? (
+                        <p className="text-xs text-gray-500 truncate">{m.displayName}</p>
+                      ) : (
+                        <p className="text-xs text-gray-600">角色：{m.role}</p>
+                      )}
+                    </div>
+                    <button
+                      type="button"
+                      disabled={membersBusy}
+                      onClick={() => void handleRemoveMemberFromProject(m.userId)}
+                      className="shrink-0 text-xs text-red-400 hover:text-red-300 px-2 py-1 rounded-lg
+                        hover:bg-red-500/10 disabled:opacity-40"
+                    >
+                      移除
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            )}
+
+            <h3 className="text-xs font-medium text-gray-500 uppercase tracking-wider mb-2">添加成员</h3>
+            <p className="text-xs text-gray-500 mb-2">支持按用户名或中文名搜索；添加后角色默认为编辑。</p>
+            <MemberSelector
+              availableUsers={memberCandidates}
+              selectedMembers={membersAddSelected}
+              onChange={setMembersAddSelected}
+            />
+            <div className="flex gap-3 mt-6">
+              <button
+                type="button"
+                onClick={closeMembersModal}
+                className="flex-1 px-4 py-2.5 rounded-xl border border-white/10 hover:bg-white/5 transition-colors"
+              >
+                关闭
+              </button>
+              <button
+                type="button"
+                disabled={membersAddSelected.size === 0 || membersBusy}
+                onClick={() => void handleConfirmAddMembersToProject()}
+                className="flex-1 px-4 py-2.5 rounded-xl bg-brand-600 hover:bg-brand-500 transition-colors
+                  disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                {membersBusy ? '处理中…' : '添加所选'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Update Cover Modal */}
+      {coverModalOpen && selectedProject && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm p-4">
+          <div className="w-full max-w-md bg-gray-900 border border-white/10 rounded-2xl p-6">
+            <h2 className="text-xl font-bold mb-4">修改项目封面</h2>
+            
+            {/* Preview Area */}
+            <div 
+              className={`aspect-video rounded-xl bg-white/5 mb-4 overflow-hidden relative
+                ${isDragging ? 'ring-2 ring-brand-500 ring-offset-2 ring-offset-gray-900' : ''}`}
+              onDrop={handleDrop}
+              onDragOver={handleDragOver}
+              onDragLeave={handleDragLeave}
+            >
+              {coverPreview ? (
+                <img
+                  src={
+                    coverPreview.startsWith('data:') || coverPreview.startsWith('blob:')
+                      ? coverPreview
+                      : projectCoverDisplayUrl(coverPreview, selectedProject.updatedAt)
+                  }
+                  alt="预览"
+                  className="w-full h-full object-cover"
+                />
+              ) : (
+                <div className="w-full h-full flex flex-col items-center justify-center text-gray-500">
+                  <ImageIcon className="w-12 h-12 mb-2" />
+                  <span className="text-sm">暂无封面</span>
+                </div>
+              )}
+              
+              {/* Hover overlay for change hint */}
+              <div 
+                className="absolute inset-0 bg-black/50 flex items-center justify-center opacity-0 hover:opacity-100 transition-opacity cursor-pointer"
+                onClick={() => fileInputRef.current?.click()}
+              >
+                <span className="text-white text-sm font-medium">点击更换图片</span>
+              </div>
+            </div>
+
+            {/* Upload Area */}
+            <div 
+              className={`border-2 border-dashed rounded-xl p-6 mb-4 text-center transition-colors
+                ${isDragging 
+                  ? 'border-brand-500 bg-brand-500/10' 
+                  : 'border-white/20 hover:border-white/40 hover:bg-white/5'
+                }`}
+              onDrop={handleDrop}
+              onDragOver={handleDragOver}
+              onDragLeave={handleDragLeave}
+            >
+              <input
+                ref={fileInputRef}
+                type="file"
+                accept="image/*"
+                onChange={(e) => {
+                  const file = e.target.files?.[0];
+                  if (file) handleFileSelect(file);
+                }}
+                className="hidden"
+              />
+              <div className="flex flex-col items-center gap-2">
+                <div className="w-10 h-10 rounded-full bg-white/10 flex items-center justify-center">
+                  <Plus className="w-5 h-5 text-gray-400" />
+                </div>
+                <p className="text-sm text-gray-400">
+                  拖放图片到这里，或{' '}
+                  <button
+                    type="button"
+                    onClick={() => fileInputRef.current?.click()}
+                    className="text-brand-400 hover:text-brand-300 underline"
+                  >
+                    点击选择
+                  </button>
+                </p>
+                <p className="text-xs text-gray-600">
+                  支持 JPG、PNG、GIF 格式
+                </p>
+              </div>
+            </div>
+
+            {coverFile && (
+              <p className="text-xs text-brand-400 mb-4 flex items-center gap-1">
+                <span className="w-1.5 h-1.5 rounded-full bg-brand-400" />
+                已选择: {coverFile.name}
+              </p>
+            )}
+
+            <div className="flex gap-3">
+              <button
+                onClick={() => {
+                  setCoverModalOpen(false);
+                  setCoverPreview(null);
+                  setCoverFile(null);
+                  setSelectedProject(null);
+                }}
+                className="flex-1 px-4 py-2 rounded-xl border border-white/10 hover:bg-white/5 transition-colors"
+              >
+                取消
+              </button>
+              {coverPreview && (
+                <button
+                  onClick={() => {
+                    setCoverPreview(null);
+                    setCoverFile(null);
+                  }}
+                  className="px-4 py-2 rounded-xl border border-red-500/30 text-red-400 hover:bg-red-500/10 transition-colors"
+                >
+                  清除封面
+                </button>
+              )}
+              <button
+                onClick={handleUpdateCover}
+                className="flex-1 px-4 py-2 rounded-xl bg-brand-600 hover:bg-brand-500 transition-colors"
+              >
+                保存
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {skillModalOpen && selectedProject && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm p-4">
+          <div className="w-full max-w-2xl max-h-[90vh] overflow-y-auto bg-gray-900 border border-white/10 rounded-2xl p-6">
+            <div className="flex items-start justify-between gap-4 mb-4">
+              <div>
+                <h2 className="text-xl font-bold flex items-center gap-2">
+                  <Sparkles className="w-5 h-5 text-emerald-400" />
+                  项目 Skill
+                </h2>
+                <p className="text-sm text-gray-400 mt-1">
+                  项目「{selectedProject.name}」· 启用后侧边栏 Chat 将自动按 Skill 回答；成员仅看到「已启用 · 标题」。
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => {
+                  setSkillModalOpen(false);
+                  setSelectedProject(null);
+                }}
+                className="p-2 rounded-lg hover:bg-white/5 text-gray-400 hover:text-white"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <label className="flex items-center gap-3 mb-4 cursor-pointer">
+              <input
+                type="checkbox"
+                checked={skillEnabled}
+                onChange={(e) => setSkillEnabled(e.target.checked)}
+                className="rounded border-gray-600"
+              />
+              <span className="text-sm text-gray-200">启用项目 Skill</span>
+            </label>
+
+            <div className="space-y-4">
+              <div>
+                <label className="text-xs text-gray-500 block mb-1">标题（成员可见）</label>
+                <input
+                  className="w-full px-3 py-2 rounded-lg bg-gray-800 border border-gray-700 text-sm text-white"
+                  value={skillTitle}
+                  onChange={(e) => setSkillTitle(e.target.value)}
+                  placeholder="例如：30年经验导演"
+                  maxLength={80}
+                />
+              </div>
+
+              <div>
+                <div className="flex flex-wrap items-center justify-between gap-2 mb-1">
+                  <label className="text-xs text-gray-500">Skill 正文（Markdown，仅 API 注入，聊天中不可见）</label>
+                  <div className="flex gap-2">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setSkillContent(DIRECTOR_STORYBOARD_CORE_MD);
+                        if (!skillTitle.trim()) setSkillTitle('AI导演分镜 · 核心版');
+                      }}
+                      className="text-[11px] px-2 py-1 rounded border border-gray-700 text-gray-400 hover:text-white hover:bg-gray-800"
+                    >
+                      导入核心版模板
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setSkillContent(DIRECTOR_STORYBOARD_ADVANCED_MD);
+                        if (!skillTitle.trim()) setSkillTitle('AI导演分镜 · 进阶版');
+                      }}
+                      className="text-[11px] px-2 py-1 rounded border border-gray-700 text-gray-400 hover:text-white hover:bg-gray-800"
+                    >
+                      导入进阶版模板
+                    </button>
+                  </div>
+                </div>
+                <textarea
+                  className="w-full min-h-[280px] px-3 py-2 rounded-lg bg-gray-800 border border-gray-700 text-sm text-white font-mono leading-relaxed resize-y"
+                  value={skillContent}
+                  onChange={(e) => setSkillContent(e.target.value)}
+                  placeholder="# Skill&#10;你是…"
+                />
+                <p className="text-[11px] text-gray-600 mt-1">
+                  保存时不截断；过长时发送 API 仍会优先保留 Skill、裁剪较早的历史。成员需刷新或重新进入项目后生效。
+                </p>
+              </div>
+
+              <div>
+                <div className="flex flex-wrap items-center justify-between gap-2 mb-1">
+                  <label className="text-xs text-gray-500">
+                    输出格式补充（可选，仅 API 注入；留空则不追加）
+                  </label>
+                  <button
+                    type="button"
+                    onClick={() => setSkillOutputFormatHint(PROJECT_SKILL_OUTPUT_TABLE_HINT_EXAMPLE)}
+                    className="text-[11px] px-2 py-1 rounded border border-gray-700 text-gray-400 hover:text-white hover:bg-gray-800"
+                  >
+                    填入分镜表格示例
+                  </button>
+                </div>
+                <textarea
+                  className="w-full min-h-[96px] px-3 py-2 rounded-lg bg-gray-800 border border-gray-700 text-sm text-white font-mono leading-relaxed resize-y"
+                  value={skillOutputFormatHint}
+                  onChange={(e) => setSkillOutputFormatHint(e.target.value)}
+                  placeholder="例如：须用 Markdown 管道表格输出，每镜头一行…"
+                />
+                <p className="text-[11px] text-gray-600 mt-1">
+                  不同项目可填不同格式要求；翻译、问答类 Skill 可留空。
+                </p>
+              </div>
+            </div>
+
+            <div className="flex gap-3 mt-6">
+              <button
+                type="button"
+                onClick={() => {
+                  setSkillModalOpen(false);
+                  setSelectedProject(null);
+                }}
+                className="flex-1 px-4 py-2 rounded-xl border border-white/10 hover:bg-white/5 transition-colors"
+              >
+                取消
+              </button>
+              <button
+                type="button"
+                disabled={skillSaving}
+                onClick={() => void handleSaveSkill()}
+                className="flex-1 px-4 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 transition-colors"
+              >
+                {skillSaving ? '保存中…' : '保存 Skill'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}

@@ -1,0 +1,45 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>FlowGen AI Studio</title>
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <!-- 仅 npm run dev (Vite) 使用；生产请访问 npm run build 后的 dist，勿用本文件直接交给 node server.js 根目录托管 -->
+    <!-- 不使用 fonts.googleapis.com：内网/防火墙下易超时，Chrome Issues 会误报为 localhost 某行样式失败 -->
+  <script type="importmap">
+{
+  "imports": {
+    "react": "https://esm.sh/react@^19.2.1",
+    "react-dom/": "https://esm.sh/react-dom@^19.2.1/",
+    "reactflow/": "https://esm.sh/reactflow@^11.11.4/",
+    "react/": "https://esm.sh/react@^19.2.1/",
+    "reactflow": "https://esm.sh/reactflow@^11.11.4",
+    "lucide-react": "https://esm.sh/lucide-react@^0.560.0",
+    "vite": "https://esm.sh/vite@^7.2.7",
+    "@vitejs/plugin-react": "https://esm.sh/@vitejs/plugin-react@^5.1.2",
+    "express": "https://esm.sh/express@^5.2.1",
+    "path": "https://esm.sh/path@^0.12.7",
+    "url": "https://esm.sh/url@^0.11.4"
+  }
+}
+</script>
+<link rel="stylesheet" href="/index.css">
+</head>
+  <body class="bg-gray-950 text-white overflow-x-hidden">
+    <div id="root"></div>
+    <!-- 在任何 ES 模块（含 Vite 预构建的 react-dom）执行前包装 console.info，去掉 React DevTools 推广行 -->
+    <script>
+      (function () {
+        var o = console.info;
+        console.info = function () {
+          for (var i = 0; i < arguments.length; i++) {
+            if (/react-devtools|reactjs\.org\/link\/react-devtools/i.test(String(arguments[i]))) return;
+          }
+          return o.apply(console, arguments);
+        };
+      })();
+    </script>
+    <script type="module" src="/index.tsx"></script>
+  </body>
+</html>

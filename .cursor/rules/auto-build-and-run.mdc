@@ -1,0 +1,17 @@
+---
+description: After code changes, auto build and start services for user testing without asking
+alwaysApply: true
+---
+
+# 修改后自动构建与启动（供测试）
+
+用户需要能直接测试，**不要**在每次改完代码后询问「是否要 build / 启动」。
+
+完成涉及前端或 `dist/` 的修改后，自行判断并执行：
+
+1. **`npm run build`** — 改了 `components/`、`src/`、Vite 配置等会影响生产包的内容时执行。
+2. **启动服务** — 用户要测试且本地未在跑时，优先：
+   - **`npm start`** — 验证与部署一致的 `dist/` + `server.js`（默认端口见项目文档，常为 3001）
+   - 或 **`npm run dev:full`** — 需要热更新时
+
+仅在构建失败、端口被占用、或缺少环境变量时再简短说明阻塞原因；成功时直接给出访问地址，勿反复确认。

@@ -1,0 +1,36 @@
+# Logs
+logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+lerna-debug.log*
+
+node_modules
+dist
+dist-ssr
+*.local
+
+# 本地业务数据与测试产物（勿提交）
+data/
+coverage/
+tricky-live-results.txt
+test-drag-pixel.png
+
+# ChatPanel 备份/草稿
+components/ChatPanel.tsx.bak
+components/ChatPanel.tsx.working
+components/ChatPanel.tsx.refonly
+components/ChatPanel.tsx.testref
+
+# Editor directories and files
+.vscode/*
+!.vscode/extensions.json
+.idea
+.DS_Store
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?

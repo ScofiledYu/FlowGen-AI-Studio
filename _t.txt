@@ -1,0 +1,358 @@
+﻿
+> flowgen-ai-studio@0.0.0 test:panel-refs
+> tsx scripts/panel-ref-media-simulation-test.ts
+
+
+=== 1. 闈㈡澘妲戒綅鍚堝苟锛堥€氱敤锛?===
+
+  [OK] 閫嗗簭@鍚庝繚鐣欐Ы0,1锛堟湭@妲?娓呯┖骞跺幓鎺夊熬閮ㄧ┖妲斤級
+  [OK] 鏈狜妲?宸插幓鎺?
+=== 2. 鍒嗛暅鍏嬮殕鍚堝苟鍙傝€冨浘 ===
+
+  [OK] 鍒嗛暅鍚堝苟淇濈暀鎷栧叆椤?  [OK] 鍒嗛暅鍚堝苟鍚祫浜?  [OK] 鍒嗛暅鍚堝苟鏍兼暟>=2
+  [OK] 鍒嗛暅鍚堝苟璧勪骇妲藉睍绀哄悕
+  [OK] 鍥剧敓鍏嬮殕娓呯┖ referenceImages
+  [OK] 鍥剧敓鍏嬮殕淇濈暀棣栧抚
+  [OK] 鍥剧敓鍏嬮殕淇濈暀灏惧抚
+  [OK] 鍥剧敓 tab 蹇収鍚屾棣栧抚
+
+=== 3. 鍚勬ā鍨嬪満鏅紙@ 鈫?闈㈡澘 鈫?API锛?===
+
+  [OK] Seedance2.0 鍙傝€冪敓: 鍒涙剰鎻忚堪鑷冲皯瑙ｆ瀽鍑?涓狜鍥剧墖
+  [OK] Seedance2.0 鍙傝€冪敓: 闈㈡澘闀垮害瑕嗙洊宸睝鏈€澶фЫ 鈥?len=2 maxSlot=1
+  [OK] Seedance2.0 鍙傝€冪敓: 宸睝妲?鍐欏洖涓婁紶URL 鈥?https://lib/1.png|UP
+  [OK] Seedance2.0 鍙傝€冪敓: 宸睝妲?鍐欏洖涓婁紶URL 鈥?https://user/drag.png|UP
+  [OK] Seedance2.0 鍙傝€冪敓: 鏈狜妲?宸叉竻绌?鈥?got 
+  [OK] Seedance2.0 鍙傝€冪敓: @鍥剧墖2 瑙ｆ瀽鍒伴潰鏉縐RL 鈥?token鈫抙ttps://user/drag.png|UP slot鈫抙ttps://user/drag.png
+  [OK] Seedance2.0 鍙傝€冪敓: @鍥剧墖2 API URL 鏉ヨ嚜璇ョ礌鏉?鈥?https://user/drag.png|UP
+  [OK] Seedance2.0 鍙傝€冪敓: @鍥剧墖1 瑙ｆ瀽鍒伴潰鏉縐RL 鈥?token鈫抙ttps://lib/1.png|UP slot鈫抙ttps://lib/1.png
+  [OK] Seedance2.0 鍙傝€冪敓: @鍥剧墖1 API URL 鏉ヨ嚜璇ョ礌鏉?鈥?https://lib/1.png|UP
+  [OK] Seedance2.0 鍙傝€冪敓: @鍥剧墖2 灞曞紑鍚?[鍥?] 鈥?铻嶅悎椋庢牸 锛堥潰鏉垮弬鑰冦€屽浘鐗?銆嶏紝瀵瑰簲鏈姹?referenceImages 绗?寮狅紝鍦ㄦ彁绀鸿瘝涓瑙嗕綔 [鍥?]锛?涓轰富鍙傝€冿紝锛堥潰鏉垮弬鑰冦€屽浘鐗?銆嶏紝瀵瑰簲鏈姹?referenceImages 绗?寮狅紝鍦ㄦ彁绀鸿瘝涓瑙嗕綔 [鍥?]锛?涓鸿緟
+  [OK] Seedance2.0 鍙傝€冪敓: plan.imageIndex 涓?token 鏄犲皠涓€鑷?鈥?imageIndex=1 map=1
+  [OK] Seedance2.0 鍙傝€冪敓: @鍥剧墖1 灞曞紑鍚?[鍥?] 鈥?铻嶅悎椋庢牸 锛堥潰鏉垮弬鑰冦€屽浘鐗?銆嶏紝瀵瑰簲鏈姹?referenceImages 绗?寮狅紝鍦ㄦ彁绀鸿瘝涓瑙嗕綔 [鍥?]锛?涓轰富鍙傝€冿紝锛堥潰鏉垮弬鑰冦€屽浘鐗?銆嶏紝瀵瑰簲鏈姹?referenceImages 绗?寮狅紝鍦ㄦ彁绀鸿瘝涓瑙嗕綔 [鍥?]锛?涓鸿緟
+  [OK] Seedance2.0 鍙傝€冪敓: plan.imageIndex 涓?token 鏄犲皠涓€鑷?鈥?imageIndex=2 map=2
+  [OK] Seedance2.0 鍙傝€冪敓: API 鍙傝€冨浘椤哄簭=鏂囨@鍑虹幇椤哄簭 鈥?["https://user/drag.png|UP","https://lib/1.png|UP"]
+  [OK] Nano Banana 2.0: 鍒涙剰鎻忚堪鑷冲皯瑙ｆ瀽鍑?涓狜鍥剧墖
+  [OK] Nano Banana 2.0: 闈㈡澘闀垮害瑕嗙洊宸睝鏈€澶фЫ 鈥?len=1 maxSlot=0
+  [OK] Nano Banana 2.0: 宸睝妲?鍐欏洖涓婁紶URL 鈥?https://r0.png|UP
+  [OK] Nano Banana 2.0: 鏈狜妲?宸叉竻绌?鈥?got 
+  [OK] Nano Banana 2.0: @涓诲浘 瑙ｆ瀽鍒伴潰鏉縐RL 鈥?token鈫抙ttps://main.png slot鈫抧ull
+  [OK] Nano Banana 2.0: @涓诲浘 API URL 鏉ヨ嚜璇ョ礌鏉?鈥?https://main.png|UP
+  [OK] Nano Banana 2.0: @鍥剧墖1 瑙ｆ瀽鍒伴潰鏉縐RL 鈥?token鈫抙ttps://r0.png|UP slot鈫抙ttps://r0.png
+  [OK] Nano Banana 2.0: @鍥剧墖1 API URL 鏉ヨ嚜璇ョ礌鏉?鈥?https://r0.png|UP
+  [OK] Nano Banana 2.0: @涓诲浘 灞曞紑鍚?[鍥?] 鈥?锛堜富棰勮绱犳潗銆屼富鍥俱€嶏紝瀵瑰簲鏈姹?referenceImages 绗?寮狅紝鍦ㄦ彁绀鸿瘝涓瑙嗕綔 [鍥?]锛?涓讳綋 锛堥潰鏉垮弬鑰冦€屽浘鐗?銆嶏紝瀵瑰簲鏈姹?referenceImages 绗?寮狅紝鍦ㄦ彁绀鸿瘝涓瑙嗕綔 [鍥?]锛?缁嗚妭
+  [OK] Nano Banana 2.0: plan.imageIndex 涓?token 鏄犲皠涓€鑷?鈥?imageIndex=1 map=1
+  [OK] Nano Banana 2.0: @鍥剧墖1 灞曞紑鍚?[鍥?] 鈥?锛堜富棰勮绱犳潗銆屼富鍥俱€嶏紝瀵瑰簲鏈姹?referenceImages 绗?寮狅紝鍦ㄦ彁绀鸿瘝涓瑙嗕綔 [鍥?]锛?涓讳綋 锛堥潰鏉垮弬鑰冦€屽浘鐗?銆嶏紝瀵瑰簲鏈姹?referenceImages 绗?寮狅紝鍦ㄦ彁绀鸿瘝涓瑙嗕綔 [鍥?]锛?缁嗚妭
+  [OK] Nano Banana 2.0: plan.imageIndex 涓?token 鏄犲皠涓€鑷?鈥?imageIndex=2 map=2
+  [OK] Nano Banana 2.0: API 鍙傝€冨浘椤哄簭=鏂囨@鍑虹幇椤哄簭 鈥?["https://main.png|UP","https://r0.png|UP"]
+  [OK] Image 2: 鍒涙剰鎻忚堪鑷冲皯瑙ｆ瀽鍑?涓狜鍥剧墖
+  [OK] Image 2: 闈㈡澘闀垮害瑕嗙洊宸睝鏈€澶фЫ 鈥?len=3 maxSlot=2
+  [OK] Image 2: 宸睝妲?鍐欏洖涓婁紶URL 鈥?https://a.png|UP
+  [OK] Image 2: 鏈狜妲?宸叉竻绌?鈥?got 
+  [OK] Image 2: 宸睝妲?鍐欏洖涓婁紶URL 鈥?https://c.png|UP
+  [OK] Image 2: @鍥剧墖3 瑙ｆ瀽鍒伴潰鏉縐RL 鈥?token鈫抙ttps://c.png|UP slot鈫抙ttps://c.png
+  [OK] Image 2: @鍥剧墖3 API URL 鏉ヨ嚜璇ョ礌鏉?鈥?https://c.png|UP
+  [OK] Image 2: @鍥剧墖1 瑙ｆ瀽鍒伴潰鏉縐RL 鈥?token鈫抙ttps://a.png|UP slot鈫抙ttps://a.png
+  [OK] Image 2: @鍥剧墖1 API URL 鏉ヨ嚜璇ョ礌鏉?鈥?https://a.png|UP
+  [OK] Image 2: @鍥剧墖3 灞曞紑鍚?[鍥?] 鈥?锛堥潰鏉垮弬鑰冦€屽浘鐗?銆嶏紝瀵瑰簲鏈姹?referenceImages 绗?寮狅紝鍦ㄦ彁绀鸿瘝涓瑙嗕綔 [鍥?]锛?鑳屾櫙 锛堥潰鏉垮弬鑰冦€屽浘鐗?銆嶏紝瀵瑰簲鏈姹?referenceImages 绗?寮狅紝鍦ㄦ彁绀鸿瘝涓瑙嗕綔 [鍥?]锛?鍓嶆櫙
+  [OK] Image 2: plan.imageIndex 涓?token 鏄犲皠涓€鑷?鈥?imageIndex=1 map=1
+  [OK] Image 2: @鍥剧墖1 灞曞紑鍚?[鍥?] 鈥?锛堥潰鏉垮弬鑰冦€屽浘鐗?銆嶏紝瀵瑰簲鏈姹?referenceImages 绗?寮狅紝鍦ㄦ彁绀鸿瘝涓瑙嗕綔 [鍥?]锛?鑳屾櫙 锛堥潰鏉垮弬鑰冦€屽浘鐗?銆嶏紝瀵瑰簲鏈姹?referenceImages 绗?寮狅紝鍦ㄦ彁绀鸿瘝涓瑙嗕綔 [鍥?]锛?鍓嶆櫙
+  [OK] Image 2: plan.imageIndex 涓?token 鏄犲皠涓€鑷?鈥?imageIndex=2 map=2
+  [OK] Image 2: API 鍙傝€冨浘椤哄簭=鏂囨@鍑虹幇椤哄簭 鈥?["https://c.png|UP","https://a.png|UP"]
+  [OK] 鍙伒3.0 Omni 澶氬浘: 鍒涙剰鎻忚堪鑷冲皯瑙ｆ瀽鍑?涓狜鍥剧墖
+  [OK] 鍙伒3.0 Omni 澶氬浘: 闈㈡澘闀垮害瑕嗙洊宸睝鏈€澶фЫ 鈥?len=2 maxSlot=1
+  [OK] 鍙伒3.0 Omni 澶氬浘: 鏈狜妲?宸叉竻绌?鈥?got 
+  [OK] 鍙伒3.0 Omni 澶氬浘: 宸睝妲?鍐欏洖涓婁紶URL 鈥?https://ref1-drag.png|UP
+  [OK] 鍙伒3.0 Omni 澶氬浘: 鏈狜妲?宸叉竻绌?鈥?got 
+  [OK] 鍙伒3.0 Omni 澶氬浘: @涓诲浘 瑙ｆ瀽鍒伴潰鏉縐RL 鈥?token鈫抙ttps://first-frame.png slot鈫抧ull
+  [OK] 鍙伒3.0 Omni 澶氬浘: @涓诲浘 API URL 鏉ヨ嚜璇ョ礌鏉?鈥?https://first-frame.png|UP
+  [OK] 鍙伒3.0 Omni 澶氬浘: @鍥剧墖2 瑙ｆ瀽鍒伴潰鏉縐RL 鈥?token鈫抙ttps://ref1-drag.png|UP slot鈫抙ttps://ref1-drag.png
+  [OK] 鍙伒3.0 Omni 澶氬浘: @鍥剧墖2 API URL 鏉ヨ嚜璇ョ礌鏉?鈥?https://ref1-drag.png|UP
+  [OK] 鍙伒3.0 Omni 澶氬浘: @涓诲浘 灞曞紑鍚?[鍥?] 鈥?锛堜富棰勮绱犳潗銆屼富鍥俱€嶏紝瀵瑰簲鏈姹?referenceImages 绗?寮狅紝鍦ㄦ彁绀鸿瘝涓瑙嗕綔 [鍥?]锛?棣栧抚 锛堥潰鏉垮弬鑰冦€屽浘鐗?銆嶏紝瀵瑰簲鏈姹?referenceImages 绗?寮狅紝鍦ㄦ彁绀鸿瘝涓瑙嗕綔 [鍥?]锛?鍙傝€冧汉鐗?  [OK] 鍙伒3.0 Omni 澶氬浘: plan.imageIndex 涓?token 鏄犲皠涓€鑷?鈥?imageIndex=1 map=1
+  [OK] 鍙伒3.0 Omni 澶氬浘: @鍥剧墖2 灞曞紑鍚?[鍥?] 鈥?锛堜富棰勮绱犳潗銆屼富鍥俱€嶏紝瀵瑰簲鏈姹?referenceImages 绗?寮狅紝鍦ㄦ彁绀鸿瘝涓瑙嗕綔 [鍥?]锛?棣栧抚 锛堥潰鏉垮弬鑰冦€屽浘鐗?銆嶏紝瀵瑰簲鏈姹?referenceImages 绗?寮狅紝鍦ㄦ彁绀鸿瘝涓瑙嗕綔 [鍥?]锛?鍙傝€冧汉鐗?  [OK] 鍙伒3.0 Omni 澶氬浘: plan.imageIndex 涓?token 鏄犲皠涓€鑷?鈥?imageIndex=2 map=2
+  [OK] 鍙伒3.0 Omni 澶氬浘: API 鍙傝€冨浘椤哄簭=鏂囨@鍑虹幇椤哄簭 鈥?["https://first-frame.png|UP","https://ref1-drag.png|UP"]
+  [OK] 鍙伒3.0 Omni 鎸囦护鍙樻崲: 鍒涙剰鎻忚堪鑷冲皯瑙ｆ瀽鍑?涓狜鍥剧墖
+  [OK] 鍙伒3.0 Omni 鎸囦护鍙樻崲: 闈㈡澘闀垮害瑕嗙洊宸睝鏈€澶фЫ 鈥?len=2 maxSlot=1
+  [OK] 鍙伒3.0 Omni 鎸囦护鍙樻崲: 鏈狜妲?宸叉竻绌?鈥?got 
+  [OK] 鍙伒3.0 Omni 鎸囦护鍙樻崲: 宸睝妲?鍐欏洖涓婁紶URL 鈥?https://inst1-drag.png|UP
+  [OK] 鍙伒3.0 Omni 鎸囦护鍙樻崲: @鍥剧墖2 瑙ｆ瀽鍒伴潰鏉縐RL 鈥?token鈫抙ttps://inst1-drag.png|UP slot鈫抙ttps://inst1-drag.png
+  [OK] 鍙伒3.0 Omni 鎸囦护鍙樻崲: @鍥剧墖2 API URL 鏉ヨ嚜璇ョ礌鏉?鈥?https://inst1-drag.png|UP
+  [OK] 鍙伒3.0 Omni 鎸囦护鍙樻崲: @鍥剧墖2 灞曞紑鍚?[鍥?] 鈥?锛堥潰鏉垮弬鑰冦€屽浘鐗?銆嶏紝瀵瑰簲鏈姹?referenceImages 绗?寮狅紝鍦ㄦ彁绀鸿瘝涓瑙嗕綔 [鍥?]锛?淇濇寔鏈嶈 锛堝弬鑰冭棰戠1娈碉紝瀵瑰簲鏈姹傚弬鑰冭棰戠1娈碉級
+  [OK] 鍙伒3.0 Omni 鎸囦护鍙樻崲: plan.imageIndex 涓?token 鏄犲皠涓€鑷?鈥?imageIndex=1 map=1
+  [OK] 鍙伒3.0 Omni 鎸囦护鍙樻崲: API 鍙傝€冨浘椤哄簭=鏂囨@鍑虹幇椤哄簭 鈥?["https://inst1-drag.png|UP"]
+  [OK] 鍙伒3.0 Omni 鎸囦护鍙樻崲: @瑙嗛1 杩涘叆 API 瑙嗛鍒楄〃 鈥?videos=@瑙嗛1
+  [OK] 鍙伒3.0 Omni 鎸囦护鍙樻崲: @瑙嗛1 涓婁紶鏄犲皠 鈥?blob:video-local|UP
+  [OK] 鍗虫ⅵ3.0 Pro: 鍒涙剰鎻忚堪鑷冲皯瑙ｆ瀽鍑?涓狜鍥剧墖
+  [OK] 鍗虫ⅵ3.0 Pro: 闈㈡澘闀垮害瑕嗙洊宸睝鏈€澶фЫ 鈥?len=1 maxSlot=-1
+  [OK] 鍗虫ⅵ3.0 Pro: 鏈狜妲?淇濈暀鍘熷浘 鈥?https://j0.png|UP vs https://j0.png
+  [OK] 鍗虫ⅵ3.0 Pro: @棣栧抚鍥?瑙ｆ瀽鍒伴潰鏉縐RL 鈥?token鈫抙ttps://j0.png slot鈫抧ull
+  [OK] 鍗虫ⅵ3.0 Pro: @棣栧抚鍥?API URL 鏉ヨ嚜璇ョ礌鏉?鈥?https://j0.png|UP
+  [OK] 鍗虫ⅵ3.0 Pro: @棣栧抚鍥?灞曞紑鍚?[鍥?] 鈥?锛堥潰鏉垮弬鑰冦€岄甯у浘銆嶏紝瀵瑰簲鏈姹?referenceImages 绗?寮狅紝鍦ㄦ彁绀鸿瘝涓瑙嗕綔 [鍥?]锛?棣栧抚浜虹墿
+  [OK] 鍗虫ⅵ3.0 Pro: plan.imageIndex 涓?token 鏄犲皠涓€鑷?鈥?imageIndex=1 map=1
+  [OK] 鍗虫ⅵ3.0 Pro: API 鍙傝€冨浘椤哄簭=鏂囨@鍑虹幇椤哄簭 鈥?["https://j0.png|UP"]
+
+=== 4. 鍥炲綊锛欼mage2 涓嶅啀鍘嬬揣涓㈡Ы ===
+
+  [OK] 妲?宸睝淇濈暀
+  [OK] 妲?鏈狜宸叉竻绌?  [OK] 妲?宸睝淇濈暀
+  [OK] 涓棿绌烘Ы淇濈暀鍗犱綅 鈥?len=3
+
+=== 5. 鍙伒 Omni multi锛欯鍥剧墖1 涓嶅緱鍗犵敤棣栧抚 URL ===
+
+  [OK] 閿欒鏄犲皠鏃跺浘鐗?妲藉彲鑳借鎺忕┖
+  [OK] 淇鍚庡浘鐗?妲戒繚鐣欑嫄鐙镐笂浼燯RL 鈥?https://cos/fox-up.png
+  [OK] @鍥剧墖1 涓嶅湪 Omni multi 棣栧抚 token 闆?
+=== 6. Omni multi锛氳繍琛屽悗涓诲浘 COS 涓嶅緱鍗犲弬鑰冩Ы銆屽浘鐗?銆?===
+
+  [OK] 鍚堝苟鍚庝粎淇濈暀鐙愮嫺鍙傝€冩Ы 鈥?["https://cos/fox.png|UP"]
+  [OK] 鍙傝€冩Ы涓虹嫄鐙镐笂浼?URL
+  [OK] 涓嶅惈涓诲浘 COS
+
+=== 7. Seedance 鍙傝€冪敓锛氫富鍥?涓夊弬鑰?@鍥剧墖3 妲戒綅瀵归綈 ===
+
+  [OK] @鍥剧墖3 鏍囩瀛樺湪 鈥?@涓诲浘,@鍥剧墖1,@鍥剧墖2,@鍥剧墖3
+  [OK] @鍥剧墖3 瑙ｆ瀽鍒扮墰浠旂敺 鈥?got https://cos.example.com/man-denim.png
+  [OK] @鍥剧墖3 refImageSlotIndex=3 鈥?idx=3
+  [OK] 杩愯鍚庢Ы3浠嶄负鐗涗粩涓婁紶URL 鈥?["https://cos.example.com/proj/assets/aa/thumb","https://cos.example.com/dragon.png","https://cos.example.com/street.png","https://cos.example.com/man-denim.png|UP"]
+  [OK] 杩愯鍚庢Ы1浠嶄负榫?鈥?["https://cos.example.com/proj/assets/aa/thumb","https://cos.example.com/dragon.png","https://cos.example.com/street.png","https://cos.example.com/man-denim.png|UP"]
+  [OK] 鍒嗛暅鎸夋Ы琛ュ叏 @鍥剧墖3 鈥?["https://cos.example.com/dragon.png","https://cos.example.com/street.png","","https://cos.example.com/man-denim.png"]
+  [OK] 鍒嗛暅 enrich @鍥剧墖3 鍦ㄦЫ3 鈥?["","https://cos.example.com/dragon.png","https://cos.example.com/street.png","https://cos.example.com/man-denim.png"]
+  [OK] 鍒嗛暅 enrich @鍥剧墖2 鍦ㄦЫ2
+  [OK] 闈㈡澘鎸佷箙鍖栭暱搴︿笉鍙?鈥?4
+
+=== 8. 杩愯鍚?prune锛氭湭@妲芥竻绌猴紝@鍥剧墖2/3 鍚嶇О涓嶅彉 ===
+
+  [OK] 鏈狜妲?/4 宸叉竻绌?鈥?["","","https://cos.example.com/street.png|UP","https://cos.example.com/man.png|UP"]
+  [OK] 妲?浠嶄负琛楁櫙
+  [OK] 妲?浠嶄负浜虹墿
+  [FAIL] prune 鍚庝粛璇嗗埆 @鍥剧墖3
+  [FAIL] @鍥剧墖3 浠嶆寚鍚戞Ы3
+
+=== 9. 鍏ㄦā鍨嬭繍琛屽悗 prune锛圢ano / image2 / Omni锛?==
+
+  [OK] Nano Banana 2.0: 鏈狜妲?宸叉竻绌?  [OK] Nano Banana 2.0: 宸睝妲?淇濈暀
+  [OK] Nano Banana 2.0: 妲?鏍囩浠嶄负鍥剧墖1 鈥?鍥剧墖1
+  [OK] Nano Banana 2.0: 宸睝妲?淇濈暀
+  [OK] Nano Banana 2.0: 妲?鏍囩浠嶄负鍥剧墖3 鈥?鍥剧墖3
+  [OK] Nano Banana 2.0: @鍥剧墖1 浠嶆寚鍚戞Ы0 鈥?idx=0
+  [OK] Nano Banana 2.0: @鍥剧墖3 浠嶆寚鍚戞Ы2 鈥?idx=2
+  [OK] image 2: 鏈狜妲?宸叉竻绌?  [OK] image 2: 宸睝妲?淇濈暀
+  [OK] image 2: 妲?鏍囩浠嶄负鍥剧墖1 鈥?鍥剧墖1
+  [OK] image 2: 宸睝妲?淇濈暀
+  [OK] image 2: 妲?鏍囩浠嶄负鍥剧墖3 鈥?鍥剧墖3
+  [OK] image 2: @鍥剧墖1 浠嶆寚鍚戞Ы0 鈥?idx=0
+  [OK] image 2: @鍥剧墖3 浠嶆寚鍚戞Ы2 鈥?idx=2
+  [OK] 鍙伒3.0 Omni 澶氬浘: 鏈狜妲?宸叉竻绌?  [OK] 鍙伒3.0 Omni 澶氬浘: 鏈狜妲?宸叉竻绌?  [OK] 鍙伒3.0 Omni 澶氬浘: 宸睝妲?淇濈暀
+  [OK] 鍙伒3.0 Omni 澶氬浘: 妲?鏍囩浠嶄负鍥剧墖2 鈥?鍥剧墖2
+  [OK] 鍙伒3.0 Omni 澶氬浘: @鍥剧墖2 浠嶆寚鍚戞Ы1 鈥?idx=1
+
+=== 10. 棣栧熬甯фā鍨嬶細浠?@棣栧抚 / 浠?@灏惧抚 闈㈡澘 prune ===
+
+  [OK] 浠匑棣栧抚锛氫繚鐣欓甯?URL
+  [OK] 浠匑棣栧抚锛氭竻绌哄熬甯?  [OK] 浠匑棣栧抚锛氬熬甯?URL 宸叉竻
+  [OK] 浠匑灏惧抚锛氫繚鐣欏熬甯?URL
+  [OK] 浠匑灏惧抚锛氭竻绌洪甯?  [OK] 鍙孈锛氶甯т繚鐣?  [OK] 鍙孈锛氬熬甯т繚鐣?
+=== 12. 鏈?@涓诲浘锛氬叏妯″瀷涓婚瑙?/ Details / 闈㈡澘 ===
+
+  [OK] Seedance鍙傝€? 鏈狜涓诲浘
+  [OK] Seedance鍙傝€? 棰勮=棣栦釜@ 鈥?https://cos/fox.png|UP
+  [OK] Seedance鍙傝€? 杩愯鍚庨殣钘忛潰鏉夸富鍥炬牸
+  [OK] Seedance鍙傝€? Details 鏃犮€屼富鍥俱€?  [OK] Omni multi: 鏈狜涓诲浘
+  [OK] Omni multi: 棰勮=鍥剧墖1
+  [OK] Omni multi: Details 鏃犮€屼富鍥俱€?  [OK] vidu: 浠匑灏惧抚棰勮=灏惧抚 鈥?https://cos/wolf.png|UP
+
+=== 12a. Nano 鏈?@涓诲浘锛氫富棰勮=棣栦釜 @ 鍙傝€冨浘 ===
+
+  [OK] 鏂囨鏈?@涓诲浘
+  [OK] imagePreview 鏀逛负棣栦釜 @ 鍥?  [OK] 杩愯鍚庨殣钘忛潰鏉夸富鍥炬牸
+  [OK] 鎷栧叆鍚庨粯璁ゅ睍绀轰富鍥炬牸
+  [OK] 杩愯鍚庢湭@涓诲浘涓嶅睍绀轰富鍥炬牸
+  [OK] 鍙傝€冩Ы浠嶄繚鐣欑嫄鐙?  [OK] 鍚堝苟鏃舵湭鍥犱富鍥惧幓閲嶆帍绌哄弬鑰?
+=== 15. 鍏ㄦā鍨嬪弬鑰冩牸搴曟爮锛氫笉涓?@ 妲戒綅閿欎綅銆佷笉閲嶅鍥剧墖1 ===
+
+  [OK] Nano panelSlot: 鑷冲涓€涓€屽浘鐗?銆?鈥?鍥剧墖1,鍥剧墖2
+  [OK] Nano panelSlot: 鍥剧墖n 鏍囩浜掍笉閲嶅 鈥?鍥剧墖1,鍥剧墖2
+  [OK] Nano panelSlot: 涓诲浘涓庡浘鐗? 鍙苟瀛?  [OK] Nano 妲?=鍥剧墖1
+  [OK] Nano 妲?=鍥剧墖2
+  [OK] image2 panelSlot: 鑷冲涓€涓€屽浘鐗?銆?鈥?鍥剧墖1,鍥剧墖2
+  [OK] image2 panelSlot: 鍥剧墖n 鏍囩浜掍笉閲嶅 鈥?鍥剧墖1,鍥剧墖2
+  [OK] image2 panelSlot: 涓诲浘涓庡浘鐗? 鍙苟瀛?  [OK] Omni multi 杩炵画妲? 鑷冲涓€涓€屽浘鐗?銆?鈥?鍥剧墖1,鍥剧墖2
+  [OK] Omni multi 杩炵画妲? 鍥剧墖n 鏍囩浜掍笉閲嶅 鈥?鍥剧墖1,鍥剧墖2
+  [OK] Omni multi 杩炵画妲? 涓诲浘涓庡浘鐗? 鍙苟瀛?  [OK] Omni 妲?=鍥剧墖1
+  [OK] Omni 妲?=鍥剧墖2
+  [OK] Omni 鍓嶇疆绌烘Ы origIdx: 鑷冲涓€涓€屽浘鐗?銆?鈥?鍥剧墖2,鍥剧墖3
+  [OK] Omni 鍓嶇疆绌烘Ы origIdx: 鍥剧墖n 鏍囩浜掍笉閲嶅 鈥?鍥剧墖2,鍥剧墖3
+  [OK] Omni 鍓嶇疆绌烘Ы origIdx: 涓诲浘涓庡浘鐗? 鍙苟瀛?  [OK] Omni origIdx1=鍥剧墖2
+  [OK] Omni origIdx2=鍥剧墖3
+  [OK] Omni 鏈狜涓诲浘: 鑷冲涓€涓€屽浘鐗?銆?鈥?鍥剧墖1,鍥剧墖2
+  [OK] Omni 鏈狜涓诲浘: 鍥剧墖n 鏍囩浜掍笉閲嶅 鈥?鍥剧墖1,鍥剧墖2
+  [OK] Omni 棣栨Ы涓庣敾甯冨悓鍥句粛鏍囧浘鐗?
+
+=== 16. Seedance 鍙傝€冪敓锛氳繍琛屽悗淇濈暀 @ 鍒扮殑鍙傝€冨浘妲?===
+
+  [OK] plan 鍚?@鍥剧墖1/@鍥剧墖2 鈥?1,2
+  [OK] 妲? 榫欎繚鐣欎笂浼?URL 鈥?https://cos.example.com/dragon.png|UP
+  [OK] 妲? 琛楁櫙淇濈暀涓婁紶 URL 鈥?https://cos.example.com/street.png|UP
+  [OK] 鏈狜妲? 宸叉竻绌?  [OK] 闈㈡澘灞曠ず鑷冲皯 2 寮?@ 鍥?鈥?2
+
+=== 17. 鍏ㄦā鍨嬭繍琛屽悗 @ 妲藉啓鍥烇紙Omni 鎸囦护 tab锛?==
+
+  [OK] 鍙伒3.0 Omni 鎸囦护: 鏈狜妲?宸叉竻绌?  [OK] 鍙伒3.0 Omni 鎸囦护: 宸睝妲?淇濈暀
+  [OK] 鍙伒3.0 Omni 鎸囦护: 妲?鏍囩浠嶄负鍥剧墖1 鈥?鍥剧墖1
+  [OK] 鍙伒3.0 Omni 鎸囦护: 宸睝妲?淇濈暀
+  [OK] 鍙伒3.0 Omni 鎸囦护: 妲?鏍囩浠嶄负鍥剧墖3 鈥?鍥剧墖3
+  [OK] 鍙伒3.0 Omni 鎸囦护: @鍥剧墖1 浠嶆寚鍚戞Ы0 鈥?idx=0
+  [OK] 鍙伒3.0 Omni 鎸囦护: @鍥剧墖3 浠嶆寚鍚戞Ы2 鈥?idx=2
+  [OK] Seedance 鍙傝€?tab 鏂囨浼樺厛浜庨《灞?
+=== 20. 涓诲浘鏍硷細璧勪骇搴撳悓绱犳潗鏄剧ず璧勪骇鍚?===
+
+  [OK] 涓诲浘 URL 鍖归厤璧勪骇搴?  [OK] 涓诲浘 imageName 涓庡簱鍐呭悓鍚?  [OK] 鍙傝€冩Ы涓庝富鍥惧悓绱犳潗涓嶅啀鏍囥€屼富鍥俱€?
+=== 19. 灞炴€ч潰鏉垮弬鑰冩Ы锛氳祫浜у簱鍚屽浘鍘婚噸 ===
+
+  [OK] thumb 涓?file 瑙嗕负鍚屼竴绱犳潗
+  [OK] 棣栨杩藉姞鎴愬姛
+  [OK] 閲嶅杩藉姞琚嫆缁?  [OK] 灞曠ず鍚嶄繚鐣?
+=== 18. Seedance 鍙傝€冪敓锛氫粎 @璧勪骇 鎸?assetId 淇濈暀妲斤紙thumb鈮爁ile锛?==
+
+  [OK] plan 鍚笁涓?@璧勪骇
+  [OK] 妲? 钀ч亾淇濈暀 鈥?/flowgen-api/projects/proj1/assets/id-xd/file|UP
+  [OK] 妲? 楦卞惢淇濈暀 鈥?/flowgen-api/projects/proj1/assets/id-cw/file|UP
+  [OK] 妲? 澶忚寜淇濈暀 鈥?/flowgen-api/projects/proj1/assets/id-xm/file|UP
+  [OK] 妲? 琛楁櫙鏈狜宸叉竻绌?  [OK] 妲? 鐧芥辰鏈狜宸叉竻绌?  [OK] 鏈狜璧勪骇灏鹃儴宸插脊 鈥?len=3
+
+=== 22. 鏃?prompt 鍒嗛暅鍏嬮殕浠嶅幓閲嶅弬鑰冩Ы ===
+
+  [OK] 鏃?prompt 涔熷幓閲嶅弻钀ч亾 鈥?["https://cos.example.com/flowgen-api/projects/p1/assets/id-xd/thumb","https://cos/cw.png"]
+  [OK] 鏃?prompt 浠呬繚鐣欒惂閬?楦卞惢鍚勪竴
+  [OK] 灞曠ず灞備笉鍑虹幇鍙岃惂閬?  [OK] inspector patch 鍘绘帀閲嶅妲?
+=== 25. 鍏ㄦā鍨嬶細@鍥剧墖n 鈫?@璧勪骇:灞曠ず鍚嶏紙鑽掑闀囪閬? / @鍥剧墖3锛?===
+
+  [OK] Seedance2.0 鍙傝€冪敓: @鍥剧墖3鈫扏璧勪骇:鑽掑闀囪閬?
+  [OK] Seedance2.0 鍙傝€冪敓: @璧勪骇 涓庡悗鏂囨眽瀛楁湁绌烘牸
+  [OK] Seedance2.0 鍙傝€冪敓: 涓嶅惈瑁?@鍥剧墖3
+  [OK] Seedance2.0 鍙傝€冪敓: 鍐欏洖 patch 瀛樺湪
+  [OK] Seedance2.0 鍙傝€冪敓: tab/椤跺眰璇诲彇涓€鑷?  [OK] Seedance2.0 鍙傝€冪敓: plan 鍚?@璧勪骇:鑽掑闀囪閬?
+  [OK] Seedance2.0 鍙傝€冪敓: @ 鍒楄〃鍚祫浜?token
+  [OK] Nano Banana 2.0: @鍥剧墖3鈫扏璧勪骇:鑽掑闀囪閬?
+  [OK] Nano Banana 2.0: @璧勪骇 涓庡悗鏂囨眽瀛楁湁绌烘牸
+  [OK] Nano Banana 2.0: 涓嶅惈瑁?@鍥剧墖3
+  [OK] Nano Banana 2.0: 鍐欏洖 patch 瀛樺湪
+  [OK] Nano Banana 2.0: tab/椤跺眰璇诲彇涓€鑷?  [OK] Nano Banana 2.0: plan 鍚?@璧勪骇:鑽掑闀囪閬?
+  [OK] Nano Banana 2.0: @ 鍒楄〃鍚祫浜?token
+  [OK] image 2: @鍥剧墖3鈫扏璧勪骇:鑽掑闀囪閬?
+  [OK] image 2: @璧勪骇 涓庡悗鏂囨眽瀛楁湁绌烘牸
+  [OK] image 2: 涓嶅惈瑁?@鍥剧墖3
+  [OK] image 2: 鍐欏洖 patch 瀛樺湪
+  [OK] image 2: tab/椤跺眰璇诲彇涓€鑷?  [OK] image 2: plan 鍚?@璧勪骇:鑽掑闀囪閬?
+  [OK] image 2: @ 鍒楄〃鍚祫浜?token
+  [OK] 鍙伒3.0 Omni multi: @鍥剧墖3鈫扏璧勪骇:鑽掑闀囪閬?
+  [OK] 鍙伒3.0 Omni multi: @璧勪骇 涓庡悗鏂囨眽瀛楁湁绌烘牸
+  [OK] 鍙伒3.0 Omni multi: 涓嶅惈瑁?@鍥剧墖3
+  [OK] 鍙伒3.0 Omni multi: 鍐欏洖 patch 瀛樺湪
+  [OK] 鍙伒3.0 Omni multi: tab/椤跺眰璇诲彇涓€鑷?  [OK] 鍙伒3.0 Omni multi: plan 鍚?@璧勪骇:鑽掑闀囪閬?
+  [OK] 鍙伒3.0 Omni multi: @ 鍒楄〃鍚祫浜?token
+  [OK] 鍗虫ⅵ3.0 Pro: @鍥剧墖3鈫扏璧勪骇:鑽掑闀囪閬?
+  [OK] 鍗虫ⅵ3.0 Pro: @璧勪骇 涓庡悗鏂囨眽瀛楁湁绌烘牸
+  [OK] 鍗虫ⅵ3.0 Pro: 涓嶅惈瑁?@鍥剧墖3
+  [OK] 鍗虫ⅵ3.0 Pro: 鍐欏洖 patch 瀛樺湪
+  [OK] 鍗虫ⅵ3.0 Pro: tab/椤跺眰璇诲彇涓€鑷?  [OK] 鍗虫ⅵ3.0 Pro: plan 鍚?@璧勪骇:鑽掑闀囪閬?
+  [OK] vidu 2.0: @鍥剧墖3鈫扏璧勪骇:鑽掑闀囪閬?
+  [OK] vidu 2.0: @璧勪骇 涓庡悗鏂囨眽瀛楁湁绌烘牸
+  [OK] vidu 2.0: 涓嶅惈瑁?@鍥剧墖3
+  [OK] vidu 2.0: 鍐欏洖 patch 瀛樺湪
+  [OK] vidu 2.0: tab/椤跺眰璇诲彇涓€鑷?  [OK] vidu 2.0: plan 鍚?@璧勪骇:鑽掑闀囪閬?
+
+=== 20c. Seedance 鍙傝€?tab 鏂囨涓庨《灞?prompt 涓嶅悓姝ユ椂浠?tab 涓哄噯 ===
+
+  [OK] 璇诲彇鍙傝€?tab 鏂囨
+  [OK] 鍚屾鍚庨《灞?prompt 涓?tab 涓€鑷?  [OK] 鍚屾鍚?reference tab 淇濈暀 @璧勪骇
+
+=== 20b. 瀵煎嚭鑺傜偣锛氫富鍥剧浉瀵硅矾寰?+ 鍙傝€冩Ы localhost 鍚?assetId ===
+
+  [OK] 鐩稿涓诲浘涓庣粷瀵瑰弬鑰冩Ы鍒や负閲嶅
+  [OK] 灞曠ず灞備粎楦卞惢+澶忚寜涓ゆ牸 鈥?[1,2]
+  [OK] 鍐欏洖 patch 娓呯┖涓庝富鍥鹃噸澶嶇殑妲?
+  [OK] 鍐欏洖鍚庝粛淇濈暀楦卞惢澶忚寜
+
+=== 21. 鍒嗛暅鍏嬮殕锛氬弬鑰冩牸鍚岀礌鏉愪笉閲嶅锛堣惂閬撁?锛?===
+
+  [OK] 鍒嗛暅鍏嬮殕鍚庤惂閬撹嚦澶?1 鏍?鈥?refs=2 xiaodao=0
+  [OK] 鍒嗛暅浠嶄繚鐣欓副鍚诲鑼?  [OK] Nano 鍒嗛暅鍏嬮殕鍘婚噸涓诲浘閲嶅妲?鈥?["https://cos.example.com/flowgen-api/projects/p1/assets/id-cw/file"]
+  [OK] Omni 绱у噾鍒楄〃鍘婚噸 thumb+file
+
+=== 14. Seedance 鍙傝€冪敓锛氬垎闀滀笅娓稿弬鑰冩牸搴曟爮涓嶉噸澶嶃€屽浘鐗?銆?===
+
+  [OK] 妲?=鍥剧墖1
+  [OK] 妲?=鍥剧墖2锛堥潪閲嶅鍥剧墖1锛?  [OK] 妲?榫?鍥剧墖1
+  [OK] 妲?涓庝富鍥惧悓绱犳潗=涓诲浘
+  [OK] 鍒嗛暅 enrich 淇濈暀澶氭Ы 鈥?len=3
+  [OK] 鍒嗛暅妲?涓嶄笌涓诲浘閲嶅
+  [OK] 鍒嗛暅妲?搴曟爮=鍥剧墖1
+  [OK] 鍒嗛暅妲?搴曟爮=鍥剧墖2
+
+=== 12c. Nano @鍥剧墖2+@鍥剧墖1 鏈狜涓诲浘锛氱敾甯?棣栦釜@锛岄潰鏉夸袱鏍奸兘鏄剧ず ===
+
+  [OK] plan 椤哄簭=鏂囨鍑虹幇椤哄簭
+  [OK] 鐢诲竷澶у浘=棣栦釜@鍥剧墖2
+  [OK] 杩愯鍚庨殣钘忎富鍥炬牸
+  [OK] prune 鍚庝繚鐣欐Ы0/1
+  [OK] 鏈狜涓诲浘鏃朵笉鎸変富棰勮鍘婚噸鍙傝€冩牸
+  [OK] 闈㈡澘灞曠ず 2 寮?鈥?len=2
+  [OK] 妲? 浠嶄负鍥剧墖1
+  [OK] 妲? 浠嶄负鍥剧墖2锛堥潪涓诲浘锛?  [OK] 妲? URL 涓庣敾甯冮瑙堢浉鍚屼篃涓嶆爣涓诲浘
+
+=== 12b. 闈㈡澘灞曠ず锛歱rune 绌烘Ы涓嶆覆鏌?===
+
+  [OK] 绌烘Ы涓嶈繘鍏ュ睍绀哄垪琛?鈥?[{"url":"https://cos/fox.png|UP","slotIndex":1}]
+  [OK] 淇濈暀鍘熸Ы涓嬫爣 1
+  [OK] 搴曟爮浠嶄负鍥剧墖2
+
+=== 13. 浜や粯鐭╅樀锛氬墿浣?tab / 妯″瀷 prune + @ 绮惧噯 ===
+
+  [OK] 鍙伒3.0 Omni 瑙嗛鍙傝€? 鏈狜妲?宸叉竻绌?  [OK] 鍙伒3.0 Omni 瑙嗛鍙傝€? 宸睝妲?淇濈暀
+  [OK] 鍙伒3.0 Omni 瑙嗛鍙傝€? 妲?鏍囩浠嶄负鍥剧墖1 鈥?鍥剧墖1
+  [OK] 鍙伒3.0 Omni 瑙嗛鍙傝€? 宸睝妲?淇濈暀
+  [OK] 鍙伒3.0 Omni 瑙嗛鍙傝€? 妲?鏍囩浠嶄负鍥剧墖3 鈥?鍥剧墖3
+  [OK] 鍙伒3.0 Omni 瑙嗛鍙傝€? @鍥剧墖1 浠嶆寚鍚戞Ы0 鈥?idx=0
+  [OK] 鍙伒3.0 Omni 瑙嗛鍙傝€? @鍥剧墖3 浠嶆寚鍚戞Ы2 鈥?idx=2
+  [OK] 鍗虫ⅵ浠匑棣栧抚锛氶甯т繚鐣?  [OK] 鍗虫ⅵ浠匑棣栧抚锛氬熬甯ф竻绌?  [OK] 鍗虫ⅵ鏍囩鍚甯у浘
+  [OK] Omni棣栧熬甯т粎@灏惧抚锛氬熬甯т繚鐣?  [OK] Omni棣栧熬甯т粎@灏惧抚锛氶甯ф竻绌?
+=== 11. Seedance 鍥剧敓锛歜lob 涓诲浘 + @棣栧抚鍥?===
+
+  [OK] blob 涓婚瑙堜笉搴斿垽涓鸿棰?  [OK] @棣栧抚鍥?瑙ｆ瀽鍒颁富鍥?blob
+  [OK] @灏惧抚鍥?瑙ｆ瀽鍒板熬甯?
+=== 12b. 杩愯鍚庝繚鐣欐嫋鍏ュ睍绀哄悕锛圲RL 宸蹭笂浼犳浛鎹級 ===
+
+  [OK] 杩愯鍚庢Ы0浠嶄负钀ч亾
+  [OK] 杩愯鍚庢Ы1浠嶄负楦卞惢
+  [OK] 杩愯鍚庢Ы2浠嶄负琛楁櫙
+  [OK] 杩愯鍚庢Ы3浠嶄负鐗涗粩鐢?
+=== 12. 妯″瀷 Prompt 灞曞紑锛氳祫浜у悕 + [鍥綨] ===
+
+  [OK] Nano @鍥剧墖1: @鍥剧墖1 plan.label 闈?slug
+  [OK] Nano @鍥剧墖1: @鍥剧墖1 灞曞紑鍚祫浜?妲戒綅鍚嶃€岃崚濉橀晣琛楅亾1銆?鈥?鍙傝€冿紙闈㈡澘鍙傝€冦€岃崚濉橀晣琛楅亾1銆嶏紝瀵瑰簲鏈姹?referenceImages 绗?寮狅紝鍦ㄦ彁绀鸿瘝涓瑙嗕綔 [鍥?]锛夌敓鎴?  [OK] Nano @鍥剧墖1: @鍥剧墖1 灞曞紑鍚?[鍥?] 鈥?鍙傝€冿紙闈㈡澘鍙傝€冦€岃崚濉橀晣琛楅亾1銆嶏紝瀵瑰簲鏈姹?referenceImages 绗?寮狅紝鍦ㄦ彁绀鸿瘝涓瑙嗕綔 [鍥?]锛夌敓鎴?  [OK] Seedance @璧勪骇: @璧勪骇:钀ч亾 plan.label 闈?slug
+  [OK] Seedance @璧勪骇: @璧勪骇:钀ч亾 灞曞紑鍚祫浜?妲戒綅鍚嶃€岃惂閬撱€?鈥?鐢紙椤圭洰绱犳潗搴撀疯惂閬擄紝瀵瑰簲鏈姹?referenceImages 绗?寮狅紝鍦ㄦ彁绀鸿瘝涓瑙嗕綔 [鍥?]锛?楦卞惢/澶忚寜 鍋氬弬鑰?  [OK] Seedance @璧勪骇: @璧勪骇:钀ч亾 灞曞紑鍚?[鍥?] 鈥?鐢紙椤圭洰绱犳潗搴撀疯惂閬擄紝瀵瑰簲鏈姹?referenceImages 绗?寮狅紝鍦ㄦ彁绀鸿瘝涓瑙嗕綔 [鍥?]锛?楦卞惢/澶忚寜 鍋氬弬鑰?  [OK] Seedance @璧勪骇 plan.label=钀ч亾
+  [OK] Omni @棣栧抚鍥?plan.label=鑽掑闀囪閬?
+  [OK] Omni @棣栧抚鍥?灞曞紑鍚崚濉橀晣琛楅亾1
+  [OK] Omni @棣栧抚鍥?灞曞紑鍚?[鍥?]
+  [OK] @涓诲浘 plan.label=钀ч亾
+  [OK] @涓诲浘 灞曞紑鍚惂閬?  [OK] @涓诲浘 灞曞紑鍚?[鍥?]
+
+=== 26. 鎵弿 @绱犳潗 涓嶈鍖归厤銆屼富鍥俱€嶏紱淇 @涓诲浘 鐧芥辰 涓诲浘 ===
+
+  [OK] 鎵弿 refs 涓嶅惈妲戒綅鏍囩銆屼富鍥俱€?  [OK] 鎵弿 refs 鍚櫧娉?  [OK] 鎵弿鍚庝笉鍚?@涓诲浘
+  [OK] 鎵弿鍚庡惈 @璧勪骇:鐧芥辰
+  [OK] 淇 @涓诲浘 鐧芥辰 涓诲浘
+  [OK] canonical patch 鍘绘帀鍐椾綑涓诲浘
+  [OK] canonical patch 鍐欏叆 @璧勪骇:鐧芥辰
+
+=== 27. 璇壂 @涓诲浘 閿欏悕锛堣惂濉橈級鈫?涓绘Ы璧勪骇鍚嶏紙鑽掑闀囪閬?锛?===
+
+  [OK] 閿欏悕璇壂淇涓?@璧勪骇:鑽掑闀囪閬?
+  [OK] canonical 涓嶅惈 @涓诲浘
+  [OK] canonical 涓鸿祫浜у悕 token
+  [OK] 瑁?@涓诲浘 杞祫浜у悕
+
+=== 姹囨€?===
+
+閫氳繃 313锛屽け璐?2

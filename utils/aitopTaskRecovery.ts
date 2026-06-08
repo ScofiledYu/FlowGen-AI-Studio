@@ -1,0 +1,119 @@
+import { isAitopCosUrl } from './aitopCosMediaUrl';
+import { pickMediaResourceUrlFromTaskStatus } from './taskStatusImageUrl';
+
+export const AITOP_TASK_FAIL_STATUSES = new Set(['3', 'FAIL', '6', 'TRANSFER_FAIL']);
+export const AITOP_TASK_SUCCESS_STATUSES = new Set(['TRANSFER_SUCCESS', 'SUCCESS', '2', '5']);
+
+export function parseAiTopTaskIds(raw?: string): string[] {
+  return String(raw || '')
+    .split(',')
+    .map((s) => s.trim())
+    .filter(Boolean);
+}
+
+export function isVideoModelName(model?: string): boolean {
+  const m = model || '';
+  return ['Veo 3.1', '可灵', 'Keling', '即梦', 'vidu', 'seedance'].some((tag) => m.includes(tag));
+}
+
+export type AiTopPollConfig = { maxAttempts: number; intervalMs: number };
+
+export function seedancePollConfigForModel(model?: string): AiTopPollConfig {
+  if (model === 'seedance2.0 (急速版)') {
+    return { maxAttempts: 720, intervalMs: 5000 };
+  }
+  if (model === 'seedance2.0 (高质量版)') {
+    return { maxAttempts: 3600, intervalMs: 10000 };
+  }
+  return { maxAttempts: 240, intervalMs: 5000 };
+}
+
+export function defaultPollConfigForModel(model?: string): AiTopPollConfig {
+  if (model?.includes('seedance')) return seedancePollConfigForModel(model);
+  if (model === '即梦3.0 Pro') return { maxAttempts: 180, intervalMs: 5000 };
+  if (model === 'vidu 2.0') return { maxAttempts: 240, intervalMs: 5000 };
+  return { maxAttempts: 150, intervalMs: 2000 };
+}
+
+export function extractResourceUrlFromTaskStatus(statusData: unknown): string | undefined {
+  return pickMediaResourceUrlFromTaskStatus(statusData);
+}
+
+export function isTerminalTaskFailure(status: unknown): boolean {
+  return AITOP_TASK_FAIL_STATUSES.has(String(status || ''));
+}
+
+export function isTerminalTaskSuccess(status: unknown, resourceUrl?: string): boolean {
+  const s = String(status || '');
+  if (s === 'TRANSFER_SUCCESS') return !!resourceUrl;
+  if (AITOP_TASK_SUCCESS_STATUSES.has(s)) return !!resourceUrl;
+  return false;
+}
+
+export type PollAiTopTaskOptions = {
+  getTaskStatus: (taskId: string) => Promise<unknown>;
+  pollConfig?: AiTopPollConfig;
+  onProgress?: () => void;
+  maxConsecutiveErrors?: number;
+  /** 视频恢复：SUCCESS 且仍是 ark-acg 时继续等 TRANSFER_SUCCESS */
+  requireAitopCos?: boolean;
+};
+
+/**
+ * 轮询 AiTop 直至成功拿到资源 URL、明确失败或超时。
+ */
+export async function pollAiTopTaskUntilResourceUrl(
+  taskId: string,
+  options: PollAiTopTaskOptions
+): Promise<string> {
+  const cfg = options.pollConfig ?? { maxAttempts: 150, intervalMs: 2000 };
+  const maxConsecutiveErrors = options.maxConsecutiveErrors ?? 10;
+  let consecutiveErrors = 0;
+  let attempts = 0;
+
+  while (attempts < cfg.maxAttempts) {
+    await new Promise((r) => setTimeout(r, cfg.intervalMs));
+    attempts++;
+    options.onProgress?.();
+
+    let statusData: unknown = null;
+    try {
+      statusData = await options.getTaskStatus(taskId);
+      if (statusData) consecutiveErrors = 0;
+    } catch {
+      consecutiveErrors++;
+      if (consecutiveErrors >= maxConsecutiveErrors) {
+        throw new Error(`任务状态查询连续失败（Task ID: ${taskId}）`);
+      }
+      continue;
+    }
+    if (!statusData || typeof statusData !== 'object') continue;
+
+    const status = (statusData as { status?: unknown }).status;
+    const resourceUrl = extractResourceUrlFromTaskStatus(statusData);
+
+    if (isTerminalTaskFailure(status)) {
+      const sd = statusData as { errorDescription?: string; errorMsg?: string };
+      const msg = sd.errorDescription || sd.errorMsg || '任务失败';
+      throw new Error(msg);
+    }
+
+    if (isTerminalTaskSuccess(status, resourceUrl) && resourceUrl) {
+      if (
+        options.requireAitopCos &&
+        !isAitopCosUrl(resourceUrl) &&
+        String(status) !== 'TRANSFER_SUCCESS'
+      ) {
+        continue;
+      }
+      return resourceUrl;
+    }
+
+    // SUCCESS 但尚无 URL：继续等 TRANSFER_SUCCESS
+    if (AITOP_TASK_SUCCESS_STATUSES.has(String(status)) && !resourceUrl) {
+      continue;
+    }
+  }
+
+  throw new Error(`任务轮询超时（Task ID: ${taskId}）`);
+}
