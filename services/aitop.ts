@@ -1,8 +1,45 @@
 import { remoteMediaUrlPreferSameOriginProxy } from '../utils/remoteMediaFetch';
+import { AITOP_PLATFORM_NANO_BANANA_2 } from '../types';
+import {
+  getAitopBillingContext,
+  buildAitopBillingQuery,
+  type AitopBillingContext,
+} from '../utils/aitopBilling';
+
+export {
+  setAitopBillingContext,
+  getAitopBillingContext,
+  type AitopBillingContext,
+} from '../utils/aitopBilling';
 
 const API_KEY = "aitop-key-4MGEBAFEArM3HRaJ0P77EkhEAtxseJma";
 const BASE_URL = "https://aitop100-api.hytch.com";
 const FILE_PREFIX = "https://aitop100app-1251510006.cos.ap-shanghai.myqcloud.com/";
+
+function aitopJsonHeaders(): Record<string, string> {
+  const ctx = getAitopBillingContext();
+  const h: Record<string, string> = {
+    'api-key': API_KEY,
+    'Content-Type': 'application/json',
+  };
+  if (ctx?.domainAccount) h['domain-account'] = ctx.domainAccount;
+  return h;
+}
+
+function aitopUploadHeaders(): Record<string, string> {
+  const ctx = getAitopBillingContext();
+  const h: Record<string, string> = { 'api-key': API_KEY };
+  if (ctx?.domainAccount) h['domain-account'] = ctx.domainAccount;
+  return h;
+}
+
+function withScoreProjectId(payload: object): object {
+  const ctx = getAitopBillingContext();
+  if (ctx?.scoreProjectId) {
+    return { ...payload, scoreProjectId: ctx.scoreProjectId };
+  }
+  return payload;
+}
 
 /** 生产与开发均默认输出 preload JSON；控制台可执行 `window.__FLOWGEN_DEBUG_PRELOAD__ = false` 关闭 */
 export function isPreloadDebugEnabled(): boolean {
@@ -11,10 +48,57 @@ export function isPreloadDebugEnabled(): boolean {
   return w.__FLOWGEN_DEBUG_PRELOAD__ !== false;
 }
 
-/** 控制台打印 JSON preload（Seedance / 各模型请求体与响应摘要） */
+/** 控制台打印 JSON preload（每次发往 AITOP 只打一条，含 domainAccount / scoreProjectId） */
 export function logPreloadJson(payload: Record<string, unknown>) {
   if (!isPreloadDebugEnabled()) return;
   console.info('[flowgen:preload]', JSON.stringify(payload, null, 2));
+}
+
+function billingFieldsForLog(): { domainAccount?: string; scoreProjectId?: string } {
+  const ctx = getAitopBillingContext();
+  if (!ctx) return {};
+  const out: { domainAccount?: string; scoreProjectId?: string } = {};
+  if (ctx.domainAccount) out.domainAccount = ctx.domainAccount;
+  if (ctx.scoreProjectId) out.scoreProjectId = ctx.scoreProjectId;
+  return out;
+}
+
+function headersForLog(headers: Record<string, string>): Record<string, string> {
+  const h = { ...headers };
+  if (h['api-key']) h['api-key'] = '***';
+  return h;
+}
+
+/** 仅模型创建任务（生图/生视频等）打印一条 preload；上传、轮询等辅助请求不打 */
+function logAitopModelRequest(spec: {
+  model: string;
+  method: string;
+  url: string;
+  headers: Record<string, string>;
+  body?: unknown;
+}) {
+  logAitopOutgoingRequest(spec);
+}
+
+function logAitopOutgoingRequest(spec: {
+  model: string;
+  method: string;
+  url: string;
+  headers: Record<string, string>;
+  body?: unknown;
+  query?: Record<string, string>;
+}) {
+  if (!isPreloadDebugEnabled()) return;
+  logPreloadJson({
+    debugType: 'preload',
+    model: spec.model,
+    method: spec.method,
+    url: spec.url,
+    ...billingFieldsForLog(),
+    headers: headersForLog(spec.headers),
+    ...(spec.query && Object.keys(spec.query).length ? { query: spec.query } : {}),
+    ...(spec.body !== undefined ? { body: spec.body } : {}),
+  });
 }
 
 function toCompactKlingOmniLogBody(body: Record<string, unknown>): Record<string, unknown> {
@@ -54,27 +138,67 @@ async function getBlobFromUrl(url: string): Promise<Blob> {
   }
 
   if (remoteMediaUrlPreferSameOriginProxy(url)) {
-    const proxyResp = await fetch(`/proxy-file?url=${encodeURIComponent(url)}`);
+    const proxyResp = await fetch(`/proxy-file?url=${encodeURIComponent(url)}`).catch((e) => {
+      throw e instanceof Error ? e : new Error(String(e));
+    });
     if (proxyResp.ok) return await proxyResp.blob();
-    throw new Error('fetch failed (same-origin proxy)');
+    throw new Error(`fetch failed (same-origin proxy): ${proxyResp.status}`);
   }
 
-  const direct = await fetch(url).catch(() => null);
-  if (direct && direct.ok) {
+  let fetchErr: unknown = null;
+  const direct = await fetch(url).catch((e) => {
+    fetchErr = e;
+    return null;
+  });
+  if (direct?.ok) {
     return await direct.blob();
   }
 
   // 远程地址在浏览器侧可能受 CORS 限制；回退同源代理拉取
   const isHttpLike = /^https?:\/\//i.test(url);
   if (isHttpLike) {
-    const proxyResp = await fetch(`/proxy-file?url=${encodeURIComponent(url)}`);
+    const proxyResp = await fetch(`/proxy-file?url=${encodeURIComponent(url)}`).catch((e) => {
+      if (fetchErr instanceof Error) throw fetchErr;
+      throw e instanceof Error ? e : new Error(String(e));
+    });
     if (proxyResp.ok) return await proxyResp.blob();
   }
 
   if (direct && !direct.ok) {
     throw new Error(`fetch failed: ${direct.status} ${direct.statusText}`);
   }
+  if (fetchErr instanceof Error) throw fetchErr;
   throw new Error('fetch failed');
+}
+
+function formatAitopFileUploadFailureDetail(response: Response, data: unknown): string {
+  const lines: string[] = [`**HTTP状态：** ${response.status} ${response.statusText}`];
+  if (data && typeof data === 'object') {
+    const d = data as Record<string, unknown>;
+    const msg = d.message ?? d.msg ?? d.error;
+    if (msg != null) {
+      lines.push(
+        `**错误消息：** ${typeof msg === 'string' ? msg : JSON.stringify(msg)}`
+      );
+    }
+    if (d.code != null) lines.push(`**错误代码：** ${String(d.code)}`);
+    if (msg == null && Object.keys(d).length > 0) {
+      lines.push(`**响应体：** ${JSON.stringify(data)}`);
+    }
+  } else if (data != null && data !== '') {
+    lines.push(`**响应体：** ${String(data)}`);
+  }
+  return lines.join('\n');
+}
+
+function throwAitopFileUploadError(
+  kind: '图片' | '视频' | '音频',
+  response: Response,
+  data: unknown
+): never {
+  throw new Error(
+    `**❌ AITOP ${kind}上传失败**\n${formatAitopFileUploadFailureDetail(response, data)}`
+  );
 }
 
 /**
@@ -86,21 +210,38 @@ export async function uploadImage(imageUri: string): Promise<string | null> {
     const formData = new FormData();
     formData.append('file', blob, 'image.png');
 
-    const response = await fetch(`${BASE_URL}/api/v1/file/upload`, {
+    const uploadUrl = `${BASE_URL}/api/v1/file/upload`;
+    const uploadHeaders = aitopUploadHeaders();
+    const response = await fetch(uploadUrl, {
       method: 'POST',
-      headers: {
-        'api-key': API_KEY
-      },
+      headers: uploadHeaders,
       body: formData
     });
 
-    const data = await response.json();
-    if (data.code === 0 && data.success) {
-      return FILE_PREFIX + data.data.key;
+    let data: unknown = null;
+    try {
+      data = await response.json();
+    } catch {
+      data = null;
     }
-    return null;
+    if (
+      response.ok &&
+      data &&
+      typeof data === 'object' &&
+      (data as { code?: number; success?: boolean }).code === 0 &&
+      (data as { success?: boolean }).success
+    ) {
+      const key = (data as { data?: { key?: string } }).data?.key;
+      if (key) return FILE_PREFIX + key;
+    }
+    throwAitopFileUploadError('图片', response, data);
   } catch (error) {
-    return null;
+    if (error instanceof Error && error.message.includes('AITOP')) throw error;
+    throw new Error(
+      `**❌ AITOP 图片上传失败**\n**错误消息：** ${
+        error instanceof Error ? error.message : String(error)
+      }`
+    );
   }
 }
 
@@ -118,21 +259,38 @@ export async function uploadAudio(audioUri: string): Promise<string | null> {
     const formData = new FormData();
     formData.append('file', blob, 'audio.mp3');
 
-    const response = await fetch(`${BASE_URL}/api/v1/file/upload`, {
+    const uploadUrl = `${BASE_URL}/api/v1/file/upload`;
+    const uploadHeaders = aitopUploadHeaders();
+    const response = await fetch(uploadUrl, {
       method: 'POST',
-      headers: {
-        'api-key': API_KEY,
-      },
+      headers: uploadHeaders,
       body: formData,
     });
 
-    const data = await response.json();
-    if (data.code === 0 && data.success) {
-      return FILE_PREFIX + data.data.key;
+    let data: unknown = null;
+    try {
+      data = await response.json();
+    } catch {
+      data = null;
     }
-    return null;
+    if (
+      response.ok &&
+      data &&
+      typeof data === 'object' &&
+      (data as { code?: number; success?: boolean }).code === 0 &&
+      (data as { success?: boolean }).success
+    ) {
+      const key = (data as { data?: { key?: string } }).data?.key;
+      if (key) return FILE_PREFIX + key;
+    }
+    throwAitopFileUploadError('音频', response, data);
   } catch (error) {
-    return null;
+    if (error instanceof Error && error.message.includes('AITOP')) throw error;
+    throw new Error(
+      `**❌ AITOP 音频上传失败**\n**错误消息：** ${
+        error instanceof Error ? error.message : String(error)
+      }`
+    );
   }
 }
 
@@ -142,37 +300,54 @@ export async function uploadVideo(videoUri: string, filename = 'video.mp4'): Pro
     const formData = new FormData();
     formData.append('file', blob, filename);
 
-    const response = await fetch(`${BASE_URL}/api/v1/file/upload`, {
+    const uploadUrl = `${BASE_URL}/api/v1/file/upload`;
+    const uploadHeaders = aitopUploadHeaders();
+    const response = await fetch(uploadUrl, {
       method: 'POST',
-      headers: {
-        'api-key': API_KEY
-      },
+      headers: uploadHeaders,
       body: formData
     });
 
-    const data = await response.json();
-    if (data.code === 0 && data.success) {
-      return FILE_PREFIX + data.data.key;
+    let data: unknown = null;
+    try {
+      data = await response.json();
+    } catch {
+      data = null;
     }
-    return null;
+    if (
+      response.ok &&
+      data &&
+      typeof data === 'object' &&
+      (data as { code?: number; success?: boolean }).code === 0 &&
+      (data as { success?: boolean }).success
+    ) {
+      const key = (data as { data?: { key?: string } }).data?.key;
+      if (key) return FILE_PREFIX + key;
+    }
+    throwAitopFileUploadError('视频', response, data);
   } catch (error) {
-    return null;
+    if (error instanceof Error && error.message.includes('AITOP')) throw error;
+    throw new Error(
+      `**❌ AITOP 视频上传失败**\n**错误消息：** ${
+        error instanceof Error ? error.message : String(error)
+      }`
+    );
   }
 }
 
 interface NanoTaskOptions {
   aspectRatio?: string;
-  /** 仅 NANO_BANANA_2：1K / 2K / 4K */
+  /** 仅 NANO_BANANA_2_FLASH：1K / 2K / 4K */
   imageSize?: '1K' | '2K' | '4K';
 }
 
 /**
- * 创建 Nano Banana 2.0 图生任务（POST /api/v1/images/nanoBanana，platform: NANO_BANANA_2）
+ * 创建 Nano Banana 2.0 图生任务（POST /api/v1/images/nanoBanana，platform: NANO_BANANA_2_FLASH）
  */
 export async function createNanoTask(prompt: string, imageUrls: string[] = [], options: NanoTaskOptions = {}): Promise<string | null> {
   try {
     const payload: Record<string, unknown> = {
-      platform: 'NANO_BANANA_2',
+      platform: AITOP_PLATFORM_NANO_BANANA_2,
       prompt,
       aspectRatio: options.aspectRatio || '1:1',
     };
@@ -185,13 +360,21 @@ export async function createNanoTask(prompt: string, imageUrls: string[] = [], o
     }
 
 
-    const response = await fetch(`${BASE_URL}/api/v1/images/nanoBanana`, {
+    const nanoUrl = `${BASE_URL}/api/v1/images/nanoBanana`;
+    const nanoHeaders = aitopJsonHeaders();
+    const nanoBody = withScoreProjectId(payload);
+    logAitopModelRequest({
+      model: 'Nano Banana 2.0',
       method: 'POST',
-      headers: {
-        'api-key': API_KEY,
-        'Content-Type': 'application/json'
-      },
-      body: JSON.stringify(payload)
+      url: nanoUrl,
+      headers: nanoHeaders,
+      body: nanoBody,
+    });
+
+    const response = await fetch(nanoUrl, {
+      method: 'POST',
+      headers: nanoHeaders,
+      body: JSON.stringify(nanoBody)
     });
 
     // 检查HTTP状态码
@@ -284,29 +467,19 @@ export async function createImage2Task(
 
     const endpoint = '/api/v1/images/openAI';
     const fullUrl = `${BASE_URL}${endpoint}`;
-    logPreloadJson({
-      debugType: 'preload',
+    const image2Headers = aitopJsonHeaders();
+    const image2Body = withScoreProjectId(payload);
+    logAitopModelRequest({
       model: 'image 2',
-      url: fullUrl,
-      api: endpoint,
       method: 'POST',
-      body: payload,
+      url: fullUrl,
+      headers: image2Headers,
+      body: image2Body,
     });
     const response = await fetch(fullUrl, {
       method: 'POST',
-      headers: {
-        'api-key': API_KEY,
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify(payload),
-    });
-    logPreloadJson({
-      debugType: 'preload-response',
-      model: 'image 2',
-      url: fullUrl,
-      api: endpoint,
-      httpStatus: response.status,
-      ok: response.ok,
+      headers: image2Headers,
+      body: JSON.stringify(image2Body),
     });
 
     if (!response.ok) {
@@ -330,16 +503,6 @@ export async function createImage2Task(
     }
 
     const data = await response.json();
-    logPreloadJson({
-      debugType: 'preload-response-body',
-      model: 'image 2',
-      url: fullUrl,
-      api: endpoint,
-      code: data?.code,
-      success: data?.success,
-      message: data?.message || data?.msg || '',
-      taskId: data?.data?.taskId,
-    });
     if (data.code === 0 && data.success) {
       const taskId = data.data?.taskId;
       if (taskId) return taskId;
@@ -357,7 +520,7 @@ export async function createImage2Task(
  */
 export async function getTaskStatus(taskId: string): Promise<any> {
   try {
-    const proxyUrl = `/task-status?taskId=${encodeURIComponent(taskId)}`;
+    const proxyUrl = `/task-status?taskId=${encodeURIComponent(taskId)}${buildAitopBillingQuery()}`;
     let response: Response;
     try {
       response = await fetch(proxyUrl, {
@@ -368,11 +531,11 @@ export async function getTaskStatus(taskId: string): Promise<any> {
         throw new Error(`proxy status ${response.status}`);
       }
     } catch (proxyError) {
-      response = await fetch(`${BASE_URL}/api/v1/task/${taskId}`, {
+      const directUrl = `${BASE_URL}/api/v1/task/${taskId}`;
+      const directHeaders = aitopJsonHeaders();
+      response = await fetch(directUrl, {
         method: 'GET',
-        headers: {
-          'api-key': API_KEY
-        }
+        headers: directHeaders,
       });
     }
 
@@ -696,13 +859,21 @@ export async function createKlingVideoTask(options: KlingVideoTaskOptions): Prom
       }
     }
 
-    const response = await fetch(`${BASE_URL}/api/v1/video/kling/image`, {
+    const klingUrl = `${BASE_URL}/api/v1/video/kling/image`;
+    const klingHeaders = aitopJsonHeaders();
+    const klingBody = withScoreProjectId(payload);
+    logAitopModelRequest({
+      model: '可灵视频',
       method: 'POST',
-      headers: {
-        'api-key': API_KEY,
-        'Content-Type': 'application/json'
-      },
-      body: JSON.stringify(payload)
+      url: klingUrl,
+      headers: klingHeaders,
+      body: klingBody,
+    });
+
+    const response = await fetch(klingUrl, {
+      method: 'POST',
+      headers: klingHeaders,
+      body: JSON.stringify(klingBody)
     });
 
     // 检查HTTP状态码
@@ -991,15 +1162,7 @@ export async function createKlingOmniVideoTask(options: KlingOmniVideoTaskOption
       omniBody.video_list = videoPayload;
     }
 
-    const omniBodyJson = JSON.stringify(omniBody, klingOmniJsonReplacer);
-    logPreloadJson({
-      debugType: 'preload',
-      model: modelName,
-      api: '/api/v1/video/kling/omni',
-      method: 'POST',
-      body: toCompactKlingOmniLogBody(omniBody),
-    });
-
+    const omniBodyJson = JSON.stringify(withScoreProjectId(omniBody), klingOmniJsonReplacer);
     const url = `${BASE_URL}/api/v1/video/kling/omni`;
     const maxAttempts = 12;
     const formatOmniResponseTaskIdLine = (data: {
@@ -1022,12 +1185,19 @@ export async function createKlingOmniVideoTask(options: KlingOmniVideoTaskOption
 
     for (let attempt = 1; attempt <= maxAttempts; attempt++) {
       try {
+        if (attempt === 1) {
+          const omniHeaders = aitopJsonHeaders();
+          logAitopModelRequest({
+            model: modelName,
+            method: 'POST',
+            url,
+            headers: omniHeaders,
+            body: JSON.parse(omniBodyJson),
+          });
+        }
         const response = await fetch(url, {
           method: 'POST',
-          headers: {
-            'api-key': API_KEY,
-            'Content-Type': 'application/json'
-          },
+          headers: aitopJsonHeaders(),
           body: omniBodyJson
         });
 
@@ -1151,13 +1321,20 @@ export async function createViduVideoTask(options: ViduVideoTaskOptions): Promis
   };
 
   try {
-    const response = await fetch(`${BASE_URL}/api/v1/video/vidu/image`, {
+    const viduUrl = `${BASE_URL}/api/v1/video/vidu/image`;
+    const viduHeaders = aitopJsonHeaders();
+    const viduBody = withScoreProjectId(payload);
+    logAitopModelRequest({
+      model: 'Vidu 2.0',
       method: 'POST',
-      headers: {
-        'api-key': API_KEY,
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify(payload),
+      url: viduUrl,
+      headers: viduHeaders,
+      body: viduBody,
+    });
+    const response = await fetch(viduUrl, {
+      method: 'POST',
+      headers: viduHeaders,
+      body: JSON.stringify(viduBody),
     });
 
     const data = await response.json();
@@ -1267,49 +1444,24 @@ export async function createDoubaoSeedanceVideoTask(options: DoubaoSeedanceVideo
 
   const endpoint = '/api/v1/video/doubao';
   const fullUrl = `${BASE_URL}${endpoint}`;
-  logPreloadJson({
-    debugType: 'preload',
-    model: modelLabel,
-    modelId: model,
-    url: fullUrl,
-    api: endpoint,
-    method: 'POST',
-    body: payload,
-  });
+  const seedanceHeaders = aitopJsonHeaders();
+  const seedanceBody = withScoreProjectId(payload);
 
   try {
+    logAitopModelRequest({
+      model: modelLabel,
+      method: 'POST',
+      url: fullUrl,
+      headers: seedanceHeaders,
+      body: seedanceBody,
+    });
     const response = await fetch(fullUrl, {
       method: 'POST',
-      headers: {
-        'api-key': API_KEY,
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify(payload),
-    });
-
-    logPreloadJson({
-      debugType: 'preload-response',
-      model: modelLabel,
-      modelId: model,
-      url: fullUrl,
-      api: endpoint,
-      httpStatus: response.status,
-      ok: response.ok,
+      headers: seedanceHeaders,
+      body: JSON.stringify(seedanceBody),
     });
 
     const data = await response.json();
-
-    logPreloadJson({
-      debugType: 'preload-response-body',
-      model: modelLabel,
-      modelId: model,
-      url: fullUrl,
-      api: endpoint,
-      code: data?.code,
-      success: data?.success,
-      message: data?.message || data?.msg || '',
-      taskId: data?.data?.taskId,
-    });
 
     if (!response.ok) {
       const errorDetail = data?.message || data?.msg || JSON.stringify(data);
@@ -1369,13 +1521,20 @@ export async function createJimengVideoTask(options: JimengVideoTaskOptions): Pr
   };
 
   try {
-    const response = await fetch(`${BASE_URL}/api/v1/video/jimeng`, {
+    const jimengUrl = `${BASE_URL}/api/v1/video/jimeng`;
+    const jimengHeaders = aitopJsonHeaders();
+    const jimengBody = withScoreProjectId(payload);
+    logAitopModelRequest({
+      model: '即梦3.0 Pro',
       method: 'POST',
-      headers: {
-        'api-key': API_KEY,
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify(payload),
+      url: jimengUrl,
+      headers: jimengHeaders,
+      body: jimengBody,
+    });
+    const response = await fetch(jimengUrl, {
+      method: 'POST',
+      headers: jimengHeaders,
+      body: JSON.stringify(jimengBody),
     });
 
     const data = await response.json();
@@ -1477,12 +1636,11 @@ export async function listKlingSubjects(
       pageNo: String(pageNo),
       pageSize: String(pageSize),
     });
-    const response = await fetch(`${BASE_URL}/api/v1/kLingMainLibrary/page?${qs}`, {
+    const listUrl = `${BASE_URL}/api/v1/kLingMainLibrary/page?${qs}`;
+    const listHeaders = aitopJsonHeaders();
+    const response = await fetch(listUrl, {
       method: 'GET',
-      headers: {
-        'api-key': API_KEY,
-        'Content-Type': 'application/json',
-      },
+      headers: listHeaders,
     });
     const data = await response.json();
     if (data.code !== 0 || !data.success) {
@@ -1514,13 +1672,20 @@ export type SaveKlingSubjectResult =
 
 export async function saveKlingSubject(payload: KlingSubjectSavePayload): Promise<SaveKlingSubjectResult> {
   try {
-    const response = await fetch(`${BASE_URL}/api/v1/kLingMainLibrary/save`, {
+    const saveUrl = `${BASE_URL}/api/v1/kLingMainLibrary/save`;
+    const saveHeaders = aitopJsonHeaders();
+    const saveBody = withScoreProjectId(payload);
+    logAitopModelRequest({
+      model: '可灵主体库保存',
       method: 'POST',
-      headers: {
-        'api-key': API_KEY,
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify(payload),
+      url: saveUrl,
+      headers: saveHeaders,
+      body: saveBody,
+    });
+    const response = await fetch(saveUrl, {
+      method: 'POST',
+      headers: saveHeaders,
+      body: JSON.stringify(saveBody),
     });
     const text = await response.text();
     let data: { code?: number; success?: boolean; message?: string; msg?: string; data?: unknown; id?: unknown };
@@ -1549,12 +1714,11 @@ export async function saveKlingSubject(payload: KlingSubjectSavePayload): Promis
 
 export async function deleteKlingSubject(id: string | number): Promise<{ ok: boolean; message?: string }> {
   try {
-    const response = await fetch(`${BASE_URL}/api/v1/kLingMainLibrary/delete/${id}`, {
+    const deleteUrl = `${BASE_URL}/api/v1/kLingMainLibrary/delete/${id}`;
+    const deleteHeaders = aitopJsonHeaders();
+    const response = await fetch(deleteUrl, {
       method: 'POST',
-      headers: {
-        'api-key': API_KEY,
-        'Content-Type': 'application/json',
-      },
+      headers: deleteHeaders,
     });
     const data = await response.json();
     if (data.code === 0 && data.success) {

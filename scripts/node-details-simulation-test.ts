@@ -12,6 +12,7 @@ import {
   buildNanoBananaDetailsReferenceImages,
   buildNodeDetailsBaseParams,
   buildNodeDetailsReferencePreview,
+  buildOmniInstructionVideoTabDetailsReferencePreview,
   mergeSeedanceImageModeDetailsReferenceImages,
   expectedProcessorReferenceImagesFromPanel,
   resolveNodeDetailsHeroImageUrl,
@@ -757,6 +758,48 @@ console.log('\n=== 11c. 89067 风格：主预览猫图 + 槽位鸱吻标签 ===\
   const preview = resolveNodeSelectionPreviewUrl(sc007, assets);
   ok('选中预览用鸱吻资产库而非猫 COS', preview === libCw, preview);
   ok('选中预览不是误拖猫图', preview !== catCos, preview);
+}
+
+console.log('\n=== 10c. Omni 指令变换：面板槽空时 Details 回退 gp.referenceImages ===\n');
+
+{
+  const refVideo = 'https://cos.example.com/omni/instruction-base.mp4';
+  const refImg1 = 'https://cos.example.com/omni/ref-style.png';
+  const refImg2 = 'https://cos.example.com/omni/ref-char.png';
+  const upstream: Partial<NodeData> = {
+    selectedModel: '可灵3.0 Omni',
+    klingOmniTab: 'instruction',
+    klingOmniInstructionPrompt: '@图片1 风格 @图片2 人物',
+    klingOmniInstructionVideoUrl: refVideo,
+    imagePreview: refVideo,
+    referenceMovs: [{ url: refVideo, posterDataUrl: 'data:image/jpeg;base64,poster' }],
+    // 面板 instruction 槽未写回，仅 generationParams 快照有实际上传 URL
+    klingOmniInstructionReferenceImages: [],
+  };
+  const gp = {
+    model: '可灵3.0 Omni',
+    klingOmniTab: 'instruction' as const,
+    prompt: upstream.klingOmniInstructionPrompt,
+    referenceImages: [refImg1, refImg2],
+    referenceMovs: [{ url: refVideo }],
+  };
+  const mov = simNode({
+    selectedModel: '可灵 2.5 Turbo',
+    imagePreview: 'https://cos.example.com/omni/output.mp4',
+    generationParams: gp,
+  });
+  const movUrlSet = new Set([refVideo]);
+  const refPreview = buildOmniInstructionVideoTabDetailsReferencePreview({
+    panelSource: { ...upstream, selectedModel: '可灵3.0 Omni', klingOmniTab: 'instruction' },
+    omniTab: 'instruction',
+    urlPool: [refImg1, refImg2],
+    snapshotRefs: gp.referenceImages as string[],
+    movUrlSet,
+  });
+  ok('指令变换 Details 含 2 张参考图', refPreview.referenceImages.length === 2, String(refPreview.referenceImages.length));
+  ok('参考图 1 URL 正确', refPreview.referenceImages[0] === refImg1, refPreview.referenceImages[0]);
+  ok('参考图 2 URL 正确', refPreview.referenceImages[1] === refImg2, refPreview.referenceImages[1]);
+  ok('含图片1 标签', refPreview.referenceImageDetailItems.some((i) => i.label === '图片1'));
 }
 
 console.log('\n=== 11. Reference Videos poster 校验 ===\n');

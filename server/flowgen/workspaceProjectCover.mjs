@@ -1,12 +1,7 @@
 /**
- * 从 workspace 画布节点挑选可展示的图片，写入项目列表封面 project-cover.*。
+ * 历史工具：曾从画布节点挑选封面候选 URL。
+ * 项目封面现仅允许管理员/项目管理员通过 POST /projects/:id/cover 上传，保存 workspace 不再自动改封面。
  */
-import fs from 'fs';
-import { saveProjectCoverFile } from './projectCover.mjs';
-import { isManualProjectCover, markProjectCoverSource } from './projectCoverMeta.mjs';
-import { resolveNodeMediaFilePath } from './nodeMedia.mjs';
-import { getStorageMode, loadStore, saveStore } from './store.mjs';
-import { updateProjectCoverImage } from './repos/projectsRepo.mjs';
 
 function isVideoLikeUrl(url) {
   const u = String(url || '').trim();
@@ -59,62 +54,4 @@ export function pickWorkspaceCoverCandidateUrl(nodes) {
   ranked.sort((a, b) => a.score - b.score);
   const best = ranked.find((r) => !isVideoLikeUrl(r.url)) || ranked[0];
   return best?.url || null;
-}
-
-/**
- * @param {string} projectId
- * @param {string} src
- * @returns {Promise<Buffer | null>}
- */
-async function readCoverSourceBuffer(projectId, src) {
-  const s = src.trim();
-  const nodeMediaRe = /\/flowgen-api\/projects\/[^/]+\/node-media\/([^/]+)\/file/i;
-  const m = s.match(nodeMediaRe);
-  if (m) {
-    const fp = resolveNodeMediaFilePath(projectId, decodeURIComponent(m[1]));
-    if (fp && fs.existsSync(fp)) return fs.readFileSync(fp);
-    return null;
-  }
-  if (!/^https?:\/\//i.test(s)) return null;
-  try {
-    const res = await fetch(s, { signal: AbortSignal.timeout(25000) });
-    if (!res.ok) return null;
-    const ct = (res.headers.get('content-type') || '').toLowerCase();
-    if (ct.startsWith('video/')) return null;
-    const buf = Buffer.from(await res.arrayBuffer());
-    return buf.length > 0 ? buf : null;
-  } catch {
-    return null;
-  }
-}
-
-/**
- * @param {string} projectId
- * @param {unknown[] | undefined} nodes
- */
-export async function syncProjectCoverFromWorkspaceGraph(projectId, nodes) {
-  const store = loadStore();
-  const p = store.projects.find((x) => x.id === projectId);
-  if (!p) return;
-  if (isManualProjectCover(p.extendedJson)) return;
-
-  const list = Array.isArray(nodes) ? nodes : [];
-  // 空画布保存时不要清空已有封面（运行中/清洗后短暂 0 节点曾误删封面）
-  if (list.length === 0) return;
-
-  const src = pickWorkspaceCoverCandidateUrl(list);
-  if (!src) return;
-
-  const buffer = await readCoverSourceBuffer(projectId, src);
-  if (!buffer || buffer.length === 0) return;
-
-  const url = saveProjectCoverFile(projectId, buffer, 'image/jpeg', 'workspace-cover.jpg');
-  p.coverImage = url;
-  p.extendedJson = markProjectCoverSource(p.extendedJson || {}, 'auto');
-  p.updatedAt = new Date().toISOString();
-  if (getStorageMode() === 'relational') {
-    await updateProjectCoverImage(projectId, url);
-  } else {
-    saveStore(store);
-  }
 }

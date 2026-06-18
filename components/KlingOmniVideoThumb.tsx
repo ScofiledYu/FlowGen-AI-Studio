@@ -5,6 +5,9 @@ import { isUsableReferenceMovPoster } from '../utils/nodeDetailsPreview';
 import { resolveUrlForVideoCapture } from '../utils/videoThumbnail';
 import { captureVideoMiddleFrameQueued } from '../utils/videoPosterQueue';
 
+/** 避免 Inspector 重渲染时同一 src 反复回到 loading 态 */
+const omniThumbPosterCache = new Map<string, string>();
+
 /** 参考格内是否为视频（勿将 blob 图片误判为视频；与 isLikelyMainVideoUrl 一致） */
 export function isOmniVideoItemUrl(url: string): boolean {
   if (!url) return false;
@@ -15,7 +18,7 @@ export function isOmniVideoItemUrl(url: string): boolean {
 /**
  * 可灵 Omni 侧栏：用多时间点截帧生成 poster，避免 <video> 首帧黑屏 / <img> 加载视频 URL 无效。
  */
-export function KlingOmniVideoThumb({
+export const KlingOmniVideoThumb = React.memo(function KlingOmniVideoThumb({
   src,
   className = '',
   alt = '',
@@ -24,12 +27,18 @@ export function KlingOmniVideoThumb({
   className?: string;
   alt?: string;
 }) {
-  const [poster, setPoster] = useState<string | null>(null);
+  const [poster, setPoster] = useState<string | null>(() => omniThumbPosterCache.get(src) ?? null);
   const [failed, setFailed] = useState(false);
   const fallbackTimerRef = useRef<number | null>(null);
 
   useEffect(() => {
     let cancelled = false;
+    const cached = omniThumbPosterCache.get(src);
+    if (cached) {
+      setPoster(cached);
+      setFailed(false);
+      return;
+    }
     setPoster(null);
     setFailed(false);
     if (fallbackTimerRef.current != null) {
@@ -48,8 +57,10 @@ export function KlingOmniVideoThumb({
         window.clearTimeout(fallbackTimerRef.current);
         fallbackTimerRef.current = null;
       }
-      if (u) setPoster(u);
-      else setFailed(true);
+      if (u) {
+        omniThumbPosterCache.set(src, u);
+        setPoster(u);
+      } else setFailed(true);
     });
     return () => {
       cancelled = true;
@@ -91,7 +102,7 @@ export function KlingOmniVideoThumb({
       <Loader2 className="w-5 h-5 animate-spin text-gray-500" />
     </div>
   );
-}
+});
 
 /** Node Details「Reference Videos」：优先 poster；无效或加载失败时回退截帧 */
 export function NodeDetailsRefMovThumb({

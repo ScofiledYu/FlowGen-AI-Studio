@@ -14,6 +14,11 @@ import {
   resolveSingleTemplateNode,
   validateStoryboardTableSpawn,
   validateTemplateUsesProjectAssetLibrary,
+  getMissingStoryboardRequiredHeaders,
+  getMissingStoryboardExcelRequiredHeaders,
+  STORYBOARD_EXCEL_FORMAT_ERR,
+  validateStoryboardExcelTableSpawn,
+  checkStoryboardTemplateAssetBinding,
 } from '../utils/storyboardTableSpawn.ts';
 
 let pass = 0;
@@ -36,6 +41,52 @@ ok('镜头编码别名', !!parseStoryboardTableColumns([
   ['ep003_seq008_sc056', '15', 'test'],
 ]));
 ok('缺单镜秒数', !parseStoryboardTableColumns([['镜头编号', '关联剧本']]));
+
+ok(
+  '对话表 缺镜头编码',
+  getMissingStoryboardRequiredHeaders(['单镜秒数', '关联剧本']).includes('镜头编码')
+);
+ok(
+  '对话表 缺单镜秒数',
+  getMissingStoryboardRequiredHeaders(['镜头编码', '关联剧本']).includes('单镜秒数')
+);
+ok(
+  '对话表 表头完整',
+  getMissingStoryboardRequiredHeaders(['镜头编码', '单镜秒数', '关联剧本']).length === 0
+);
+ok(
+  '对话表 缺列两项',
+  getMissingStoryboardRequiredHeaders(['关联剧本']).length === 2
+);
+
+ok(
+  'Excel 严格 表头完整',
+  getMissingStoryboardExcelRequiredHeaders(['镜头编码', '单镜秒数', '关联剧本']).length === 0
+);
+ok(
+  'Excel 严格 接受镜头编号',
+  getMissingStoryboardExcelRequiredHeaders(['镜头编号', '单镜秒数']).length === 0
+);
+ok(
+  'Excel 严格 缺镜头编码',
+  getMissingStoryboardExcelRequiredHeaders(['单镜秒数', '关联剧本']).includes('镜头编码（或镜头编号）')
+);
+ok(
+  'Excel 严格 缺单镜秒数',
+  getMissingStoryboardExcelRequiredHeaders(['镜头编码', '关联剧本']).includes('单镜秒数')
+);
+ok(
+  'Excel 严格 模糊编号+时长不通过',
+  !parseStoryboardTableColumns([['编号', '时长', '画面描述'], ['a', '5', 'x']], { strictExcelHeaders: true })
+);
+ok(
+  'Excel 严格 时长别名不通过',
+  !parseStoryboardTableColumns([['镜头编码', '时长'], ['a', '5']], { strictExcelHeaders: true })
+);
+ok(
+  'Excel 严格 正确表头通过',
+  !!parseStoryboardTableColumns([['镜头编码', '单镜秒数', '画面描述'], ['a', '5', 'x']], { strictExcelHeaders: true })
+);
 
 const prompt = buildPromptFromRow(sampleRows[1], [
   { header: '关联剧本', idx: 2 },
@@ -76,6 +127,32 @@ const noNode = validateStoryboardTableSpawn(sampleRows, [], null);
 ok('无节点报错', !noNode.ok && noNode.error === STORYBOARD_TEMPLATE_ERR);
 
 const assetUrl = '/flowgen-api/projects/p1/assets/a1/file';
+
+const fuzzyExcel = validateStoryboardExcelTableSpawn(
+  [['编号', '时长', '画面'], ['x', '5', 'y']],
+  [{ id: 'tpl', data: { label: 't', imagePreview: assetUrl } }],
+  null
+);
+ok(
+  'Excel 校验 随机表拒绝',
+  !fuzzyExcel.ok && fuzzyExcel.error === STORYBOARD_EXCEL_FORMAT_ERR
+);
+
+ok(
+  '本地 blob 节点不可作分镜模板',
+  checkStoryboardTemplateAssetBinding({
+    label: 't',
+    imagePreview: 'blob:http://localhost/abc',
+  }).ok === false
+);
+ok(
+  '资产库节点可作分镜模板',
+  checkStoryboardTemplateAssetBinding({
+    label: 't',
+    imagePreview: assetUrl,
+  }).ok === true
+);
+
 ok('资产库 URL 识别', isProjectAssetLibraryImageUrl(assetUrl));
 ok('blob 非资产库', !isProjectAssetLibraryImageUrl('blob:http://localhost/abc'));
 

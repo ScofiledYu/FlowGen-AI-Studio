@@ -28,10 +28,6 @@ import {
   deleteUser,
   importUsers,
   getStoredUser,
-  listProjects,
-  listMembers,
-  addMember,
-  removeMember,
   normalizeGlobalRoleInput,
   globalRoleLabel,
   FLOWGEN_ROLES,
@@ -43,6 +39,8 @@ interface UserRow {
   displayName?: string;
   role: string;
   center?: string;
+  department?: string;
+  baseLocation?: string;
   status: string;
   extendedJson?: Record<string, unknown>;
   mustChangePassword?: boolean;
@@ -50,6 +48,8 @@ interface UserRow {
   /** 与成员表一致，来自 GET /users */
   projects?: Array<{ id: string; name: string }>;
 }
+
+const USERS_PAGE_SIZE = 20;
 
 /** 弹窗「关联项目」列表展示：兼容 name 为空或写在 extendedJson 的数据 */
 function displayProjectLabel(p: {
@@ -85,14 +85,25 @@ const CENTER_OPTIONS = [
 
 export function AdminUsersPage({ onBack }: { onBack: () => void }) {
   const [rows, setRows] = useState<UserRow[]>([]);
-  const [filteredRows, setFilteredRows] = useState<UserRow[]>([]);
   const [q, setQ] = useState('');
+  const [qDebounced, setQDebounced] = useState('');
+  const [page, setPage] = useState(1);
+  const [total, setTotal] = useState(0);
+  const [totalPages, setTotalPages] = useState(1);
+  const [summary, setSummary] = useState({ totalUsers: 0, admins: 0, active: 0, disabled: 0 });
+  const [facets, setFacets] = useState<{ centers: string[]; departments: string[]; baseLocations: string[] }>({
+    centers: [],
+    departments: [],
+    baseLocations: [],
+  });
   const [err, setErr] = useState('');
   const [loading, setLoading] = useState(true);
   
   // 筛选状态
   const [filterRole, setFilterRole] = useState<string>('');
   const [filterCenter, setFilterCenter] = useState<string>('');
+  const [filterDepartment, setFilterDepartment] = useState<string>('');
+  const [filterBaseLocation, setFilterBaseLocation] = useState<string>('');
   const [filterStatus, setFilterStatus] = useState<string>('');
   const [showFilters, setShowFilters] = useState(false);
   
@@ -104,68 +115,63 @@ export function AdminUsersPage({ onBack }: { onBack: () => void }) {
   const [password, setPassword] = useState('');
   const [role, setRole] = useState('user');
   const [center, setCenter] = useState('');
+  const [department, setDepartment] = useState('');
+  const [baseLocation, setBaseLocation] = useState('');
   const [status, setStatus] = useState('active');
 
   const [allProjects, setAllProjects] = useState<Array<{ id: string; name: string }>>([]);
   const [selectedProjectIds, setSelectedProjectIds] = useState<Set<string>>(new Set());
-  const [projectSearch, setProjectSearch] = useState('');
-  const [projectsPanelLoading, setProjectsPanelLoading] = useState(false);
   const initialProjectIdsRef = useRef<Set<string>>(new Set());
 
   const me = getStoredUser();
 
   useEffect(() => {
     if (!isModalOpen) return;
-    let cancelled = false;
-    setProjectsPanelLoading(true);
-    void (async () => {
-      try {
-        const r = await listProjects();
-        if (cancelled) return;
-        setAllProjects(
-          r.projects.map((p) => ({
-            id: p.id,
-            name: displayProjectLabel(p),
-          }))
-        );
-        if (editingUser) {
-          const initial = new Set<string>();
-          await Promise.all(
-            r.projects.map(async (p) => {
-              try {
-                const m = await listMembers(p.id);
-                if (m.members.some((mem) => mem.userId === editingUser.id)) initial.add(p.id);
-              } catch {
-                /* 单个项目成员列表失败时跳过 */
-              }
-            })
-          );
-          if (cancelled) return;
-          setSelectedProjectIds(initial);
-          initialProjectIdsRef.current = new Set(initial);
-        } else {
-          setSelectedProjectIds(new Set());
-          initialProjectIdsRef.current = new Set();
-        }
-      } catch {
-        if (!cancelled) setAllProjects([]);
-      } finally {
-        if (!cancelled) setProjectsPanelLoading(false);
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, [isModalOpen, editingUser?.id]);
+    if (editingUser) {
+      const initial = new Set(
+        (editingUser.projects ?? []).map((p) => p.id)
+      );
+      setAllProjects(
+        (editingUser.projects ?? []).map((p) => ({
+          id: p.id,
+          name: p.name || p.id,
+        }))
+      );
+      setSelectedProjectIds(initial);
+      initialProjectIdsRef.current = new Set(initial);
+    } else {
+      setAllProjects([]);
+      setSelectedProjectIds(new Set());
+      initialProjectIdsRef.current = new Set();
+    }
+  }, [isModalOpen, editingUser?.id, editingUser?.projects]);
 
-  const load = async () => {
+  useEffect(() => {
+    const t = window.setTimeout(() => setQDebounced(q.trim()), 300);
+    return () => window.clearTimeout(t);
+  }, [q]);
+
+  useEffect(() => {
+    setPage(1);
+  }, [qDebounced, filterRole, filterCenter, filterDepartment, filterBaseLocation, filterStatus]);
+
+  const load = async (pageOverride?: number) => {
     setErr('');
     setLoading(true);
     try {
-      const r = await listUsers();
-      let list =
-        r && typeof r === 'object' && Array.isArray((r as { users?: unknown }).users)
-          ? ([...(r as { users: UserRow[] }).users] as UserRow[])
+      const r = await listUsers({
+        q: qDebounced || undefined,
+        role: filterRole || undefined,
+        center: filterCenter || undefined,
+        department: filterDepartment || undefined,
+        baseLocation: filterBaseLocation || undefined,
+        status: filterStatus || undefined,
+        page: pageOverride ?? page,
+        pageSize: USERS_PAGE_SIZE,
+      });
+      const list =
+        r && typeof r === 'object' && Array.isArray(r.users)
+          ? ([...r.users] as UserRow[])
           : null;
       if (!list) {
         setRows([]);
@@ -173,45 +179,11 @@ export function AdminUsersPage({ onBack }: { onBack: () => void }) {
         return;
       }
 
-      /** 表格「关联项目」列：用各项目成员接口汇总，避免仅依赖 GET /users 的 projects 字段（旧服务或未重启时为空） */
-      try {
-        const projRes = await listProjects();
-        const byUser = new Map<string, Array<{ id: string; name: string }>>();
-        await Promise.all(
-          projRes.projects.map(async (proj) => {
-            try {
-              const m = await listMembers(proj.id);
-              const name = displayProjectLabel(proj);
-              for (const mem of m.members) {
-                const uid = mem.userId;
-                const arr = byUser.get(uid) ?? [];
-                if (!arr.some((x) => x.id === proj.id)) {
-                  arr.push({ id: proj.id, name });
-                  byUser.set(uid, arr);
-                }
-              }
-            } catch {
-              /* 单个项目成员列表失败时跳过 */
-            }
-          })
-        );
-        for (const arr of byUser.values()) {
-          arr.sort((a, b) => a.name.localeCompare(b.name, 'zh-CN'));
-        }
-        list = list.map((u) => ({
-          ...u,
-          projects: byUser.get(u.id) ?? (Array.isArray(u.projects) ? u.projects : []),
-        }));
-      } catch {
-        /* 项目列表失败时保留接口返回的 projects（若有） */
-        list = list.map((u) => ({
-          ...u,
-          projects: Array.isArray(u.projects) ? u.projects : [],
-        }));
-      }
-
       setRows(list);
-      applyFilters(list, q, filterRole, filterCenter, filterStatus);
+      setTotal(typeof r.total === 'number' ? r.total : list.length);
+      setTotalPages(typeof r.totalPages === 'number' ? r.totalPages : 1);
+      if (r.summary) setSummary(r.summary);
+      if (r.facets) setFacets(r.facets);
     } catch (e) {
       setErr(e instanceof Error ? e.message : '加载失败');
     } finally {
@@ -221,50 +193,7 @@ export function AdminUsersPage({ onBack }: { onBack: () => void }) {
 
   useEffect(() => {
     void load();
-  }, []);
-
-  // Apply filters
-  const applyFilters = (
-    data: UserRow[],
-    searchQuery: string,
-    roleFilter: string,
-    centerFilter: string,
-    statusFilter: string
-  ) => {
-    let result = [...data];
-    
-    // Text search
-    if (searchQuery.trim()) {
-      const query = searchQuery.toLowerCase();
-      result = result.filter(u => 
-        u.username.toLowerCase().includes(query) ||
-        (u.displayName && u.displayName.toLowerCase().includes(query)) ||
-        (u.projects && u.projects.some((p) => p.name.toLowerCase().includes(query)))
-      );
-    }
-    
-    // Role filter
-    if (roleFilter) {
-      result = result.filter(u => u.role === roleFilter);
-    }
-    
-    // Center filter
-    if (centerFilter) {
-      result = result.filter(u => u.center === centerFilter);
-    }
-    
-    // Status filter
-    if (statusFilter) {
-      result = result.filter(u => u.status === statusFilter);
-    }
-    
-    setFilteredRows(result);
-  };
-
-  // Re-apply filters when they change
-  useEffect(() => {
-    applyFilters(rows, q, filterRole, filterCenter, filterStatus);
-  }, [q, filterRole, filterCenter, filterStatus, rows]);
+  }, [page, qDebounced, filterRole, filterCenter, filterDepartment, filterBaseLocation, filterStatus]);
 
   const onCreate = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -282,14 +211,15 @@ export function AdminUsersPage({ onBack }: { onBack: () => void }) {
         username: username.trim(),
         password,
         role,
+        center,
+        department,
+        baseLocation,
         status,
         extendedJson: Object.keys(extendedJson).length > 0 ? extendedJson : undefined,
       })) as { id?: string };
       const newId = created?.id;
       if (!newId) throw new Error('创建成功但未返回用户 ID');
-      for (const pid of selectedProjectIds) {
-        await addMember(pid, newId, 'editor');
-      }
+      /* 关联项目由 AITOP 域账号权限决定，不在此手动分配 */
 
       resetForm();
       setIsModalOpen(false);
@@ -307,18 +237,11 @@ export function AdminUsersPage({ onBack }: { onBack: () => void }) {
       await patchUser(editingUser.id, {
         role,
         center,
+        department,
+        baseLocation,
         status,
       });
-
-      const uid = editingUser.id;
-      const prev = initialProjectIdsRef.current;
-      const next = selectedProjectIds;
-      for (const pid of next) {
-        if (!prev.has(pid)) await addMember(pid, uid, 'editor');
-      }
-      for (const pid of prev) {
-        if (!next.has(pid)) await removeMember(pid, uid);
-      }
+      /* 关联项目由 AITOP 管理，不在此修改成员关系 */
 
       resetForm();
       setIsModalOpen(false);
@@ -335,9 +258,10 @@ export function AdminUsersPage({ onBack }: { onBack: () => void }) {
     setPassword('');
     setRole('user');
     setCenter('');
+    setDepartment('');
+    setBaseLocation('');
     setStatus('active');
     setSelectedProjectIds(new Set());
-    setProjectSearch('');
     initialProjectIdsRef.current = new Set();
   };
 
@@ -355,9 +279,14 @@ export function AdminUsersPage({ onBack }: { onBack: () => void }) {
         password: row.password || row['初始密码'] || row['密码'],
         role: normalizeGlobalRoleInput(row.role || row['权限'] || row['角色'] || 'user'),
         status: row.status || row['状态'] || 'active',
+        center: row.center || row['中心'] || '',
+        department: row.department || row['部门'] || '',
+        baseLocation: row.baseLocation || row['基地'] || '',
         extendedJson: {
           displayName: row.displayName || row['中文名'] || row['姓名'] || row['昵称'] || '',
           center: row.center || row['中心'] || '',
+          department: row.department || row['部门'] || '',
+          baseLocation: row.baseLocation || row['基地'] || '',
         }
       }));
       
@@ -384,6 +313,8 @@ export function AdminUsersPage({ onBack }: { onBack: () => void }) {
     setDisplayName(user.displayName || '');
     setRole(user.role);
     setCenter(user.center || '');
+    setDepartment(user.department || '');
+    setBaseLocation(user.baseLocation || '');
     setStatus(user.status || 'active');
     setIsModalOpen(true);
   };
@@ -391,11 +322,14 @@ export function AdminUsersPage({ onBack }: { onBack: () => void }) {
   const clearFilters = () => {
     setFilterRole('');
     setFilterCenter('');
+    setFilterDepartment('');
+    setFilterBaseLocation('');
     setFilterStatus('');
     setQ('');
   };
 
-  const hasActiveFilters = filterRole || filterCenter || filterStatus || q;
+  const hasActiveFilters =
+    filterRole || filterCenter || filterDepartment || filterBaseLocation || filterStatus || q;
 
   const getRoleBadge = (role: string) => {
     if (role === 'super_admin') {
@@ -473,7 +407,7 @@ export function AdminUsersPage({ onBack }: { onBack: () => void }) {
               <button
                 onClick={() => {
                   const template = [
-                    { '用户名': 'example', '初始密码': '123456', '权限': '普通用户', '状态': 'active', '中文名': '张三', '中心': '技术中心' }
+                    { '用户名': 'example', '初始密码': '123456', '权限': '普通用户', '状态': 'active', '中文名': '张三', '中心': '技术中心', '部门': '动画部', '基地': '深圳' }
                   ];
                   const ws = XLSX.utils.json_to_sheet(template);
                   const wb = XLSX.utils.book_new();
@@ -537,25 +471,19 @@ export function AdminUsersPage({ onBack }: { onBack: () => void }) {
         {/* Stats Cards */}
         <div className="grid grid-cols-2 sm:grid-cols-4 gap-4 mb-8">
           <div className="p-4 rounded-2xl bg-white/[0.03] border border-white/10">
-            <p className="text-2xl font-bold">{rows.length}</p>
+            <p className="text-2xl font-bold">{summary.totalUsers}</p>
             <p className="text-sm text-gray-500">总用户数</p>
           </div>
           <div className="p-4 rounded-2xl bg-white/[0.03] border border-white/10">
-            <p className="text-2xl font-bold text-brand-400">
-              {rows.filter(u => u.role === 'admin' || u.role === 'super_admin').length}
-            </p>
+            <p className="text-2xl font-bold text-brand-400">{summary.admins}</p>
             <p className="text-sm text-gray-500">管理员</p>
           </div>
           <div className="p-4 rounded-2xl bg-white/[0.03] border border-white/10">
-            <p className="text-2xl font-bold text-green-400">
-              {rows.filter(u => u.status === 'active').length}
-            </p>
+            <p className="text-2xl font-bold text-green-400">{summary.active}</p>
             <p className="text-sm text-gray-500">已激活</p>
           </div>
           <div className="p-4 rounded-2xl bg-white/[0.03] border border-white/10">
-            <p className="text-2xl font-bold text-red-400">
-              {rows.filter(u => u.status === 'disabled').length}
-            </p>
+            <p className="text-2xl font-bold text-red-400">{summary.disabled}</p>
             <p className="text-sm text-gray-500">已禁用</p>
           </div>
         </div>
@@ -598,7 +526,7 @@ export function AdminUsersPage({ onBack }: { onBack: () => void }) {
               <span className="text-sm">筛选</span>
               {hasActiveFilters && (
                 <span className="w-5 h-5 rounded-full bg-brand-500 text-white text-xs flex items-center justify-center">
-                  {[filterRole, filterCenter, filterStatus, q].filter(Boolean).length}
+                  {[filterRole, filterCenter, filterDepartment, filterBaseLocation, filterStatus, q].filter(Boolean).length}
                 </span>
               )}
             </button>
@@ -641,6 +569,47 @@ export function AdminUsersPage({ onBack }: { onBack: () => void }) {
                   {CENTER_OPTIONS.map(center => (
                     <option key={center} value={center}>{center}</option>
                   ))}
+                  {facets.centers
+                    .filter((c) => !CENTER_OPTIONS.includes(c))
+                    .map((center) => (
+                      <option key={center} value={center}>{center}</option>
+                    ))}
+                </select>
+              </div>
+              
+              {/* Department Filter */}
+              <div className="flex items-center gap-2">
+                <span className="text-sm text-gray-500">部门:</span>
+                <select
+                  value={filterDepartment}
+                  onChange={(e) => setFilterDepartment(e.target.value)}
+                  className="px-3 py-2 bg-gray-900 border border-white/10 rounded-lg text-sm text-white
+                    focus:outline-none focus:border-brand-500/50 min-w-[120px]
+                    [color-scheme:dark]
+                    [&>option]:bg-gray-900 [&>option]:text-white"
+                >
+                  <option value="">全部</option>
+                  {facets.departments.map((d) => (
+                    <option key={d} value={d}>{d}</option>
+                  ))}
+                </select>
+              </div>
+
+              {/* Base Location Filter */}
+              <div className="flex items-center gap-2">
+                <span className="text-sm text-gray-500">基地:</span>
+                <select
+                  value={filterBaseLocation}
+                  onChange={(e) => setFilterBaseLocation(e.target.value)}
+                  className="px-3 py-2 bg-gray-900 border border-white/10 rounded-lg text-sm text-white
+                    focus:outline-none focus:border-brand-500/50 min-w-[120px]
+                    [color-scheme:dark]
+                    [&>option]:bg-gray-900 [&>option]:text-white"
+                >
+                  <option value="">全部</option>
+                  {facets.baseLocations.map((b) => (
+                    <option key={b} value={b}>{b}</option>
+                  ))}
                 </select>
               </div>
               
@@ -678,8 +647,13 @@ export function AdminUsersPage({ onBack }: { onBack: () => void }) {
 
         {/* Results Count */}
         <div className="mb-4 text-sm text-gray-500">
-          共 {filteredRows.length} 位用户
+          共 {total} 位用户
           {hasActiveFilters && ' (已筛选)'}
+          {totalPages > 1 && (
+            <span className="ml-2">
+              · 第 {page} / {totalPages} 页（每页 {USERS_PAGE_SIZE} 条）
+            </span>
+          )}
         </div>
 
         {/* User Table */}
@@ -695,6 +669,12 @@ export function AdminUsersPage({ onBack }: { onBack: () => void }) {
                 </th>
                 <th className="text-left p-4 text-xs font-medium text-gray-500 uppercase tracking-wider">
                   中心
+                </th>
+                <th className="text-left p-4 text-xs font-medium text-gray-500 uppercase tracking-wider">
+                  部门
+                </th>
+                <th className="text-left p-4 text-xs font-medium text-gray-500 uppercase tracking-wider">
+                  基地
                 </th>
                 <th className="text-left p-4 text-xs font-medium text-gray-500 uppercase tracking-wider">
                   关联项目
@@ -714,14 +694,16 @@ export function AdminUsersPage({ onBack }: { onBack: () => void }) {
                     <td className="p-4"><div className="h-10 bg-white/5 rounded-lg animate-pulse" /></td>
                     <td className="p-4"><div className="h-6 w-20 bg-white/5 rounded-full animate-pulse" /></td>
                     <td className="p-4"><div className="h-6 w-24 bg-white/5 rounded animate-pulse" /></td>
+                    <td className="p-4"><div className="h-6 w-24 bg-white/5 rounded animate-pulse" /></td>
+                    <td className="p-4"><div className="h-6 w-24 bg-white/5 rounded animate-pulse" /></td>
                     <td className="p-4"><div className="h-6 w-32 bg-white/5 rounded animate-pulse" /></td>
                     <td className="p-4"><div className="h-6 w-16 bg-white/5 rounded animate-pulse" /></td>
                     <td className="p-4"><div className="h-8 w-24 bg-white/5 rounded-lg animate-pulse ml-auto" /></td>
                   </tr>
                 ))
-              ) : filteredRows.length === 0 ? (
+              ) : rows.length === 0 ? (
                 <tr>
-                  <td colSpan={6} className="p-12 text-center">
+                  <td colSpan={8} className="p-12 text-center">
                     <div className="w-16 h-16 rounded-2xl bg-white/5 flex items-center justify-center mx-auto mb-4">
                       <User className="w-8 h-8 text-gray-600" />
                     </div>
@@ -731,7 +713,7 @@ export function AdminUsersPage({ onBack }: { onBack: () => void }) {
                   </td>
                 </tr>
               ) : (
-                filteredRows.map((u) => (
+                rows.map((u) => (
                   <tr key={u.id} className="border-b border-white/10 hover:bg-white/[0.03] transition-colors">
                     <td className="p-4">
                       <div className="flex items-center gap-3">
@@ -758,9 +740,23 @@ export function AdminUsersPage({ onBack }: { onBack: () => void }) {
                         <span className="text-sm text-gray-600">-</span>
                       )}
                     </td>
+                    <td className="p-4">
+                      {u.department ? (
+                        <span className="text-sm text-gray-300">{u.department}</span>
+                      ) : (
+                        <span className="text-sm text-gray-600">-</span>
+                      )}
+                    </td>
+                    <td className="p-4">
+                      {u.baseLocation ? (
+                        <span className="text-sm text-gray-300">{u.baseLocation}</span>
+                      ) : (
+                        <span className="text-sm text-gray-600">-</span>
+                      )}
+                    </td>
                     <td className="p-4 max-w-[240px]">
                       {!u.projects?.length ? (
-                        <span className="text-sm text-gray-600">-</span>
+                        <span className="text-sm text-gray-600" title="AITOP 未返回项目">AITOP 未分配</span>
                       ) : (
                         <div className="flex flex-wrap gap-1">
                           {u.projects.slice(0, 4).map((p) => (
@@ -829,6 +825,32 @@ export function AdminUsersPage({ onBack }: { onBack: () => void }) {
             </tbody>
           </table>
         </div>
+
+        {totalPages > 1 && (
+          <div className="flex items-center justify-center gap-4 mt-6">
+            <button
+              type="button"
+              disabled={page <= 1 || loading}
+              onClick={() => setPage((p) => Math.max(1, p - 1))}
+              className="px-4 py-2 rounded-xl border border-white/10 bg-white/5 text-sm text-gray-300
+                hover:bg-white/10 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+            >
+              上一页
+            </button>
+            <span className="text-sm text-gray-400">
+              第 {page} / {totalPages} 页
+            </span>
+            <button
+              type="button"
+              disabled={page >= totalPages || loading}
+              onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
+              className="px-4 py-2 rounded-xl border border-white/10 bg-white/5 text-sm text-gray-300
+                hover:bg-white/10 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+            >
+              下一页
+            </button>
+          </div>
+        )}
       </main>
 
       {/* Create/Edit Modal */}
@@ -901,6 +923,50 @@ export function AdminUsersPage({ onBack }: { onBack: () => void }) {
                 </div>
               </div>
 
+              {/* Department */}
+              <div>
+                <label className="block text-xs text-gray-400 mb-2 uppercase tracking-wider">
+                  部门
+                </label>
+                <input
+                  type="text"
+                  placeholder="输入部门（可选）"
+                  value={department}
+                  onChange={(e) => setDepartment(e.target.value)}
+                  list="user-department-options"
+                  className="w-full px-4 py-3 bg-white/5 border border-white/10 rounded-xl 
+                    text-white placeholder:text-gray-600
+                    focus:outline-none focus:border-brand-500/50"
+                />
+                <datalist id="user-department-options">
+                  {facets.departments.map((d) => (
+                    <option key={d} value={d} />
+                  ))}
+                </datalist>
+              </div>
+
+              {/* Base location */}
+              <div>
+                <label className="block text-xs text-gray-400 mb-2 uppercase tracking-wider">
+                  基地
+                </label>
+                <input
+                  type="text"
+                  placeholder="输入基地（可选）"
+                  value={baseLocation}
+                  onChange={(e) => setBaseLocation(e.target.value)}
+                  list="user-base-options"
+                  className="w-full px-4 py-3 bg-white/5 border border-white/10 rounded-xl 
+                    text-white placeholder:text-gray-600
+                    focus:outline-none focus:border-brand-500/50"
+                />
+                <datalist id="user-base-options">
+                  {facets.baseLocations.map((b) => (
+                    <option key={b} value={b} />
+                  ))}
+                </datalist>
+              </div>
+
               {/* Role */}
               <div>
                 <label className="block text-xs text-gray-400 mb-2 uppercase tracking-wider">
@@ -936,7 +1002,7 @@ export function AdminUsersPage({ onBack }: { onBack: () => void }) {
                 </div>
                 <p className="mt-2 text-[11px] text-gray-500 leading-relaxed">
                   普通用户：在所分配项目内使用画布与聊天，资产库仅可查找与引用。
-                  项目管理员：同上，且对所分配项目的资产库可增删改查（须在下方勾选关联项目）。
+                  项目管理员：同上，且对所分配项目的资产库可增删改查。关联项目由 AITOP100 按域账号自动分配。
                 </p>
               </div>
 
@@ -976,94 +1042,42 @@ export function AdminUsersPage({ onBack }: { onBack: () => void }) {
                 </p>
               </div>
 
-              {/* 关联项目 */}
+              {/* 关联项目（AITOP 只读） */}
               <div>
                 <label className="block text-xs text-gray-400 mb-2 uppercase tracking-wider">
                   <span className="inline-flex items-center gap-2">
                     <FolderOpen className="w-3.5 h-3.5" />
-                    关联项目
+                    关联项目（AITOP100）
                   </span>
                 </label>
-                <input
-                  type="text"
-                  placeholder="按项目名称筛选…"
-                  value={projectSearch}
-                  onChange={(e) => setProjectSearch(e.target.value)}
-                  className="w-full px-4 py-2.5 mb-2 bg-white/5 border border-white/10 rounded-xl text-sm
-                    text-white placeholder:text-gray-600 focus:outline-none focus:border-brand-500/50"
-                />
-                {selectedProjectIds.size > 0 && (
-                  <div className="flex flex-wrap gap-2 mb-2">
-                    {Array.from(selectedProjectIds).map((pid) => {
-                      const p = allProjects.find((x) => x.id === pid);
-                      if (!p) return null;
-                      return (
-                        <span
-                          key={pid}
-                          className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-brand-500/15 text-brand-200 text-xs border border-brand-500/25 max-w-full"
-                        >
-                          <FolderOpen className="w-3 h-3 shrink-0 opacity-70" />
-                          <span className="truncate max-w-[160px]">{p.name}</span>
-                          <button
-                            type="button"
-                            className="p-0.5 rounded hover:bg-white/10 text-gray-400 hover:text-white shrink-0"
-                            onClick={() => {
-                              setSelectedProjectIds((prev) => {
-                                const n = new Set(prev);
-                                n.delete(pid);
-                                return n;
-                              });
-                            }}
-                            aria-label={`移除项目 ${p.name}`}
+                {editingUser ? (
+                  <>
+                    <p className="text-xs text-gray-500 mb-2">
+                      域账号：<span className="text-gray-300">{editingUser.username}</span>。请在 AITOP 平台配置项目权限，保存用户后刷新列表同步。
+                    </p>
+                    {allProjects.length === 0 ? (
+                      <p className="text-xs text-gray-500 py-2 rounded-xl border border-white/10 px-3">
+                        该域账号在 AITOP 暂无分配项目
+                      </p>
+                    ) : (
+                      <div className="flex flex-wrap gap-2">
+                        {allProjects.map((p) => (
+                          <span
+                            key={p.id}
+                            className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-brand-500/15 text-brand-200 text-xs border border-brand-500/25"
                           >
-                            <X className="w-3.5 h-3.5" />
-                          </button>
-                        </span>
-                      );
-                    })}
-                  </div>
-                )}
-                {projectsPanelLoading ? (
-                  <p className="text-xs text-gray-500 py-2">加载项目列表…</p>
-                ) : allProjects.length === 0 ? (
-                  <p className="text-xs text-gray-500 py-2">暂无可选项目</p>
+                            <FolderOpen className="w-3 h-3 shrink-0 opacity-70" />
+                            <span>{p.name}</span>
+                          </span>
+                        ))}
+                      </div>
+                    )}
+                  </>
                 ) : (
-                  <div
-                    className="max-h-44 overflow-y-auto rounded-xl border border-white/10 bg-white/[0.02]
-                      divide-y divide-white/5"
-                  >
-                    {allProjects
-                      .filter((p) =>
-                        projectSearch.trim()
-                          ? p.name.toLowerCase().includes(projectSearch.trim().toLowerCase())
-                          : true
-                      )
-                      .map((p) => (
-                        <label
-                          key={p.id}
-                          className="flex items-center gap-3 px-3 py-2.5 hover:bg-white/5 cursor-pointer min-w-0"
-                        >
-                          <input
-                            type="checkbox"
-                            className="shrink-0 rounded border-white/20 bg-white/5 text-brand-500 focus:ring-brand-500/40"
-                            checked={selectedProjectIds.has(p.id)}
-                            onChange={() => {
-                              setSelectedProjectIds((prev) => {
-                                const n = new Set(prev);
-                                if (n.has(p.id)) n.delete(p.id);
-                                else n.add(p.id);
-                                return n;
-                              });
-                            }}
-                          />
-                          <span className="text-sm text-gray-200 truncate min-w-0 flex-1">{p.name}</span>
-                        </label>
-                      ))}
-                  </div>
+                  <p className="text-xs text-gray-500 py-2 rounded-xl border border-white/10 px-3">
+                    创建用户后，在 AITOP「公司/人员/域账号」中为同名域账号分配项目；用户名须与域账号一致。
+                  </p>
                 )}
-                <p className="mt-2 text-xs text-gray-500">
-                  勾选加入项目；点击已选标签的 × 或取消勾选即可移除。保存后与「我的项目 → 成员管理」一致。
-                </p>
               </div>
 
               {/* Password (only for create) */}

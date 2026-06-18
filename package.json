@@ -31,6 +31,8 @@
     "test:details-all": "npm run test:ref-details && npm run test:project-json-details",
     "test:final": "npm run test:ref-details && npm run test:project-json-details && tsx scripts/all-models-final-test.ts",
     "test:panel-models": "tsx scripts/panel-unified-per-model-matrix-test.ts",
+    "test:delivery": "tsx scripts/comprehensive-prompt-ref-delivery-test.ts",
+    "test:delivery-all": "npm run test:delivery && npm run test:panel-refs && npm run test:panel-models && npm run test:inspector-mentions && npm run test:image2-panel-refs && node scripts/storyboard-table-spawn-test.mjs && tsx scripts/all-models-final-test.ts",
     "test:layout": "tsx scripts/assistant-message-layout-test.ts",
     "test:chat-pipeline": "tsx scripts/chat-pipeline-regression-test.ts",
     "test:chat-live": "tsx scripts/chat-live-smoke-test.ts",
@@ -47,7 +49,8 @@
     "mysql:migrate": "node scripts/mysql-ensure-chunks.mjs && node scripts/migrate-json-to-mysql.mjs",
     "mysql:init-v2": "node scripts/mysql-init-schema-v2.mjs",
     "mysql:migrate-relational": "node scripts/migrate-snapshot-to-relational.mjs",
-    "repair:project-covers": "node scripts/repair-project-covers-from-disk.mjs"
+    "repair:project-covers": "node scripts/repair-project-covers-from-disk.mjs",
+    "test:project-cover": "node scripts/project-cover-policy-test.mjs"
   },
   "dependencies": {
     "axios": "^1.13.2",

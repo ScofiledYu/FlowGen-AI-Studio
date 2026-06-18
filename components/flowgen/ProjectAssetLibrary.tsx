@@ -10,6 +10,13 @@ import {
 } from '../../services/flowgenApi';
 import { AssetThumbCell } from './AssetThumbCell';
 import { AssetLightboxMedia } from './AssetLightboxMedia';
+import { SearchableSelect } from './SearchableSelect';
+import {
+  ASSET_EPISODE_OPTIONS,
+  ASSET_SEQUENCE_OPTIONS,
+  normalizeAssetEpisode,
+  normalizeAssetSequence,
+} from '../../utils/assetEpisodeSequence';
 import {
   clearAssetThumbCache,
   getCachedAssetThumbDisplayUrl,
@@ -32,6 +39,8 @@ export type ProjectAssetRow = {
   thumbUrl?: string;
   mime: string;
   category: string;
+  episode?: string;
+  sequence?: string;
   /** 服务器磁盘上是否仍有原文件（false 时缩略图无法加载，需删除后重新上传） */
   fileOnDisk?: boolean;
 };
@@ -156,6 +165,8 @@ export function ProjectAssetLibrary({
   const [loading, setLoading] = useState(false);
   const [q, setQ] = useState('');
   const [categoryFilter, setCategoryFilter] = useState('');
+  const [episodeFilter, setEpisodeFilter] = useState('');
+  const [sequenceFilter, setSequenceFilter] = useState('');
   const [selectedIds, setSelectedIds] = useState<Set<string>>(() => new Set());
   /** 记录最后一次点击的素材 ID，用于 Shift+点击范围选择 */
   const lastSelectedIdRef = useRef<string | null>(null);
@@ -166,6 +177,8 @@ export function ProjectAssetLibrary({
   const [createPreviewUrl, setCreatePreviewUrl] = useState('');
   const [createName, setCreateName] = useState('');
   const [createTag, setCreateTag] = useState<string>('其他');
+  const [createEpisode, setCreateEpisode] = useState('');
+  const [createSequence, setCreateSequence] = useState('');
   const [createBusy, setCreateBusy] = useState(false);
 
   const [editOpen, setEditOpen] = useState(false);
@@ -173,6 +186,8 @@ export function ProjectAssetLibrary({
   const [editRow, setEditRow] = useState<ProjectAssetRow | null>(null);
   const [editName, setEditName] = useState('');
   const [editTag, setEditTag] = useState('');
+  const [editEpisode, setEditEpisode] = useState('');
+  const [editSequence, setEditSequence] = useState('');
   const [editNewFile, setEditNewFile] = useState<File | null>(null);
   const [editLocalPreview, setEditLocalPreview] = useState('');
   const [editBusy, setEditBusy] = useState(false);
@@ -200,6 +215,8 @@ export function ProjectAssetLibrary({
         thumbUrl: a.thumbUrl,
         mime: normalizeAssetMime(a.mime, a.name),
         category: normalizeAssetCategoryForDisplay(a.category),
+        episode: normalizeAssetEpisode((a as { episode?: string }).episode),
+        sequence: normalizeAssetSequence((a as { sequence?: string }).sequence),
         fileOnDisk: (a as { fileOnDisk?: boolean }).fileOnDisk !== false,
       }));
       setAssets(list);
@@ -219,6 +236,8 @@ export function ProjectAssetLibrary({
       setSelectedIds(new Set());
       setQ('');
       setCategoryFilter('');
+      setEpisodeFilter('');
+      setSequenceFilter('');
       setLightboxAsset(null);
     }
   }, [open]);
@@ -272,6 +291,8 @@ export function ProjectAssetLibrary({
     setCreateFile(null);
     setCreateName('');
     setCreateTag('其他');
+    setCreateEpisode('');
+    setCreateSequence('');
     setCreateDragOver(false);
     setCreatePreviewUrl((prev) => {
       if (prev) URL.revokeObjectURL(prev);
@@ -296,6 +317,8 @@ export function ProjectAssetLibrary({
     setEditRow(null);
     setEditName('');
     setEditTag('');
+    setEditEpisode('');
+    setEditSequence('');
     setEditNewFile(null);
     setEditDragOver(false);
     setEditLocalPreview((prev) => {
@@ -322,6 +345,8 @@ export function ProjectAssetLibrary({
     setEditRow(a);
     setEditName(a.name);
     setEditTag(normalizeCategory(a.category));
+    setEditEpisode(a.episode || '');
+    setEditSequence(a.sequence || '');
     setEditNewFile(null);
     setEditLocalPreview((prev) => {
       if (prev) URL.revokeObjectURL(prev);
@@ -361,11 +386,13 @@ export function ProjectAssetLibrary({
     const qq = q.trim().toLowerCase();
     return assets.filter((a) => {
       if (categoryFilter && a.category !== categoryFilter) return false;
+      if (episodeFilter && a.episode !== episodeFilter) return false;
+      if (sequenceFilter && a.sequence !== sequenceFilter) return false;
       if (!qq) return true;
-      const blob = `${a.name}\n${a.category}`.toLowerCase();
+      const blob = `${a.name}\n${a.category}\n${a.episode || ''}\n${a.sequence || ''}`.toLowerCase();
       return blob.includes(qq);
     });
-  }, [assets, q, categoryFilter]);
+  }, [assets, q, categoryFilter, episodeFilter, sequenceFilter]);
 
   /** Shift 范围多选；Ctrl/Cmd 切换单项；普通点击切换勾选 */
   const handleRangeSelect = (id: string, shiftKey: boolean, replaceSelection = false) => {
@@ -488,11 +515,22 @@ export function ProjectAssetLibrary({
       setErr('请填写主体姓名');
       return;
     }
+    const episode = normalizeAssetEpisode(createEpisode);
+    const sequence = normalizeAssetSequence(createSequence);
+    if (sequence && !episode) {
+      const proceed = window.confirm(
+        '您未选择集数，仅选择了场次。建议选择对应集数以便筛选与管理。\n\n是否仍要创建？'
+      );
+      if (!proceed) return;
+    }
     setErr('');
     setCreateBusy(true);
     try {
       const expectedTag = normalizeCategory(createTag);
-      const created = await uploadAsset(projectId, createFile, name, expectedTag);
+      const created = await uploadAsset(projectId, createFile, name, expectedTag, {
+        episode: episode || undefined,
+        sequence: sequence || undefined,
+      });
       closeCreateModal();
       await refresh();
       try {
@@ -524,6 +562,14 @@ export function ProjectAssetLibrary({
       setErr('请填写主体姓名');
       return;
     }
+    const episode = normalizeAssetEpisode(editEpisode);
+    const sequence = normalizeAssetSequence(editSequence);
+    if (sequence && !episode) {
+      const proceed = window.confirm(
+        '您未选择集数，仅选择了场次。建议选择对应集数以便筛选与管理。\n\n是否仍要保存？'
+      );
+      if (!proceed) return;
+    }
     setErr('');
     setEditBusy(true);
     try {
@@ -532,13 +578,18 @@ export function ProjectAssetLibrary({
       }
       const catLabel = normalizeCategory(editTag);
       const metaChanged =
-        name !== editRow.name || catLabel !== normalizeCategory(editRow.category);
+        name !== editRow.name ||
+        catLabel !== normalizeCategory(editRow.category) ||
+        episode !== (editRow.episode || '') ||
+        sequence !== (editRow.sequence || '');
       if (metaChanged) {
         const code = uiCategoryToKlingSubjectTag(catLabel);
         await patchAsset(projectId, editRow.id, {
           name,
           category: code,
           tag: code,
+          episode,
+          sequence,
         });
       }
       closeEditModal();
@@ -671,14 +722,14 @@ export function ProjectAssetLibrary({
             <input
               value={q}
               onChange={(e) => setQ(e.target.value)}
-              placeholder="搜索主体名称或标签"
+              placeholder="搜索主体名称、标签、集数或场次"
               className="w-full pl-9 pr-3 py-2 rounded-xl bg-gray-900/90 border border-gray-700 text-sm text-gray-100 placeholder:text-gray-600 focus:outline-none focus:ring-2 focus:ring-brand-500/40 focus:border-brand-500/50"
             />
           </div>
           <select
             value={categoryFilter}
             onChange={(e) => setCategoryFilter(e.target.value)}
-            className="rounded-xl bg-gray-900 border border-gray-700 px-3 py-2 text-sm text-gray-200 min-w-[140px]"
+            className="rounded-xl bg-gray-900 border border-gray-700 px-3 py-2 text-sm text-gray-200 min-w-[120px]"
           >
             <option value="">全部标签</option>
             {categoryOptions.map((c) => (
@@ -687,6 +738,28 @@ export function ProjectAssetLibrary({
               </option>
             ))}
           </select>
+          <div className="min-w-[128px] self-end">
+            <SearchableSelect
+              label="集数"
+              hideLabel
+              value={episodeFilter}
+              onChange={setEpisodeFilter}
+              options={ASSET_EPISODE_OPTIONS}
+              placeholder="全部集数"
+              emptyOptionLabel="全部集数"
+            />
+          </div>
+          <div className="min-w-[128px] self-end">
+            <SearchableSelect
+              label="场次"
+              hideLabel
+              value={sequenceFilter}
+              onChange={setSequenceFilter}
+              options={ASSET_SEQUENCE_OPTIONS}
+              placeholder="全部场次"
+              emptyOptionLabel="全部场次"
+            />
+          </div>
           <div className="text-sm text-gray-400 ml-auto whitespace-nowrap">
             已选 <span className="text-brand-400 font-medium">{selectedIds.size}</span> / 可见{' '}
             <span className="text-gray-200 font-medium">{filtered.length}</span>
@@ -799,9 +872,21 @@ export function ProjectAssetLibrary({
                     <div className="flex items-center justify-between gap-2">
                       <div className="min-w-0 flex-1">
                         <p className="text-sm font-medium text-white truncate drop-shadow-md">{a.name}</p>
-                        <span className="inline-block mt-1 text-[10px] px-1.5 py-0.5 rounded-md bg-white/15 text-gray-100 border border-white/10">
-                          {a.category}
-                        </span>
+                        <div className="mt-1 flex flex-wrap gap-1">
+                          <span className="inline-block text-[10px] px-1.5 py-0.5 rounded-md bg-white/15 text-gray-100 border border-white/10">
+                            {a.category}
+                          </span>
+                          {a.episode ? (
+                            <span className="inline-block text-[10px] px-1.5 py-0.5 rounded-md bg-brand-500/20 text-brand-200 border border-brand-500/25">
+                              {a.episode}
+                            </span>
+                          ) : null}
+                          {a.sequence ? (
+                            <span className="inline-block text-[10px] px-1.5 py-0.5 rounded-md bg-violet-500/20 text-violet-200 border border-violet-500/25">
+                              {a.sequence}
+                            </span>
+                          ) : null}
+                        </div>
                       </div>
                       {/* 小复选框 - 底部右侧 */}
                       <div
@@ -1120,6 +1205,27 @@ export function ProjectAssetLibrary({
                   ))}
                 </select>
               </div>
+              <SearchableSelect
+                label="集数"
+                value={createEpisode}
+                onChange={setCreateEpisode}
+                options={ASSET_EPISODE_OPTIONS}
+                placeholder="可选，如 ep001"
+                emptyOptionLabel="不指定集数"
+              />
+              <SearchableSelect
+                label="场次"
+                value={createSequence}
+                onChange={setCreateSequence}
+                options={ASSET_SEQUENCE_OPTIONS}
+                placeholder="可选，如 seq001"
+                emptyOptionLabel="不指定场次"
+              />
+              {createSequence && !createEpisode ? (
+                <p className="text-xs text-amber-400/90">
+                  已选场次但未选集数，提交时将提示确认是否继续。
+                </p>
+              ) : null}
             </div>
             <div className="flex justify-end gap-2 px-5 py-4 border-t border-gray-800 bg-[#0f131d]">
               <button
@@ -1291,6 +1397,27 @@ export function ProjectAssetLibrary({
                   ))}
                 </select>
               </div>
+              <SearchableSelect
+                label="集数"
+                value={editEpisode}
+                onChange={setEditEpisode}
+                options={ASSET_EPISODE_OPTIONS}
+                placeholder="可选，如 ep001"
+                emptyOptionLabel="不指定集数"
+              />
+              <SearchableSelect
+                label="场次"
+                value={editSequence}
+                onChange={setEditSequence}
+                options={ASSET_SEQUENCE_OPTIONS}
+                placeholder="可选，如 seq001"
+                emptyOptionLabel="不指定场次"
+              />
+              {editSequence && !editEpisode ? (
+                <p className="text-xs text-amber-400/90">
+                  已选场次但未选集数，保存时将提示确认是否继续。
+                </p>
+              ) : null}
             </div>
             <div className="flex justify-end gap-2 px-5 py-4 border-t border-gray-800 bg-[#0f131d] shrink-0">
               <button

@@ -15,6 +15,7 @@ import {
   buildReferenceImageDetailItemsFromPanel,
   isDuplicateOfMainImagePreview,
   isLikelyMainVideoUrl,
+  panelReferenceSlotLabel,
   promptMentionsMainImageForNodeData,
   type ReferenceImageDetailItem,
 } from './promptMediaRefs';
@@ -504,9 +505,16 @@ function resolveOmniPromptForDetails(
     if (omniTab === 'video') return d.klingOmniVideoNegativePrompt ?? d.negativePrompt ?? '';
     return d.klingOmniFramesNegativePrompt ?? d.negativePrompt ?? '';
   };
+  if (isOutputLike) {
+    return {
+      prompt: pickNonEmpty(g.prompt, promptFromTab()),
+      negativePrompt: pickNonEmpty(g.negativePrompt, negFromTab()),
+    };
+  }
+  // 上游运行节点：只用当前 tab 面板 prompt，忽略 processor 上残留的 generationParams
   return {
-    prompt: pickNonEmpty(g.prompt, promptFromTab()),
-    negativePrompt: pickNonEmpty(g.negativePrompt, negFromTab()),
+    prompt: String(promptFromTab()).trim(),
+    negativePrompt: String(negFromTab()).trim(),
   };
 }
 
@@ -527,7 +535,9 @@ export function buildNodeDetailsBaseParams(input: {
     ancestorData,
     selfData: d,
   };
-  const isOmni = String(gp.model || d.selectedModel || '').includes('可灵3.0 Omni');
+  const isOmni =
+    String(gp.model || '').includes('可灵3.0 Omni') ||
+    String(d.selectedModel || '').includes('可灵3.0 Omni');
   const omniTab = (pickNodeDetailsParam<string>(ctx, 'klingOmniTab' as keyof NodeData & keyof GenerationParams) ??
     gp.klingOmniTab ??
     ancestorData?.klingOmniTab) as string | undefined;
@@ -661,6 +671,50 @@ function dedupeUrlList(urls: string[]): string[] {
 }
 
 /** 可灵 Omni 多图/指令/视频 tab：Node Details 对齐面板槽位 */
+/**
+ * 可灵 Omni 指令变换 / 视频参考：Node Details 参考图。
+ * 面板槽为空时回退 generationParams.referenceImages（运行实际上传后的 URL）。
+ */
+export function buildOmniInstructionVideoTabDetailsReferencePreview(input: {
+  panelSource: Partial<NodeData>;
+  omniTab: 'instruction' | 'video';
+  urlPool: string[];
+  snapshotRefs: string[];
+  movUrlSet: Set<string>;
+  projectAssets?: ProjectAssetLabelRow[];
+}): { referenceImages: string[]; referenceImageDetailItems: ReferenceImageDetailItem[] } {
+  const refKey =
+    input.omniTab === 'instruction'
+      ? 'klingOmniInstructionReferenceImages'
+      : 'klingOmniVideoReferenceImages';
+  let panel: Partial<NodeData> = { ...input.panelSource, klingOmniTab: input.omniTab };
+  const slotRefs = ((panel[refKey as keyof NodeData] as string[] | undefined) || []).filter(Boolean);
+  const snapRefs = sanitizeDetailsReferenceImageUrls(
+    input.snapshotRefs.filter((u) => u && !input.movUrlSet.has(u))
+  );
+  if (slotRefs.length === 0 && snapRefs.length > 0) {
+    panel = { ...panel, [refKey]: snapRefs };
+  }
+  const preview = buildNodeDetailsReferencePreview({
+    panelSource: panel,
+    urlPool: input.urlPool.filter((u) => !input.movUrlSet.has(u)),
+    projectAssets: input.projectAssets,
+    filterItem: (it) => Boolean(it.url) && !input.movUrlSet.has(it.url),
+  });
+  if (preview.referenceImages.length > 0) return preview;
+  if (!snapRefs.length) return preview;
+  const labels = panel.referenceImageLabels || [];
+  return {
+    referenceImages: snapRefs,
+    referenceImageDetailItems: snapRefs.map((url, i) => ({
+      url,
+      label:
+        String(labels[i] || '').trim() ||
+        panelReferenceSlotLabel(i, snapRefs, panel.imagePreview, 'panelSlot'),
+    })),
+  };
+}
+
 export function mergeOmniMultiTabReferenceImagesForDetails(input: {
   nodeData: Partial<NodeData>;
   generationParams?: GenerationParams;
@@ -703,7 +757,16 @@ export function mergeOmniMultiTabReferenceImagesForDetails(input: {
   if (mainForOmni && !isLikelyMainVideoUrl(mainForOmni)) {
     refs = [mainForOmni, ...refs.filter((u) => !isDuplicateOfMainImagePreview(u, mainForOmni))];
   }
-  return sanitizeDetailsReferenceImageUrls(refs);
+  const sanitized = sanitizeDetailsReferenceImageUrls(refs);
+  // @主图 且主预览为 data:/blob: 时，即使已有 https 参考图也保留主图（与面板一致）
+  if (
+    mainForOmni &&
+    (/^data:/i.test(mainForOmni) || mainForOmni.startsWith('blob:')) &&
+    !sanitized.some((u) => isDuplicateOfMainImagePreview(u, mainForOmni))
+  ) {
+    return [mainForOmni, ...sanitized];
+  }
+  return sanitized;
 }
 
 /**

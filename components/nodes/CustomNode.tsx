@@ -12,6 +12,7 @@ import {
   pickReferenceImagePosterUrl,
 } from '../../utils/hydratePersistedNodePreviews';
 import { remoteMediaUrlPreferSameOriginProxy } from '../../utils/remoteMediaFetch';
+import { resolveNodeDownloadFilename } from '../../utils/nodeDownloadFilename';
 import { captureVideoMiddleFrameQueued } from '../../utils/videoPosterQueue';
 import { materializePosterDataUrl } from '../../utils/workspaceMediaPersist';
 import { startMiddleButtonMediaDrag } from '../../utils/middleButtonMediaDrag';
@@ -368,39 +369,12 @@ const CustomNode = ({ id, data, type, selected }: NodeProps) => {
     const src = data.imagePreview;
     if (!src) return;
 
-    const resolveInnerProxyUrl = (input: string): string => {
-      const raw = String(input || '').trim();
-      if (!raw) return '';
-      try {
-        const u = new URL(raw, window.location.origin);
-        const p = u.pathname.toLowerCase();
-        if ((p === '/proxy-file' || p === '/proxy-image') && u.searchParams.get('url')) {
-          return resolveInnerProxyUrl(u.searchParams.get('url') || '');
-        }
-        return u.toString();
-      } catch {
-        return raw;
-      }
-    };
-    const deriveFilenameFromUrl = (input: string): string => {
-      const normalized = resolveInnerProxyUrl(input);
-      if (!normalized) return '';
-      try {
-        const u = new URL(normalized, window.location.origin);
-        const seg = decodeURIComponent((u.pathname.split('/').filter(Boolean).pop() || '').trim());
-        if (!seg || /^(proxy-file|proxy-image|file|thumb)$/i.test(seg)) return '';
-        return seg;
-      } catch {
-        const bare = normalized.split('#')[0].split('?')[0];
-        const seg = decodeURIComponent((bare.split('/').filter(Boolean).pop() || '').trim());
-        return /^(proxy-file|proxy-image|file|thumb)$/i.test(seg) ? '' : seg;
-      }
-    };
-    const rawFilename = String(data.imageName || '').trim();
-    const filename =
-      rawFilename && !/^(proxy-file|proxy-image|file|thumb)(\.[a-z0-9]+)?$/i.test(rawFilename)
-        ? rawFilename
-        : deriveFilenameFromUrl(src) || rawFilename || `node_image_${id}.png`;
+    const filename = resolveNodeDownloadFilename(data, {
+      nodeType: type,
+      nodeId: id,
+      imagePreview: src,
+      urlFallback: src,
+    });
     const triggerBlobDownload = (blob: Blob, name: string) => {
       const objectUrl = URL.createObjectURL(blob);
       const link = document.createElement('a');
@@ -473,7 +447,7 @@ const CustomNode = ({ id, data, type, selected }: NodeProps) => {
       const msg = err instanceof Error ? err.message : String(err);
       alert(`下载失败：${msg}\n请稍后重试；若持续失败，可能是源站链接已失效。`);
     }
-  }, [data.imagePreview, data.imageName, data.taskId, data.generationParams?.taskId, id]);
+  }, [data, type, id]);
 
   const isVideoUrl = useCallback(
     (url: string | undefined): boolean =>

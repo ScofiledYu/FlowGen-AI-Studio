@@ -55,13 +55,17 @@ CREATE TABLE IF NOT EXISTS flowgen_assets (
   project_id CHAR(36) NOT NULL,
   name VARCHAR(255) NOT NULL,
   category VARCHAR(64) NOT NULL DEFAULT 'OTHER',
+  episode VARCHAR(16) NULL DEFAULT NULL,
+  sequence VARCHAR(16) NULL DEFAULT NULL,
   mime VARCHAR(128) NOT NULL,
   file_name VARCHAR(512) NOT NULL,
   created_by CHAR(36) NULL,
   created_at DATETIME(3) NOT NULL,
   updated_at DATETIME(3) NOT NULL,
   KEY idx_flowgen_assets_project (project_id),
-  KEY idx_flowgen_assets_category (project_id, category)
+  KEY idx_flowgen_assets_category (project_id, category),
+  KEY idx_flowgen_assets_episode (project_id, episode),
+  KEY idx_flowgen_assets_sequence (project_id, sequence)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
 CREATE TABLE IF NOT EXISTS flowgen_chat_sessions (

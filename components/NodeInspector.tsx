@@ -39,16 +39,14 @@ function resolveInspectorFramePreviewUrl(
 ): string | undefined {
   const url = String(imageUrl || '').trim();
   const data = String(imageData || '').trim();
-  if (url && isPersistableMediaUrl(url)) {
-    const resolved = resolveDisplayMediaUrl(url);
-    if (resolved) return resolved;
-  }
+  if (data && data.startsWith('blob:')) return data;
   if (data && /^data:image\//i.test(data)) {
     const resolved = resolveDisplayMediaUrl(data);
     if (resolved) return resolved;
   }
-  if (data && data.startsWith('blob:')) {
-    return data;
+  if (url && isPersistableMediaUrl(url)) {
+    const resolved = resolveDisplayMediaUrl(url);
+    if (resolved) return resolved;
   }
   if (data) {
     const resolved = resolveDisplayMediaUrl(data);
@@ -282,6 +280,7 @@ import {
   panelReferenceSlotLabel,
   seedanceReferenceSlotLabel,
   omniMixedRefSlotCaption,
+  matchAllPromptMediaTokens,
   scanPromptAppendAllTokens,
   getNodeInspectorPromptText,
   buildNodePromptUpdatePatch,
@@ -326,16 +325,335 @@ import {
   type ProjectAssetLabelRow,
 } from '../utils/referenceImageSlotLabels';
 
+/** 首尾帧拖放区：须在模块级定义，避免 NodeInspector 重渲染时组件类型变化导致 <img> 反复卸载闪动 */
+const FrameDropZone = React.memo(function FrameDropZone({
+  nodeId: zoneNodeId,
+  frameType,
+  label,
+  image,
+  imageUrl,
+  imageData,
+  onImageUpdate,
+  displayUrl,
+  showImage = true,
+  compact = false,
+  mediaRefCaption,
+}: {
+  nodeId: string;
+  frameType: 'firstFrame' | 'lastFrame';
+  label: string;
+  /** @deprecated 使用 imageUrl + imageData */
+  image?: string;
+  imageUrl?: string;
+  imageData?: string;
+  onImageUpdate: (img?: string) => void;
+  displayUrl?: string;
+  showImage?: boolean;
+  compact?: boolean;
+  /** 与创意描述 @ 引用一致，如 图片1 / 图片2 */
+  mediaRefCaption?: string;
+}) {
+  const [isZoneDragOver, setIsZoneDragOver] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const hasImage = Boolean(
+    String(imageUrl || '').trim() ||
+      String(imageData || '').trim() ||
+      String(image || '').trim()
+  );
+  const displaySrc = useMemo(
+    () =>
+      resolveInspectorFramePreviewUrl(imageUrl, imageData) ||
+      (image ? resolveDisplayMediaUrl(image) : ''),
+    [imageUrl, imageData, image]
+  );
+
+  const registerOriginal = (file: File) => {
+    window.dispatchEvent(
+      new CustomEvent('flowgen:register-original-image', {
+        detail: { nodeId: zoneNodeId, file, type: frameType },
+      })
+    );
+  };
+
+  const handleDrop = (e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setIsZoneDragOver(false);
+    if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
+      const file = e.dataTransfer.files[0];
+      if (file.type.startsWith('image/') || /\.(jpe?g|png|webp|gif)$/i.test(file.name)) {
+        registerOriginal(file);
+        compressImageForPreview(file)
+          .then(onImageUpdate)
+          .catch(() => {
+            const reader = new FileReader();
+            reader.onload = (ev) => {
+              if (ev.target?.result) onImageUpdate(ev.target.result as string);
+            };
+            reader.readAsDataURL(file);
+          });
+      }
+      return;
+    }
+    const internalUrl = extractInspectorDragUrl(e.dataTransfer);
+    if (internalUrl) {
+      void normalizeInspectorIngestImageUrl(internalUrl).then(onImageUpdate);
+    }
+  };
+
+  const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
+    if (e.target.files && e.target.files.length > 0) {
+      const file = e.target.files[0];
+      registerOriginal(file);
+      compressImageForPreview(file)
+        .then((dataUrl) => onImageUpdate(dataUrl))
+        .catch(() => {
+          const reader = new FileReader();
+          reader.onload = (ev) => {
+            if (ev.target?.result) onImageUpdate(ev.target.result as string);
+          };
+          reader.readAsDataURL(file);
+        });
+    }
+    if (fileInputRef.current) fileInputRef.current.value = '';
+  };
+
+  return (
+    <div
+      className={`
+                flex-1 rounded-lg border-2 border-dashed relative overflow-hidden transition-all group cursor-pointer
+                ${compact ? 'h-full' : 'aspect-[4/3]'}
+                ${isZoneDragOver ? 'border-brand-500 bg-brand-500/10' : 'border-gray-700 bg-gray-950/50 hover:border-gray-600'}
+            `}
+      data-flowgen-media-drop="1"
+      data-flowgen-node-id={zoneNodeId}
+      data-flowgen-drop-zone={frameType === 'firstFrame' ? 'first-frame' : 'last-frame'}
+      onDragOver={(e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        setIsZoneDragOver(true);
+      }}
+      onDragLeave={(e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        setIsZoneDragOver(false);
+      }}
+      onDrop={handleDrop}
+      onClick={() => fileInputRef.current?.click()}
+    >
+      <input
+        type="file"
+        ref={fileInputRef}
+        className="hidden"
+        accept="image/*"
+        onChange={handleFileSelect}
+      />
+
+      {hasImage ? (
+        <>
+          {showImage && displaySrc ? (
+            <img src={displaySrc} alt={label} className="w-full h-full object-cover" />
+          ) : null}
+          {!mediaRefCaption && (
+            <div
+              className={`absolute top-1 left-1 bg-black/70 text-white font-bold rounded z-10 pointer-events-none ${compact ? 'text-[8px] px-1.5 py-0.5' : 'text-[9px] px-1.5 py-0.5'}`}
+            >
+              {label === '首帧图' ? '[首帧图]' : label === '尾帧图' ? '[尾帧图]' : label}
+            </div>
+          )}
+          <button
+            onClick={(e) => {
+              e.stopPropagation();
+              onImageUpdate(undefined);
+            }}
+            className="absolute top-1 right-1 p-1 bg-black/60 hover:bg-red-500 text-white rounded-full opacity-0 group-hover:opacity-100 transition-all z-10 backdrop-blur-sm"
+            title="Remove image"
+          >
+            <X size={12} />
+          </button>
+          {mediaRefCaption ? (
+            <div className="absolute bottom-0 left-0 right-0 bg-black/70 backdrop-blur-sm z-10 pointer-events-none">
+              <div
+                className={`text-center text-white font-medium ${compact ? 'text-[9px] py-1' : 'text-[10px] py-1'}`}
+              >
+                {mediaRefCaption}
+              </div>
+            </div>
+          ) : (
+            <div className="absolute bottom-0 left-0 right-0 bg-black/70 backdrop-blur-sm">
+              <div
+                className={`text-center text-gray-300 font-medium pointer-events-none ${compact ? 'text-[9px] py-0.5' : 'text-[10px] py-1'}`}
+              >
+                {label}
+              </div>
+              {displayUrl && (
+                <div className="px-1 pb-1">
+                  <div className="bg-gray-900/80 rounded px-1.5 py-0.5 text-[8px] text-gray-400 font-mono truncate select-all pointer-events-auto">
+                    {displayUrl}
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
+          {!showImage && (
+            <div className="absolute inset-0 flex flex-col items-center justify-center gap-1.5 text-gray-500 pointer-events-none bg-gray-950/30">
+              <div className="p-2 rounded-md border border-dashed border-gray-600 bg-gray-900/50">
+                <ImageIcon size={16} />
+              </div>
+              <span className="text-[10px] font-medium">已设置 {label}</span>
+              {displayUrl && (
+                <span className="text-[8px] text-gray-600 font-mono truncate max-w-[90%]">
+                  {displayUrl.substring(0, 30)}...
+                </span>
+              )}
+            </div>
+          )}
+        </>
+      ) : (
+        <div
+          className={`absolute inset-0 flex flex-col items-center justify-center text-gray-600 pointer-events-none ${compact ? 'gap-1' : 'gap-1.5'}`}
+        >
+          <div
+            className={`rounded-md border border-dashed border-gray-700 ${compact ? 'p-1' : 'p-1.5'}`}
+          >
+            <Plus size={compact ? 12 : 14} />
+          </div>
+          <span className={`${compact ? 'text-[9px]' : 'text-[10px]'} font-medium`}>{label}</span>
+        </div>
+      )}
+    </div>
+  );
+});
+
+function patchVideoPlayingMap(
+  prev: Record<string, boolean>,
+  id: string,
+  playing: boolean
+): Record<string, boolean> {
+  if (prev[id] === playing) return prev;
+  return { ...prev, [id]: playing };
+}
+
+/** 运行中锁定侧栏媒体 URL，避免上传/写回时 src 切换导致 <video>/<img> 反复重载闪动 */
+function useStableInspectorMediaUrl(
+  url: string | undefined,
+  lockWhileRunning: boolean
+): string | undefined {
+  const lockRef = useRef<string | undefined>();
+  return useMemo(() => {
+    if (!url) {
+      lockRef.current = undefined;
+      return undefined;
+    }
+    if (lockWhileRunning) {
+      if (!lockRef.current) lockRef.current = url;
+      return lockRef.current;
+    }
+    lockRef.current = undefined;
+    return url;
+  }, [url, lockWhileRunning]);
+}
+
+/** Omni 指令/视频参考 tab 顶栏视频预览：模块级 + memo，避免 progress 轮询触发整段重挂载 */
+const InspectorOmniTabVideoPreview = React.memo(function InspectorOmniTabVideoPreview({
+  nodeId,
+  omniTab,
+  displayUrl,
+  posterUrl,
+  mainPreview,
+  onRemove,
+  onVideoPlayStateChange,
+  onTogglePlay,
+  videoRefRegister,
+  isPlaying,
+}: {
+  nodeId: string;
+  omniTab: 'instruction' | 'video';
+  displayUrl: string;
+  posterUrl?: string;
+  mainPreview?: string;
+  onRemove: () => void;
+  onVideoPlayStateChange: (videoId: string, playing: boolean) => void;
+  onTogglePlay: (videoId: string) => void;
+  videoRefRegister: (videoId: string, el: HTMLVideoElement | null) => void;
+  isPlaying: boolean;
+}) {
+  const videoId = `omni-video-preview-${nodeId}-${omniTab}`;
+  const videoSrc = useMemo(() => inspectorVideoDisplaySrc(displayUrl), [displayUrl]);
+  const isMainVideo = useMemo(() => {
+    const mainPrev = mainPreview?.trim();
+    return Boolean(mainPrev && isLikelyMainVideoUrl(mainPrev) && mainPrev === displayUrl);
+  }, [mainPreview, displayUrl]);
+  const showPoster = Boolean(posterUrl && !isPlaying);
+
+  return (
+    <div className="p-2 rounded-lg border border-gray-800 bg-gray-950/30 flex items-center gap-2">
+      <div className="relative w-28 h-16 rounded overflow-hidden bg-gray-900 shrink-0 border border-gray-800">
+        {showPoster && posterUrl ? (
+          <img
+            src={posterUrl}
+            alt=""
+            className="absolute inset-0 z-[1] w-full h-full object-cover pointer-events-none"
+          />
+        ) : null}
+        <video
+          id={videoId}
+          ref={(el) => videoRefRegister(videoId, el)}
+          src={videoSrc}
+          className="w-full h-full object-cover"
+          controls
+          preload="auto"
+          playsInline
+          muted
+          style={
+            showPoster ? { opacity: 0, pointerEvents: 'none' as const } : undefined
+          }
+          onPlay={() => onVideoPlayStateChange(videoId, true)}
+          onPause={() => onVideoPlayStateChange(videoId, false)}
+          onEnded={() => onVideoPlayStateChange(videoId, false)}
+        />
+        <div className="absolute bottom-0 left-0 right-0 z-[2] bg-black/70 text-white text-[9px] font-medium text-center py-0.5 pointer-events-none">
+          {isMainVideo ? '主视频' : '视频1'}
+        </div>
+      </div>
+      <div className="flex-1 min-w-0">
+        <p className="text-[10px] text-gray-300 truncate">
+          {isMainVideo ? '已选主视频' : '已选视频素材'}
+        </p>
+        <p className="text-[9px] text-gray-500 truncate">将用于可灵3.0 Omni 的指令/视频参考</p>
+      </div>
+      <button
+        type="button"
+        title={isPlaying ? '暂停视频' : '播放视频'}
+        onClick={() => onTogglePlay(videoId)}
+        className="p-1.5 rounded hover:bg-gray-800 text-gray-400 hover:text-white transition-colors"
+      >
+        {isPlaying ? <Pause size={14} /> : <Play size={14} />}
+      </button>
+      <button
+        type="button"
+        title="移除视频素材"
+        onClick={onRemove}
+        className="p-1.5 rounded hover:bg-gray-800 text-gray-400 hover:text-white transition-colors"
+      >
+        <X size={14} />
+      </button>
+    </div>
+  );
+});
+
 interface NodeInspectorProps {
   nodeId: string;
   data: NodeData;
   nodeType?: string; // 节点类型
   onUpdate: (newData: Partial<NodeData>) => void;
   onRun: (nodeId: string) => Promise<void>; // Added onRun callback
-  /** 项目资产库 @ 项（与节点参考素材并列） */
+  /** 项目资产库 @ 项（扫描 @素材 用；不在标题栏展示 chip） */
   projectAssetRefItems?: PromptMediaRefItem[];
   /** 资产库 slug/名称/URL，用于参考格底栏展示资产名 */
   projectAssetLabelRows?: ProjectAssetLabelRow[];
+  /** 已进入服务端项目（有资产库时可展示「扫描 @素材」） */
+  projectAssetLibraryEnabled?: boolean;
 }
 
 function clampInspectorNum(n: number, lo: number, hi: number): number {
@@ -455,65 +773,72 @@ function promptRefTokenTextClass(kind: PromptRefHighlightKind): string {
 
 function renderPlainPromptSegment(segment: string, keyBase: string): React.ReactNode[] {
   if (!segment) return [];
-  const lines = segment.split('\n');
+  /** 每行首个「：」前为绿色标签；换行用纯文本 \n 插入，勿用 Fragment 分行（避免与 textarea 换行不一致） */
   const nodes: React.ReactNode[] = [];
-  lines.forEach((line, i) => {
-    if (i > 0) {
-      nodes.push(
-        <span key={`${keyBase}-nl-${i}`} className="text-gray-200">
-          {'\n'}
-        </span>
-      );
-    }
+  let start = 0;
+  let idx = 0;
+  while (start <= segment.length) {
+    const nl = segment.indexOf('\n', start);
+    const end = nl === -1 ? segment.length : nl;
+    const line = segment.slice(start, end);
     const colonIdx = line.indexOf('：');
     if (colonIdx > 0) {
       nodes.push(
-        <span key={`${keyBase}-ln-${i}`}>
-          <span className="text-green-400">{line.slice(0, colonIdx)}</span>
-          <span className="text-gray-200">{line.slice(colonIdx)}</span>
+        <span key={`${keyBase}-g-${idx++}`} className="text-green-400">
+          {line.slice(0, colonIdx)}
         </span>
       );
-    } else {
       nodes.push(
-        <span key={`${keyBase}-ln-${i}`} className="text-gray-200">
+        <span key={`${keyBase}-t-${idx++}`} className="text-gray-200">
+          {line.slice(colonIdx)}
+        </span>
+      );
+    } else if (line.length > 0) {
+      nodes.push(
+        <span key={`${keyBase}-t-${idx++}`} className="text-gray-200">
           {line}
         </span>
       );
     }
-  });
+    if (nl === -1) break;
+    nodes.push('\n');
+    start = nl + 1;
+  }
   return nodes;
 }
 
-const INSPECTOR_PROMPT_TEXT_CLASS =
-  'w-full max-h-[min(88vh,860px)] shrink-0 box-border p-0 m-0 border-0 text-xs font-mono font-normal leading-normal whitespace-pre-wrap break-words [overflow-wrap:anywhere]';
+/** 创意描述 textarea 与高亮层必须共用同一套排版，否则透明字 + overlay 会导致 caret 错位 */
+const INSPECTOR_PROMPT_TYPO_CLASS =
+  'block w-full box-border p-0 m-0 border-0 align-top text-xs font-mono font-normal leading-[18px] whitespace-pre-wrap [overflow-wrap:anywhere] [word-break:normal] tracking-normal [font-variant-ligatures:none]';
 
-function renderPromptWithTokenHighlights(text: string): React.ReactNode[] {
+const INSPECTOR_PROMPT_TEXT_CLASS = `${INSPECTOR_PROMPT_TYPO_CLASS} max-h-[min(88vh,860px)] shrink-0`;
+
+function renderPromptWithTokenHighlights(
+  text: string,
+  projectAssets?: ProjectAssetLabelRow[]
+): React.ReactNode {
   const src = String(text || '');
-  if (!src) return [];
-  // 匹配所有 @引用：主图/主视频/首帧图/尾帧图/图片n/视频n/音频n/资产:名称
-  const re =
-    /@(主图|主视频|首帧图|尾帧图|图片\d*|视频\d*|音频\d*|资产:[^\s@，。；：、,.!?／/与和及]+)/g;
+  if (!src) return null;
+  const tokens = matchAllPromptMediaTokens(src, projectAssets);
   const nodes: React.ReactNode[] = [];
   let last = 0;
   let idx = 0;
-  let m: RegExpExecArray | null = null;
-  while ((m = re.exec(src)) !== null) {
-    if (m.index > last) {
-      nodes.push(...renderPlainPromptSegment(src.slice(last, m.index), `txt-${idx++}`));
+  for (const { token, index } of tokens) {
+    if (index > last) {
+      nodes.push(...renderPlainPromptSegment(src.slice(last, index), `txt-${idx++}`));
     }
-    const token = `@${m[1]}`;
     const kind = promptRefKindFromToken(token);
     nodes.push(
       <span key={`tok-${idx++}`} className={promptRefTokenTextClass(kind)}>
         {token}
       </span>
     );
-    last = m.index + m[0].length;
+    last = index + token.length;
   }
   if (last < src.length) {
     nodes.push(...renderPlainPromptSegment(src.slice(last), `tail-${idx++}`));
   }
-  return nodes;
+  return nodes.length > 0 ? nodes : null;
 }
 
 function NodeInspector({
@@ -524,6 +849,7 @@ function NodeInspector({
   onRun,
   projectAssetRefItems = [],
   projectAssetLabelRows = [],
+  projectAssetLibraryEnabled = false,
 }: NodeInspectorProps) {
   type SubjectCategory = '人物' | '动物' | '道具' | '服饰' | '场景' | '特效' | '其他';
   type LibraryItem = {
@@ -764,6 +1090,9 @@ function NodeInspector({
   // Ref for prompt textarea (for inserting image references)
   const promptTextareaRef = useRef<HTMLTextAreaElement>(null);
   const promptHighlightRef = useRef<HTMLDivElement>(null);
+  const promptHighlightInnerRef = useRef<HTMLDivElement>(null);
+  /** 受控 prompt 重渲染后恢复光标（避免空格/换行后 caret 错位） */
+  const pendingPromptSelectionRef = useRef<{ start: number; end: number } | null>(null);
   
   // State for library file selector modal
   const [showLibraryModal, setShowLibraryModal] = useState(false);
@@ -893,26 +1222,38 @@ function NodeInspector({
   ]);
 
   /** 有 firstFrameLocalRef / lastFrameLocalRef 时从 IDB 恢复 blob 预览（刷新或切回图生 tab） */
+  const frameHydrateTokenRef = useRef<{ nodeId: string; first?: string; last?: string }>({
+    nodeId: '',
+  });
   useEffect(() => {
+    if (frameHydrateTokenRef.current.nodeId !== nodeId) {
+      frameHydrateTokenRef.current = { nodeId };
+    }
     let cancelled = false;
     const hydrateSlot = async (
       ref: string | undefined,
       imgKey: 'firstFrameImage' | 'lastFrameImage',
-      urlKey: 'firstFrameImageUrl' | 'lastFrameImageUrl'
+      urlKey: 'firstFrameImageUrl' | 'lastFrameImageUrl',
+      tokenKey: 'first' | 'last'
     ) => {
       if (!ref) return;
       const cur = data[imgKey];
       const curUrl = data[urlKey];
       if (cur && isPersistableMediaUrl(cur)) return;
       if (curUrl && isPersistableMediaUrl(curUrl)) return;
-      if (cur && typeof cur === 'string' && cur.startsWith('blob:')) return;
+      if (cur && typeof cur === 'string' && cur.startsWith('blob:')) {
+        frameHydrateTokenRef.current[tokenKey] = ref;
+        return;
+      }
+      if (frameHydrateTokenRef.current[tokenKey] === ref) return;
       const blob = await getLocalMediaBlob(ref);
       if (!blob || cancelled) return;
       revokeBlobPreviewUrl(typeof cur === 'string' ? cur : undefined);
+      frameHydrateTokenRef.current[tokenKey] = ref;
       onUpdate({ [imgKey]: URL.createObjectURL(blob) });
     };
-    void hydrateSlot(data.firstFrameLocalRef, 'firstFrameImage', 'firstFrameImageUrl');
-    void hydrateSlot(data.lastFrameLocalRef, 'lastFrameImage', 'lastFrameImageUrl');
+    void hydrateSlot(data.firstFrameLocalRef, 'firstFrameImage', 'firstFrameImageUrl', 'first');
+    void hydrateSlot(data.lastFrameLocalRef, 'lastFrameImage', 'lastFrameImageUrl', 'last');
     return () => {
       cancelled = true;
     };
@@ -1002,6 +1343,26 @@ function NodeInspector({
     seedanceMode,
     data.referenceImages,
     data.referenceImageLabels,
+    projectAssetLabelRows,
+  ]);
+
+  /** Nano Banana 2.0：打开面板时写回去重后的 referenceImages（主图勿重复进「图片1」槽） */
+  useLayoutEffect(() => {
+    if (!isNanoBanana2Model(data.selectedModel)) return;
+    const patch = referenceImagesDedupePatchIfNeeded(data, {
+      dedupeAgainstMain: shouldDedupePanelRefsAgainstMainPreview(data),
+      projectAssets: projectAssetLabelRows,
+    });
+    if (!patch) return;
+    onUpdate(patch);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- 仅在槽位/主图变化时去重
+  }, [
+    nodeId,
+    data.selectedModel,
+    data.referenceImages,
+    data.referenceImageLabels,
+    data.imagePreview,
+    data.panelMainSlotVisible,
     projectAssetLabelRows,
   ]);
 
@@ -1277,7 +1638,7 @@ function NodeInspector({
     [data, promptMediaRefContext]
   );
 
-  /** @ 下拉仅面板已拖入素材（同资产名去重）；项目库全量用「扫描 @素材」 */
+  /** @ 下拉仅面板已拖入素材；项目库全量用「扫描 @素材」 */
   const promptMentionItems = useMemo(
     () => buildInspectorPromptMentionItems(data, promptMediaRefContext),
     [data, promptMediaRefContext]
@@ -1483,8 +1844,13 @@ function NodeInspector({
         ? getOmniVideoTabDisplayUrl(data)
         : undefined;
 
-  const omniTabVideoPosterUrl = (() => {
-    const u = omniTabVideoDisplayUrl;
+  const stableOmniTabVideoDisplayUrl = useStableInspectorMediaUrl(
+    omniTabVideoDisplayUrl,
+    isCurrentNodeRunning
+  );
+
+  const omniTabVideoPosterUrl = useMemo(() => {
+    const u = stableOmniTabVideoDisplayUrl;
     if (!u) return undefined;
     const movs = data.referenceMovs || [];
     const normalizeMediaUrl = (raw?: string) => {
@@ -1501,7 +1867,15 @@ function NodeInspector({
     const hit = movs.find((m) => normalizeMediaUrl(m.url) === target);
     if (hit?.posterDataUrl) return hit.posterDataUrl;
     return undefined;
-  })();
+  }, [stableOmniTabVideoDisplayUrl, data.referenceMovs]);
+
+  const registerInspectorVideoRef = useCallback((videoId: string, el: HTMLVideoElement | null) => {
+    videoRefs.current[videoId] = el;
+  }, []);
+
+  const setVideoPlayState = useCallback((videoId: string, playing: boolean) => {
+    setVideoPlayingMap((prev) => patchVideoPlayingMap(prev, videoId, playing));
+  }, []);
 
   const getKlingOmniTabText = (tab: 'multi' | 'instruction' | 'video' | 'frames') => {
     if (tab === 'multi') {
@@ -1653,39 +2027,13 @@ function NodeInspector({
     const before = text.slice(0, atIndex);
     const after = text.slice(cursor);
     const newText = before + item.insertText + after;
-    setPromptByContext(newText);
-    setMentionOpen(false);
-    setMentionCtx(null);
-    lastMentionSyncRef.current = null;
     const newPos = before.length + item.insertText.length;
-    requestAnimationFrame(() => {
-      if (promptTextareaRef.current) {
-        const el = promptTextareaRef.current;
-        el.focus();
-        el.setSelectionRange(newPos, newPos);
-      }
-    });
-  };
-
-  const insertPromptTokenAtCaret = (token: string) => {
-    const ta = promptTextareaRef.current;
-    const text = getInspectorPromptValue();
-    const start = ta?.selectionStart ?? text.length;
-    const end = ta?.selectionEnd ?? text.length;
-    const newText = text.substring(0, start) + token + text.substring(end);
-    // 点击上方「素材引用」标签是直接插入动作，不应继续保留 @ 提及下拉状态
+    pendingPromptSelectionRef.current = { start: newPos, end: newPos };
+    setPromptByContext(newText);
     setMentionOpen(false);
     setMentionCtx(null);
     lastMentionSyncRef.current = null;
-    setPromptByContext(newText);
-    const pos = start + token.length;
-    requestAnimationFrame(() => {
-      if (promptTextareaRef.current) {
-        const el = promptTextareaRef.current;
-        el.focus();
-        el.setSelectionRange(pos, pos);
-      }
-    });
+    requestAnimationFrame(() => promptTextareaRef.current?.focus());
   };
 
   const handlePromptChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
@@ -1693,13 +2041,9 @@ function NodeInspector({
     const v = el.value;
     const cursor = el.selectionStart ?? v.length;
     const selEnd = el.selectionEnd ?? cursor;
+    pendingPromptSelectionRef.current = { start: cursor, end: selEnd };
     setPromptByContext(v);
-    requestAnimationFrame(() => {
-      if (promptTextareaRef.current === el) {
-        el.setSelectionRange(cursor, selEnd);
-      }
     syncMentionFromPrompt(v, cursor);
-    });
   };
 
   /** 根据项目素材名在文中补全 @资产:…（与手动 @ 下拉分离，下拉不含资产库项） */
@@ -1727,23 +2071,49 @@ function NodeInspector({
     const newText = text.slice(0, start) + plain + text.slice(end);
     setPromptByContext(newText);
     const pos = start + plain.length;
+    pendingPromptSelectionRef.current = { start: pos, end: pos };
     requestAnimationFrame(() => {
       ta.focus();
-      ta.setSelectionRange(pos, pos);
       syncMentionFromPrompt(newText, pos);
     });
   };
-  const syncPromptHighlightScroll = (el: HTMLTextAreaElement) => {
+  const syncPromptHighlightScroll = useCallback((el: HTMLTextAreaElement) => {
     const hl = promptHighlightRef.current;
+    const inner = promptHighlightInnerRef.current;
     if (!hl) return;
     hl.scrollTop = el.scrollTop;
     hl.scrollLeft = el.scrollLeft;
-  };
+    if (inner) {
+      inner.style.minHeight = `${el.scrollHeight}px`;
+      inner.style.width = `${el.clientWidth}px`;
+    }
+  }, []);
+
+  useLayoutEffect(() => {
+    const ta = promptTextareaRef.current;
+    if (!ta) return;
+    const pending = pendingPromptSelectionRef.current;
+    if (pending) {
+      pendingPromptSelectionRef.current = null;
+      const len = ta.value.length;
+      const start = Math.min(pending.start, len);
+      const end = Math.min(pending.end, len);
+      try {
+        ta.setSelectionRange(start, end);
+      } catch {
+        /* ignore */
+      }
+    }
+    syncPromptHighlightScroll(ta);
+  }, [inspectorPromptValue, syncPromptHighlightScroll]);
 
   useEffect(() => {
     const ta = promptTextareaRef.current;
-    if (ta) syncPromptHighlightScroll(ta);
-  }, [inspectorPromptValue]);
+    if (!ta || typeof ResizeObserver === 'undefined') return;
+    const ro = new ResizeObserver(() => syncPromptHighlightScroll(ta));
+    ro.observe(ta);
+    return () => ro.disconnect();
+  }, [syncPromptHighlightScroll, nodeId]);
 
   const handlePromptKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
     const ta = e.currentTarget;
@@ -1990,7 +2360,7 @@ function NodeInspector({
     }
 
     if (Object.keys(patch).length > 0) {
-      if (isImage2) {
+      if (isImage2 && localStorage.getItem('flowgen:debugImage2') === '1') {
         try {
           const pr = (patch as Partial<NodeData>).referenceImages;
           console.info(
@@ -2047,11 +2417,19 @@ function NodeInspector({
     const ff = (data.firstFrameImage || '').trim();
     if (!main || !ff || ff !== main || !main.startsWith('blob:')) return;
     if (!data.imageLocalRef || data.firstFrameLocalRef) return;
-    onUpdate({
-      firstFrameLocalRef: data.imageLocalRef,
-      firstFrameImage: undefined,
-      firstFrameImageUrl: undefined,
-    });
+    let cancelled = false;
+    void (async () => {
+      const blob = await getLocalMediaBlob(data.imageLocalRef!);
+      if (!blob || cancelled) return;
+      onUpdate({
+        firstFrameLocalRef: data.imageLocalRef,
+        firstFrameImage: URL.createObjectURL(blob),
+        firstFrameImageUrl: undefined,
+      });
+    })();
+    return () => {
+      cancelled = true;
+    };
   }, [
     isSeedance20,
     seedanceMode,
@@ -2945,14 +3323,8 @@ function NodeInspector({
     onUpdate(removed);
   };
 
-  const removeMainPreview = () => {
-    revokeBlobPreviewUrl(data.imagePreview);
-    onUpdate({ imagePreview: undefined, imageName: undefined, panelMainSlotVisible: undefined });
-  };
-
   const removeImage2RefSlot = (slotIdx: number) => {
     if (image2ShowMainInRefGrid && slotIdx === 0) {
-      removeMainPreview();
       return;
     }
     const refIndex = image2ShowMainInRefGrid ? slotIdx - 1 : slotIdx;
@@ -3047,9 +3419,7 @@ function NodeInspector({
     const el = videoRefs.current[id];
     if (!el) return;
     const markPlaying = (playing: boolean) =>
-      setVideoPlayingMap((prev) =>
-        prev[id] === playing ? prev : { ...prev, [id]: playing }
-      );
+      setVideoPlayingMap((prev) => patchVideoPlayingMap(prev, id, playing));
 
     try {
       if (!el.paused && !el.ended) {
@@ -3278,7 +3648,7 @@ function NodeInspector({
       if (isCurrentNodeRunning) return;
       try {
         try {
-          if (isImage2) {
+          if (isImage2 && localStorage.getItem('flowgen:debugImage2') === '1') {
             console.info(
               `[FlowGen:image2-debug] inspector-click-run ${JSON.stringify(
                 {
@@ -3304,7 +3674,7 @@ function NodeInspector({
         await onRun(nodeId);
       } catch (err) {
         try {
-          if (isImage2) {
+          if (isImage2 && localStorage.getItem('flowgen:debugImage2') === '1') {
             console.info(
               `[FlowGen:image2-debug] inspector-run-catch ${JSON.stringify(
                 {
@@ -3708,177 +4078,6 @@ function NodeInspector({
   const librarySubjectThumbUrls = (it: LibraryItem) =>
     [...new Set([it.url, ...(it.views || [])].filter(Boolean))].slice(0, 8);
 
-  // --- Helper Component for Keling Drop Zones（上传时用原图）---
-  const FrameDropZone = ({
-    nodeId: zoneNodeId,
-    frameType,
-    label,
-    image,
-    imageUrl,
-    imageData,
-    onImageUpdate,
-    displayUrl,
-    showImage = true,
-    compact = false,
-    mediaRefCaption,
-  }: {
-    nodeId: string;
-    frameType: 'firstFrame' | 'lastFrame';
-    label: string;
-    /** @deprecated 使用 imageUrl + imageData */
-    image?: string;
-    imageUrl?: string;
-    imageData?: string;
-    onImageUpdate: (img?: string) => void;
-    displayUrl?: string;
-    showImage?: boolean;
-    compact?: boolean;
-    /** 与创意描述 @ 引用一致，如 图片1 / 图片2 */
-    mediaRefCaption?: string;
-  }) => {
-     const [isZoneDragOver, setIsZoneDragOver] = useState(false);
-     const fileInputRef = useRef<HTMLInputElement>(null);
-     const hasImage = Boolean(
-       String(imageUrl || '').trim() ||
-         String(imageData || '').trim() ||
-         String(image || '').trim()
-     );
-     const displaySrc =
-       resolveInspectorFramePreviewUrl(imageUrl, imageData) ||
-       (image ? resolveDisplayMediaUrl(image) : '');
-
-     const registerOriginal = (file: File) => {
-       window.dispatchEvent(new CustomEvent('flowgen:register-original-image', { detail: { nodeId: zoneNodeId, file, type: frameType } }));
-     };
-
-     const handleDrop = (e: React.DragEvent) => {
-        e.preventDefault();
-        e.stopPropagation();
-        setIsZoneDragOver(false);
-        if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
-            const file = e.dataTransfer.files[0];
-            if (file.type.startsWith('image/') || /\.(jpe?g|png|webp|gif)$/i.test(file.name)) {
-                registerOriginal(file);
-                compressImageForPreview(file).then(onImageUpdate).catch(() => {
-                    const reader = new FileReader();
-                    reader.onload = (ev) => { if (ev.target?.result) onImageUpdate(ev.target.result as string); };
-                    reader.readAsDataURL(file);
-                });
-            }
-            return;
-        }
-        const internalUrl = extractInspectorDragUrl(e.dataTransfer);
-        if (internalUrl) {
-            void normalizeInspectorIngestImageUrl(internalUrl).then(onImageUpdate);
-        }
-     };
-
-     const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
-        if (e.target.files && e.target.files.length > 0) {
-            const file = e.target.files[0];
-            registerOriginal(file);
-            compressImageForPreview(file).then((dataUrl) => onImageUpdate(dataUrl)).catch(() => {
-                const reader = new FileReader();
-                reader.onload = (ev) => { if (ev.target?.result) onImageUpdate(ev.target.result as string); };
-                reader.readAsDataURL(file);
-            });
-        }
-        if (fileInputRef.current) fileInputRef.current.value = '';
-     };
-
-     return (
-        <div 
-            className={`
-                flex-1 rounded-lg border-2 border-dashed relative overflow-hidden transition-all group cursor-pointer
-                ${compact ? 'h-full' : 'aspect-[4/3]'}
-                ${isZoneDragOver ? 'border-brand-500 bg-brand-500/10' : 'border-gray-700 bg-gray-950/50 hover:border-gray-600'}
-            `}
-            data-flowgen-media-drop="1"
-            data-flowgen-node-id={zoneNodeId}
-            data-flowgen-drop-zone={frameType === 'firstFrame' ? 'first-frame' : 'last-frame'}
-            onDragOver={(e) => { e.preventDefault(); e.stopPropagation(); setIsZoneDragOver(true); }}
-            onDragLeave={(e) => { e.preventDefault(); e.stopPropagation(); setIsZoneDragOver(false); }}
-            onDrop={handleDrop}
-            onClick={() => fileInputRef.current?.click()}
-        >
-            <input 
-                type="file" 
-                ref={fileInputRef} 
-                className="hidden" 
-                accept="image/*"
-                onChange={handleFileSelect}
-            />
-
-            {hasImage ? (
-                <>
-                    {showImage && displaySrc ? (
-                        <img src={displaySrc} alt={label} className="w-full h-full object-cover" />
-                    ) : null}
-                    {/* 图片引用标签（左上角）：未使用 mediaRefCaption 时保留原 [首帧图] 标记 */}
-                    {!mediaRefCaption && (
-                      <div className={`absolute top-1 left-1 bg-black/70 text-white font-bold rounded z-10 pointer-events-none ${compact ? 'text-[8px] px-1.5 py-0.5' : 'text-[9px] px-1.5 py-0.5'}`}>
-                        {label === '首帧图' ? '[首帧图]' : label === '尾帧图' ? '[尾帧图]' : label}
-                    </div>
-                    )}
-                    {/* Delete Button - Top Right (always show if image exists, even when showImage=false) */}
-                    <button 
-                        onClick={(e) => {
-                             e.stopPropagation();
-                             onImageUpdate(undefined);
-                        }}
-                        className="absolute top-1 right-1 p-1 bg-black/60 hover:bg-red-500 text-white rounded-full opacity-0 group-hover:opacity-100 transition-all z-10 backdrop-blur-sm"
-                        title="Remove image"
-                    >
-                        <X size={12} />
-                    </button>
-                    {/* 底部标签：与 @ 引用一致时仅显示 图片n */}
-                    {mediaRefCaption ? (
-                      <div className="absolute bottom-0 left-0 right-0 bg-black/70 backdrop-blur-sm z-10 pointer-events-none">
-                        <div className={`text-center text-white font-medium ${compact ? 'text-[9px] py-1' : 'text-[10px] py-1'}`}>
-                          {mediaRefCaption}
-                        </div>
-                      </div>
-                    ) : (
-                    <div className="absolute bottom-0 left-0 right-0 bg-black/70 backdrop-blur-sm">
-                        <div className={`text-center text-gray-300 font-medium pointer-events-none ${compact ? 'text-[9px] py-0.5' : 'text-[10px] py-1'}`}>
-                            {label}
-                        </div>
-                        {displayUrl && (
-                            <div className="px-1 pb-1">
-                                <div className="bg-gray-900/80 rounded px-1.5 py-0.5 text-[8px] text-gray-400 font-mono truncate select-all pointer-events-auto">
-                                    {displayUrl}
-                                </div>
-                            </div>
-                        )}
-                    </div>
-                    )}
-                    {/* When showImage=false, show a placeholder to indicate image is set (but don't load the image) */}
-                    {!showImage && (
-                        <div className="absolute inset-0 flex flex-col items-center justify-center gap-1.5 text-gray-500 pointer-events-none bg-gray-950/30">
-                            <div className="p-2 rounded-md border border-dashed border-gray-600 bg-gray-900/50">
-                                <ImageIcon size={16} />
-                            </div>
-                            <span className="text-[10px] font-medium">已设置 {label}</span>
-                            {displayUrl && (
-                                <span className="text-[8px] text-gray-600 font-mono truncate max-w-[90%]">
-                                    {displayUrl.substring(0, 30)}...
-                                </span>
-                            )}
-                        </div>
-                    )}
-                </>
-            ) : (
-                <div className={`absolute inset-0 flex flex-col items-center justify-center text-gray-600 pointer-events-none ${compact ? 'gap-1' : 'gap-1.5'}`}>
-                    <div className={`rounded-md border border-dashed border-gray-700 ${compact ? 'p-1' : 'p-1.5'}`}>
-                        <Plus size={compact ? 12 : 14} />
-                    </div>
-                    <span className={`${compact ? 'text-[9px]' : 'text-[10px]'} font-medium`}>{label}</span>
-                </div>
-            )}
-        </div>
-     );
-  }
-
   firstFrameFromUrlRef.current = (url: string, kind?: 'image' | 'video', meta?: { assetName?: string }) => {
     if (!url || isInspectorIncomingVideoUrl(url, kind)) return;
     const displayName =
@@ -4147,123 +4346,44 @@ function NodeInspector({
                             </div>
                                 )}
                             </div>
-                            {klingOmniTab !== 'multi' && omniTabVideoDisplayUrl && (
-                                <div className="p-2 rounded-lg border border-gray-800 bg-gray-950/30 flex items-center gap-2">
-                                    <div className="relative w-28 h-16 rounded overflow-hidden bg-gray-900 shrink-0 border border-gray-800">
-                                      {omniTabVideoPosterUrl &&
-                                        !videoPlayingMap[`omni-video-preview-${nodeId}-${klingOmniTab}`] && (
-                                          <img
-                                            src={omniTabVideoPosterUrl}
-                                            alt=""
-                                            className="absolute inset-0 z-[1] w-full h-full object-cover pointer-events-none"
-                                          />
-                                        )}
-                                      <video
-                                        id={`omni-video-preview-${nodeId}-${klingOmniTab}`}
-                                        ref={(el) => {
-                                          videoRefs.current[`omni-video-preview-${nodeId}-${klingOmniTab}`] = el;
-                                        }}
-                                        src={inspectorVideoDisplaySrc(omniTabVideoDisplayUrl)}
-                                        className="w-full h-full object-cover"
-                                        controls
-                                        preload="auto"
-                                        playsInline
-                                        muted
-                                        style={
-                                          omniTabVideoPosterUrl &&
-                                          !videoPlayingMap[`omni-video-preview-${nodeId}-${klingOmniTab}`]
-                                            ? { opacity: 0, pointerEvents: 'none' as const }
-                                            : undefined
-                                        }
-                                        onLoadedMetadata={() =>
-                                          setVideoPlayingMap((prev) => ({
-                                            ...prev,
-                                            [`omni-video-preview-${nodeId}-${klingOmniTab}`]: false,
-                                          }))
-                                        }
-                                        onPlay={() =>
-                                          setVideoPlayingMap((prev) => ({
-                                            ...prev,
-                                            [`omni-video-preview-${nodeId}-${klingOmniTab}`]: true,
-                                          }))
-                                        }
-                                        onPause={() =>
-                                          setVideoPlayingMap((prev) => ({
-                                            ...prev,
-                                            [`omni-video-preview-${nodeId}-${klingOmniTab}`]: false,
-                                          }))
-                                        }
-                                        onEnded={() =>
-                                          setVideoPlayingMap((prev) => ({
-                                            ...prev,
-                                            [`omni-video-preview-${nodeId}-${klingOmniTab}`]: false,
-                                          }))
-                                        }
-                                      />
-                                      <div className="absolute bottom-0 left-0 right-0 z-[2] bg-black/70 text-white text-[9px] font-medium text-center py-0.5 pointer-events-none">
-                                        {(() => {
-                                          const mainPrev = data.imagePreview?.trim();
-                                          const isMainVideo =
-                                            !!mainPrev &&
-                                            isLikelyMainVideoUrl(mainPrev) &&
-                                            mainPrev === omniTabVideoDisplayUrl;
-                                          return isMainVideo ? '主视频' : '视频1';
-                                        })()}
-                                      </div>
-                                    </div>
-                                    <div className="flex-1 min-w-0">
-                                        <p className="text-[10px] text-gray-300 truncate">
-                                          {(() => {
-                                            const mainPrev = data.imagePreview?.trim();
-                                            const isMainVideo =
-                                              !!mainPrev &&
-                                              isLikelyMainVideoUrl(mainPrev) &&
-                                              mainPrev === omniTabVideoDisplayUrl;
-                                            return isMainVideo ? '已选主视频' : '已选视频素材';
-                                          })()}
-                                        </p>
-                                        <p className="text-[9px] text-gray-500 truncate">将用于可灵3.0 Omni 的指令/视频参考</p>
-                                    </div>
-                                    <button
-                                        type="button"
-                                        title={
-                                          videoPlayingMap[`omni-video-preview-${nodeId}-${klingOmniTab}`] ? '暂停视频' : '播放视频'
-                                        }
-                                        onClick={() => toggleVideoById(`omni-video-preview-${nodeId}-${klingOmniTab}`)}
-                                        className="p-1.5 rounded hover:bg-gray-800 text-gray-400 hover:text-white transition-colors"
-                                    >
-                                        {videoPlayingMap[`omni-video-preview-${nodeId}-${klingOmniTab}`] ? (
-                                          <Pause size={14} />
-                                        ) : (
-                                          <Play size={14} />
-                                        )}
-                                    </button>
-                                    <button
-                                        type="button"
-                                        title="移除视频素材"
-                                        onClick={() => {
-                                            window.dispatchEvent(new CustomEvent('flowgen:register-original-image', { detail: { nodeId, type: 'klingOmniVideoRemove' } }));
-                                            if (klingOmniTab === 'instruction') {
-                                                onUpdate({
-                                                    klingOmniInstructionVideoPreviewUrl: undefined,
-                                                    klingOmniInstructionVideoUrl: undefined,
-                                                    klingOmniInstructionVideoManuallyCleared: true,
-                                                    referenceMovs: [],
-                                                });
-                                            } else {
-                                                onUpdate({
-                                                    klingOmniVideoPreviewUrl: undefined,
-                                                    klingOmniVideoUrl: undefined,
-                                                    klingOmniVideoManuallyCleared: true,
-                                                    referenceMovs: [],
-                                                });
-                                            }
-                                        }}
-                                        className="p-1.5 rounded hover:bg-gray-800 text-gray-400 hover:text-white transition-colors"
-                                    >
-                                        <X size={14} />
-                                    </button>
-                                </div>
+                            {klingOmniTab !== 'multi' && stableOmniTabVideoDisplayUrl && (
+                                <InspectorOmniTabVideoPreview
+                                  nodeId={nodeId}
+                                  omniTab={klingOmniTab as 'instruction' | 'video'}
+                                  displayUrl={stableOmniTabVideoDisplayUrl}
+                                  posterUrl={omniTabVideoPosterUrl}
+                                  mainPreview={data.imagePreview}
+                                  videoRefRegister={registerInspectorVideoRef}
+                                  isPlaying={Boolean(
+                                    videoPlayingMap[
+                                      `omni-video-preview-${nodeId}-${klingOmniTab}`
+                                    ]
+                                  )}
+                                  onVideoPlayStateChange={setVideoPlayState}
+                                  onTogglePlay={toggleVideoById}
+                                  onRemove={() => {
+                                    window.dispatchEvent(
+                                      new CustomEvent('flowgen:register-original-image', {
+                                        detail: { nodeId, type: 'klingOmniVideoRemove' },
+                                      })
+                                    );
+                                    if (klingOmniTab === 'instruction') {
+                                      onUpdate({
+                                        klingOmniInstructionVideoPreviewUrl: undefined,
+                                        klingOmniInstructionVideoUrl: undefined,
+                                        klingOmniInstructionVideoManuallyCleared: true,
+                                        referenceMovs: [],
+                                      });
+                                    } else {
+                                      onUpdate({
+                                        klingOmniVideoPreviewUrl: undefined,
+                                        klingOmniVideoUrl: undefined,
+                                        klingOmniVideoManuallyCleared: true,
+                                        referenceMovs: [],
+                                      });
+                                    }
+                                  }}
+                                />
                             )}
                             <div
                                 className={`
@@ -4282,7 +4402,7 @@ function NodeInspector({
                                     !omniInspectorShowMainImageSlot &&
                                     !(
                                         (klingOmniTab === 'instruction' || klingOmniTab === 'video') &&
-                                        omniTabVideoDisplayUrl
+                                        stableOmniTabVideoDisplayUrl
                                     )
                                 ) ? (
                                     <div className="absolute inset-0 flex flex-col items-center justify-center text-gray-600 gap-2 p-3 pointer-events-none">
@@ -4343,17 +4463,9 @@ function NodeInspector({
                                                     alt="main"
                                                     className="w-full h-full object-cover"
                                                   />
-                                                  <div className="absolute bottom-0 left-0 right-0 bg-black/70 text-white text-[9px] font-medium text-center py-0.5 pointer-events-none z-[1]">
+                                  <div className="absolute bottom-0 left-0 right-0 bg-black/70 text-white text-[9px] font-medium text-center py-0.5 pointer-events-none z-[1]">
                                                     {mainImageSlotCaption}
                                                   </div>
-                                                  <button
-                                                    type="button"
-                                                    onClick={removeMainPreview}
-                                                    className="absolute top-1 right-1 p-0.5 bg-black/60 hover:bg-red-500 text-white rounded opacity-0 group-hover:opacity-100 transition-opacity z-[2]"
-                                                    title="移除"
-                                                  >
-                                                    <X size={12} />
-                                                  </button>
                                                 </div>
                                               );
                                             }
@@ -4375,7 +4487,7 @@ function NodeInspector({
                                                   data.imageName
                                             );
                                             return (
-                                            <div key={`ref-${cellIdx}-${origIdx}`} className="group relative aspect-square rounded overflow-hidden border border-gray-800 bg-black">
+                                            <div key={`ref-${img}`} className="group relative aspect-square rounded overflow-hidden border border-gray-800 bg-black">
                                                 {isVid ? (
                                                     <KlingOmniVideoThumb src={img} className="w-full h-full object-cover" alt="ref" />
                                                 ) : (
@@ -4681,29 +4793,14 @@ function NodeInspector({
                                                     ? { opacity: 0, pointerEvents: 'none' as const }
                                                     : undefined
                                                 }
-                                                onLoadedMetadata={() =>
-                                                  setVideoPlayingMap((prev) => ({
-                                                    ...prev,
-                                                    [`seedance-ref-video-${nodeId}-${vi}`]: false,
-                                                  }))
-                                                }
                                                 onPlay={() =>
-                                                  setVideoPlayingMap((prev) => ({
-                                                    ...prev,
-                                                    [`seedance-ref-video-${nodeId}-${vi}`]: true,
-                                                  }))
+                                                  setVideoPlayState(`seedance-ref-video-${nodeId}-${vi}`, true)
                                                 }
                                                 onPause={() =>
-                                                  setVideoPlayingMap((prev) => ({
-                                                    ...prev,
-                                                    [`seedance-ref-video-${nodeId}-${vi}`]: false,
-                                                  }))
+                                                  setVideoPlayState(`seedance-ref-video-${nodeId}-${vi}`, false)
                                                 }
                                                 onEnded={() =>
-                                                  setVideoPlayingMap((prev) => ({
-                                                    ...prev,
-                                                    [`seedance-ref-video-${nodeId}-${vi}`]: false,
-                                                  }))
+                                                  setVideoPlayState(`seedance-ref-video-${nodeId}-${vi}`, false)
                                                 }
                                               />
                                               <div className="absolute bottom-0 left-0 right-0 z-[2] bg-black/70 text-white text-[9px] font-medium text-center py-0.5 pointer-events-none">
@@ -4959,6 +5056,7 @@ function NodeInspector({
                                   <div className="absolute bottom-0 left-0 right-0 bg-black/70 text-white text-[9px] font-medium text-center py-0.5 pointer-events-none">
                                     {slotLabel}
                                   </div>
+                                  {!isMainSlot && (
                                   <button
                                     type="button"
                                     title="移除"
@@ -4967,6 +5065,7 @@ function NodeInspector({
                                   >
                                     <X size={12} />
                                   </button>
+                                  )}
                                 </div>
                               ) : showAdd ? (
                                 <button
@@ -5097,11 +5196,23 @@ function NodeInspector({
                         shouldShowPanelMainImageSlot(data) &&
                         !nanoHideVideoMain;
                       const refList = data.referenceImages || [];
-                      const refSlots = buildPanelReferenceDisplayEntries(refList, {
+                      let refDisplayEntries = buildPanelReferenceDisplayEntries(refList, {
                         imagePreview: data.imagePreview,
                         dedupeAgainstMain:
                           isNano && shouldDedupePanelRefsAgainstMainPreview(data),
-                      })
+                        referenceImageLabels: data.referenceImageLabels,
+                        projectAssets: projectAssetLabelRows,
+                      });
+                      if (isNano && showMainInRefGrid) {
+                        refDisplayEntries = filterPanelReferenceDisplayEntriesExcludingMainPreview(
+                          refDisplayEntries,
+                          data.imagePreview,
+                          data.imageName,
+                          data.referenceImageLabels,
+                          projectAssetLabelRows
+                        );
+                      }
+                      const refSlots = refDisplayEntries
                         .filter(({ url }) => !isNano || !isLikelyMainVideoUrl(url))
                         .map(({ url, slotIndex }) => ({ img: url, idx: slotIndex }));
                       const showEmptyHint = refSlots.length === 0 && !showMainInRefGrid;
@@ -5151,14 +5262,6 @@ function NodeInspector({
                                 <div className="absolute bottom-0 left-0 right-0 bg-black/70 text-white text-[9px] font-medium text-center py-0.5 pointer-events-none">
                                   {mainImageSlotCaption}
                                 </div>
-                                <button
-                                  type="button"
-                                  title="移除"
-                                  onClick={removeMainPreview}
-                                  className="absolute top-1 right-1 p-0.5 bg-black/60 hover:bg-red-500 text-white rounded opacity-0 group-hover:opacity-100 transition-opacity z-[2]"
-                                >
-                                  <X size={12} />
-                                </button>
                               </div>
                             )}
                             {refSlots.map(({ img, idx }) => (
@@ -5209,19 +5312,22 @@ function NodeInspector({
                 <Type className="text-purple-400 w-3 h-3" />
                 <span className="text-[10px] font-bold text-gray-400 uppercase tracking-wider">创意描述</span>
               </div>
-              {(promptMentionItems.length > 0 || projectAssetScanRows.length > 0) && (
+              {projectAssetLibraryEnabled && (
                 <div className="flex flex-wrap items-center gap-1.5 justify-end max-w-[70%]">
                   <span className="text-[9px] text-gray-500 shrink-0">素材引用:</span>
-                  {projectAssetScanRows.length > 0 && (
-                    <button
-                      type="button"
-                      onClick={runScanProjectAssetsOnPrompt}
-                      className="text-[9px] px-1.5 py-0.5 rounded border border-fuchsia-500/40 text-fuchsia-300 hover:bg-fuchsia-500/15 shrink-0"
-                      title="根据当前项目素材名，在文中补全 @资产:…"
-                    >
-                      扫描 @素材
-                    </button>
-                  )}
+                  <button
+                    type="button"
+                    onClick={runScanProjectAssetsOnPrompt}
+                    disabled={projectAssetScanRows.length === 0}
+                    className="text-[9px] px-1.5 py-0.5 rounded border border-fuchsia-500/40 text-fuchsia-300 hover:bg-fuchsia-500/15 shrink-0 disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:bg-transparent"
+                    title={
+                      projectAssetScanRows.length > 0
+                        ? '根据当前项目素材名，在文中补全 @资产:…'
+                        : '项目素材库为空或仍在加载，暂无法扫描'
+                    }
+                  >
+                    扫描 @素材
+                  </button>
                 </div>
               )}
             </div>
@@ -5276,16 +5382,21 @@ function NodeInspector({
                   {inspectorPromptValue.length > 0 && (
                     <div
                       ref={promptHighlightRef}
-                      className={`absolute inset-0 z-[1] pointer-events-none overflow-auto custom-scrollbar ${INSPECTOR_PROMPT_TEXT_CLASS}`}
+                      className="absolute inset-0 z-[1] pointer-events-none overflow-hidden custom-scrollbar"
+                      aria-hidden
                     >
-                      {renderPromptWithTokenHighlights(inspectorPromptValue)}
+                      <div ref={promptHighlightInnerRef} className={`${INSPECTOR_PROMPT_TYPO_CLASS} text-gray-200`}>
+                        {renderPromptWithTokenHighlights(inspectorPromptValue, projectAssetLabelRows)}
+                      </div>
                     </div>
                   )}
                   <textarea
                       ref={promptTextareaRef}
                       style={{ minHeight: inspectorPanelHeights.promptTextMinPx }}
-                      className={`relative z-[2] bg-transparent resize-none focus:outline-none custom-scrollbar placeholder:text-gray-700 selection:bg-brand-500/30 ${INSPECTOR_PROMPT_TEXT_CLASS} ${
-                        inspectorPromptValue.length > 0 ? 'text-transparent caret-gray-200' : 'text-gray-200'
+                      className={`relative z-[2] block bg-transparent resize-none overflow-y-scroll focus:outline-none custom-scrollbar placeholder:text-gray-700 selection:bg-brand-500/30 ${INSPECTOR_PROMPT_TEXT_CLASS} ${
+                        inspectorPromptValue.length > 0
+                          ? 'text-transparent [caret-color:rgb(229,231,235)] [-webkit-text-fill-color:transparent]'
+                          : 'text-gray-200'
                       }`}
                       placeholder={
                           isJimeng
@@ -5295,7 +5406,7 @@ function NodeInspector({
                             : isSeedance20 && seedanceMode === 'text'
                               ? '模板：先写【身份锁定】→【仅允许变化】→【禁止变化】→【画面要求】'
                               : promptMentionItems.length > 0
-                                ? '模板：先写【身份锁定：严格保持@主图人物脸/年龄不变】→【仅允许变化】→【禁止变化】→【画面要求】。输入 @ 可引用主图/主视频、首尾帧与拖入素材；项目素材请用「扫描 @素材」'
+                                ? '模板：先写【身份锁定：严格保持@主图人物脸/年龄不变】→【仅允许变化】→【禁止变化】→【画面要求】。输入 @ 可引用主图/主视频、首尾帧与面板已拖入素材；项目库素材请用「扫描 @素材」'
                                 : '模板：先写【身份锁定】→【仅允许变化】→【禁止变化】→【画面要求】。有主预览或参考素材后可输入 @'
                       }
                       value={inspectorPromptValue}
@@ -5304,6 +5415,9 @@ function NodeInspector({
                       onPaste={handlePromptPaste}
                       onScroll={(e) => syncPromptHighlightScroll(e.currentTarget)}
                       onFocus={(e) => syncPromptHighlightScroll(e.currentTarget)}
+                      onSelect={(e) => syncPromptHighlightScroll(e.currentTarget)}
+                      onKeyUp={(e) => syncPromptHighlightScroll(e.currentTarget)}
+                      onClick={(e) => syncPromptHighlightScroll(e.currentTarget)}
                   />
                 </div>
             </div>

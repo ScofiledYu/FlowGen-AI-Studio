@@ -7,15 +7,49 @@ const BASE = '/flowgen-api';
 export const FLOWGEN_TOKEN_KEY = 'flowgen_token';
 export const FLOWGEN_USER_KEY = 'flowgen_user';
 
+export type FlowgenUserListResponse = {
+  users: FlowgenUser[];
+  total: number;
+  page: number;
+  pageSize: number;
+  totalPages: number;
+  summary?: {
+    totalUsers: number;
+    admins: number;
+    active: number;
+    disabled: number;
+  };
+  facets?: {
+    centers: string[];
+    departments: string[];
+    baseLocations: string[];
+  };
+};
+
 export type FlowgenUser = {
   id: string;
   username: string;
   role: string;
   displayName?: string;
+  center?: string;
+  department?: string;
+  baseLocation?: string;
+  status?: string;
   extendedJson?: Record<string, unknown>;
   mustChangePassword?: boolean;
   /** 管理员列表接口附带：该用户所在项目（与 /projects/:id/members 同源） */
   projects?: Array<{ id: string; name: string }>;
+};
+
+export type ListUsersParams = {
+  q?: string;
+  role?: string;
+  center?: string;
+  department?: string;
+  baseLocation?: string;
+  status?: string;
+  page?: number;
+  pageSize?: number;
 };
 
 function authHeaders(): HeadersInit {
@@ -339,6 +373,7 @@ export async function clearProjectCover(projectId: string) {
   return flowgenFetch<{ ok: boolean; coverImage: null }>(`/projects/${pid}/cover`, { method: 'DELETE' });
 }
 
+/** @deprecated 项目由 AITOP 管理，服务端已禁用 DELETE /projects */
 export async function deleteProject(projectId: string) {
   const pid = encodeURIComponent(projectId);
   return flowgenFetch<{ ok: true }>(`/projects/${pid}`, { method: 'DELETE' });
@@ -375,6 +410,8 @@ export async function listAssets(projectId: string) {
       id: string;
       name: string;
       category?: string;
+      episode?: string;
+      sequence?: string;
       url: string;
       thumbUrl?: string;
       mime: string;
@@ -387,6 +424,8 @@ export type FlowgenAssetMeta = {
   id: string;
   name: string;
   category?: string;
+  episode?: string;
+  sequence?: string;
   url: string;
   mime: string;
   createdAt: string;
@@ -402,7 +441,13 @@ export async function getAssetMeta(projectId: string, assetId: string) {
   return flowgenFetch<{ asset: FlowgenAssetMeta }>(`/projects/${pid}/assets/${aid}`);
 }
 
-export async function uploadAsset(projectId: string, file: File, name?: string, category?: string) {
+export async function uploadAsset(
+  projectId: string,
+  file: File,
+  name?: string,
+  category?: string,
+  meta?: { episode?: string; sequence?: string }
+) {
   const fd = new FormData();
   const assetName = String(name ?? '').trim() || file.name || 'asset';
   /**
@@ -413,6 +458,8 @@ export async function uploadAsset(projectId: string, file: File, name?: string, 
   const tag = uiCategoryToKlingSubjectTag(labelZh);
   fd.append('name', assetName);
   fd.append('flowgen_asset_tag', tag);
+  if (meta?.episode) fd.append('episode', meta.episode);
+  if (meta?.sequence) fd.append('sequence', meta.sequence);
   fd.append('file', file);
   const t = getStoredToken();
   const qs = new URLSearchParams();
@@ -553,7 +600,7 @@ function errorMessageFromFlowgenResponse(res: Response, data: unknown): string {
 export async function patchAsset(
   projectId: string,
   assetId: string,
-  body: { name?: string; category?: string; tag?: string }
+  body: { name?: string; category?: string; tag?: string; episode?: string; sequence?: string }
 ) {
   const pid = encodeURIComponent(projectId);
   const aid = encodeURIComponent(assetId);
@@ -569,6 +616,8 @@ export async function patchAsset(
     jsonPayload.category = c;
     jsonPayload.tag = c;
   }
+  if (body.episode !== undefined) jsonPayload.episode = String(body.episode).trim();
+  if (body.sequence !== undefined) jsonPayload.sequence = String(body.sequence).trim();
 
   const run = async (url: string, method: string) => {
     const res = await fetch(url, {
@@ -666,18 +715,27 @@ export async function deleteAsset(projectId: string, assetId: string) {
 
 /** --- Admin --- */
 
-export async function listUsers(q?: string, role?: string) {
+export async function listUsers(params?: ListUsersParams) {
   const p = new URLSearchParams();
-  if (q) p.set('q', q);
-  if (role) p.set('role', role);
+  if (params?.q) p.set('q', params.q);
+  if (params?.role) p.set('role', params.role);
+  if (params?.center) p.set('center', params.center);
+  if (params?.department) p.set('department', params.department);
+  if (params?.baseLocation) p.set('baseLocation', params.baseLocation);
+  if (params?.status) p.set('status', params.status);
+  if (params?.page) p.set('page', String(params.page));
+  if (params?.pageSize) p.set('pageSize', String(params.pageSize));
   const qs = p.toString();
-  return flowgenFetch<{ users: FlowgenUser[] }>(`/users${qs ? `?${qs}` : ''}`);
+  return flowgenFetch<FlowgenUserListResponse>(`/users${qs ? `?${qs}` : ''}`);
 }
 
 export async function createUser(body: {
   username: string;
   password: string;
   role?: string;
+  center?: string;
+  department?: string;
+  baseLocation?: string;
   status?: string;
   extendedJson?: Record<string, unknown>;
 }) {
@@ -686,7 +744,16 @@ export async function createUser(body: {
 
 export async function patchUser(
   id: string,
-  body: { password?: string; role?: string; center?: string; status?: string; extendedJson?: Record<string, unknown>; mustChangePassword?: boolean }
+  body: {
+    password?: string;
+    role?: string;
+    center?: string;
+    department?: string;
+    baseLocation?: string;
+    status?: string;
+    extendedJson?: Record<string, unknown>;
+    mustChangePassword?: boolean;
+  }
 ) {
   return flowgenFetch(`/users/${encodeURIComponent(id)}`, { method: 'PATCH', json: body });
 }

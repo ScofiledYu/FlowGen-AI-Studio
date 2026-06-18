@@ -100,8 +100,11 @@ export type SeedanceAspectRatioSetting = '自动匹配' | SeedanceTextRefAspectR
 /** seedance2.0 参考生视频：比例策略 */
 export type SeedanceReferenceRatioMode = 'force' | 'auto';
 
-/** 侧栏 / selectedModel 使用的 Nano 图生模型名（对接 AiTop platform: NANO_BANANA_2） */
+/** 侧栏 / selectedModel 使用的 Nano 图生模型名（对接 AiTop platform: NANO_BANANA_2_FLASH） */
 export const MODEL_NANO_BANANA_2 = 'Nano Banana 2.0';
+
+/** AiTop nanoBanana 接口 platform 字段 */
+export const AITOP_PLATFORM_NANO_BANANA_2 = 'NANO_BANANA_2_FLASH';
 
 const LEGACY_NANO_BANANA_MODEL_IDS = ['Nano Banana Pro(生图)', 'Nano Banana Pro'] as const;
 

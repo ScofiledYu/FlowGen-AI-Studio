@@ -26,6 +26,20 @@ async function main() {
   });
   try {
     await conn.query(sql);
+    for (const [col, ddl] of [
+      ['episode', 'ADD COLUMN episode VARCHAR(16) NULL DEFAULT NULL'],
+      ['sequence', 'ADD COLUMN sequence VARCHAR(16) NULL DEFAULT NULL'],
+    ]) {
+      const [existing] = await conn.query(
+        `SELECT COLUMN_NAME FROM information_schema.COLUMNS
+         WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'flowgen_assets' AND COLUMN_NAME = ?`,
+        [col]
+      );
+      if (!existing.length) {
+        await conn.query(`ALTER TABLE flowgen_assets ${ddl}`);
+        console.log(`[mysql-init-v2] migrated flowgen_assets.${col}`);
+      }
+    }
     const [tables] = await conn.query(
       `SELECT TABLE_NAME FROM information_schema.TABLES
        WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME LIKE 'flowgen_%'

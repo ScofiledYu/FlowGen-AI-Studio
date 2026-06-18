@@ -41,22 +41,39 @@ export function canAccessProject(store, user, projectId) {
   return isMember(store, projectId, user.id);
 }
 
-/** 项目资产库：普通用户只读；项目管理员与平台管理员可增删改 */
-export function canManageProjectAssets(store, user, projectId) {
-  if (!user || !canAccessProject(store, user, projectId)) return false;
+/**
+ * 项目级管理权限（封面 / 资产库 / Skill 等）：
+ * - 超级管理员、管理员：所有可访问项目（即 AITOP 同步列表中的全部项目）
+ * - 项目管理员：仅 members 表中已分配的项目
+ */
+export function canManageInAssignedProject(store, user, projectId) {
+  if (!user || !projectId) return false;
+  if (!canAccessProject(store, user, projectId)) return false;
   if (isGlobalAdminRole(user.role)) return true;
-  if (user.role === FLOWGEN_ROLES.PROJECT_ADMIN) return true;
+  if (user.role === FLOWGEN_ROLES.PROJECT_ADMIN) {
+    return isMember(store, projectId, user.id);
+  }
   return false;
 }
 
+/** 项目封面：超管/管理员=全部项目；项目管理员=仅已分配项目 */
+export function canManageProjectCover(store, user, projectId) {
+  return canManageInAssignedProject(store, user, projectId);
+}
+
+/** 项目资产库：普通用户只读；超管/管理员=全部项目；项目管理员=仅已分配项目 */
+export function canManageProjectAssets(store, user, projectId) {
+  if (!canAccessProject(store, user, projectId)) return false;
+  return canManageInAssignedProject(store, user, projectId);
+}
+
 /**
- * 项目设置：重命名、封面、Skill、成员等。
- * 平台管理员；全局「项目管理员」且为该项目成员；或项目内 owner/editor。
+ * 项目设置（Skill 等；不含封面）。
+ * 超管/管理员、已分配的项目管理员、或项目内 owner/editor。
  */
 export function canManageProject(store, user, projectId) {
   if (!user || !canAccessProject(store, user, projectId)) return false;
-  if (isGlobalAdminRole(user.role)) return true;
-  if (user.role === FLOWGEN_ROLES.PROJECT_ADMIN) return true;
+  if (canManageInAssignedProject(store, user, projectId)) return true;
   const m = store.members.find((x) => x.projectId === projectId && x.userId === user.id);
   return !!(m && (m.role === 'owner' || m.role === 'editor'));
 }

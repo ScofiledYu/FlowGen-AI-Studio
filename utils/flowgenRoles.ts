@@ -60,7 +60,15 @@ export function canManageProjectAssets(
   return isProjectAdminRole(role);
 }
 
-/** 在所分配项目内可管理项目设置（重命名、封面、Skill、成员等） */
+/** 在所分配项目内可管理项目设置（封面、Skill 等）— 需结合项目列表（已按成员过滤） */
 export function canManageAssignedProject(role: string | undefined): boolean {
   return isGlobalAdminRole(role) || isProjectAdminRole(role);
+}
+
+/**
+ * 项目级管理（封面/资产/Skill）：超管与管理员=全部项目；项目管理员=仅其在列表中可见的已分配项目。
+ * 服务端以 members 表为准（canManageInAssignedProject）；前端项目列表已对非平台管理员按成员过滤。
+ */
+export function canManageProjectCover(role: string | undefined): boolean {
+  return canManageAssignedProject(role);
 }

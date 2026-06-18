@@ -1,6 +1,6 @@
 import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
-import { pickVideoResourceUrlFromTaskStatus } from './utils/taskStatusVideoUrl'
+import { pickMediaResourceUrlFromTaskStatus } from './utils/taskStatusImageUrl'
 import os from 'os'
 import https from 'https'
 import http from 'http'
@@ -122,7 +122,9 @@ export default defineConfig({
               headers: { 'api-key': AITOP_API_KEY }
             })
             const statusJson: any = await statusResp.json().catch(() => ({}))
-            const resourceUrl = pickVideoResourceUrlFromTaskStatus(statusJson?.data)
+            const resourceUrl =
+              pickMediaResourceUrlFromTaskStatus(statusJson?.data) ||
+              pickMediaResourceUrlFromTaskStatus(statusJson)
             if (!resourceUrl || typeof resourceUrl !== 'string') {
               res.statusCode = 404
               res.setHeader('Content-Type', 'application/json; charset=utf-8')

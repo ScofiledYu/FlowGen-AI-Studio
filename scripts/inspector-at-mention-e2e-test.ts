@@ -5,6 +5,7 @@
 import type { NodeData } from '../types.ts';
 import {
   buildInspectorPromptMentionItems,
+  mergeInspectorAtMentionItems,
   inspectorMentionDisplayNameForItem,
   buildPromptMediaRefContextForRun,
   buildPromptMediaRefLabels,
@@ -84,6 +85,29 @@ console.log('\n=== A. Nano 多图：@ 下拉仅面板槽 @资产:展示名 ===\n
   ok('过滤「夏」命中夏茉', filterMediaRefs(mentions, '夏').some((m) => m.insertText === '@资产:夏茉'));
   ok('过滤「荒塘」命中街道1', filterMediaRefs(mentions, '荒塘').some((m) => m.insertText === '@资产:荒塘镇街道1'));
   ok('不传项目库时不额外增加条目', withLib.length === mentions.length);
+}
+
+console.log('\n=== A1b. @ 下拉合并项目素材库（面板无 chip）===\n');
+
+{
+  const data = simNode({
+    selectedModel: 'Nano Banana 2.0',
+    imagePreview: ASSETS[0].url,
+    imageName: '荒塘镇街道1',
+    referenceImages: [],
+    prompt: '',
+  });
+  const ctx = buildPromptMediaRefContextForRun(data, ASSETS);
+  const panel = buildInspectorPromptMentionItems(data, ctx);
+  const libItems = ASSETS.map((a) => ({
+    label: `素材·${a.name}`,
+    kind: 'projectAsset' as const,
+    insertText: `@资产:${a.name}`,
+  }));
+  const merged = mergeInspectorAtMentionItems(panel, libItems);
+  ok('合并后含项目库 @资产:熊二/白泽等', merged.some((m) => m.insertText === '@资产:白泽'));
+  ok('过滤「白泽」命中库内资产', filterMediaRefs(merged, '白泽').some((m) => m.insertText === '@资产:白泽'));
+  ok('面板主图与库内同名不重复', merged.filter((m) => m.insertText === '@资产:荒塘镇街道1').length === 1);
 }
 
 console.log('\n=== A2. 同资产名去重：主图与参考槽仅一项 ===\n');

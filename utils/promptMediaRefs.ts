@@ -1004,7 +1004,17 @@ export function findPromptMediaRefItemForToken(
           (i.label === `图片${ord}` || i.label.replace(/^素材·/, '') === `图片${ord}`)
       );
       if (byCaption) return byCaption;
-      return labels.find((i) => i.kind === 'image' && i.insertText === a);
+      const directPic = labels.find((i) => i.kind === 'image' && i.insertText === a);
+      if (directPic) return directPic;
+      /** 面板底栏为资产名时 insertText 为 @资产:名，仍按 refImageIndex 序对应 @图片n */
+      const picRefs = labels
+        .filter(
+          (i) =>
+            (i.kind === 'image' || i.kind === 'projectAsset') && i.refImageIndex != null
+        )
+        .sort((x, y) => (x.refImageIndex ?? 0) - (y.refImageIndex ?? 0));
+      const byOrd = picRefs[ord - 1];
+      if (byOrd) return byOrd;
     }
   }
   if (token.startsWith('@资产:')) {
@@ -1125,6 +1135,30 @@ export function buildInspectorPromptMentionItems(
     seenTokens.add(t);
     if (nameKey) seenNames.add(nameKey);
     out.push(it);
+  }
+  return out;
+}
+
+/** 属性面板输入 @ 时的下拉：面板已拖入素材 + 项目素材库（去重；面板项优先） */
+export function mergeInspectorAtMentionItems(
+  panelItems: PromptMediaRefItem[],
+  libraryItems: PromptMediaRefItem[]
+): PromptMediaRefItem[] {
+  const seenTokens = new Set<string>();
+  const seenNames = new Set<string>();
+  const out: PromptMediaRefItem[] = [];
+  const push = (it: PromptMediaRefItem) => {
+    const t = it.insertText?.trim();
+    if (!t || seenTokens.has(t)) return;
+    const nameKey = inspectorMentionDisplayNameForItem(it).toLowerCase();
+    if (nameKey && seenNames.has(nameKey)) return;
+    seenTokens.add(t);
+    if (nameKey) seenNames.add(nameKey);
+    out.push(it);
+  };
+  for (const it of panelItems) push(it);
+  for (const it of libraryItems) {
+    if (it.kind === 'projectAsset') push(it);
   }
   return out;
 }
@@ -1414,28 +1448,17 @@ function findMainPreviewRefItem(
   );
 }
 
-/**
- * 发模型前调用：将 @主图、@图片1、@图片（简写=第1张）、@视频、@音频 等换为与 API 入参顺序一致的中文说明。
- * 媒体 URL 仍在各模型专用字段；本函数只增强 prompt 可理解性。
- */
-export function resolvePromptPlaceholders(
-  userPrompt: string,
+/** 构建 token → 发模型前展开文案 的映射（各生图/生视频模型共用） */
+function buildPromptTokenPhraseMap(
   data: NodeData,
-  ctx?: PromptMediaRefContext,
+  c: PromptMediaRefContext,
   options?: ResolvePromptPlaceholdersOptions
-): string {
-  if (userPrompt == null || userPrompt === '') return userPrompt;
-  const c: PromptMediaRefContext = {
-    ...(ctx ?? buildPromptMediaRefContextFromNode(data)),
-    projectAssets: ctx?.projectAssets ?? options?.projectAssets,
-  };
+): Map<string, string> {
   const items = buildPromptMediaRefLabels(data, c);
-  const pairs: Array<{ token: string; phrase: string }> = [];
-  const pairTokens = new Set<string>();
+  const map = new Map<string, string>();
   const addPair = (token: string, phrase: string) => {
-    if (!token || !phrase || pairTokens.has(token)) return;
-    pairTokens.add(token);
-    pairs.push({ token, phrase });
+    if (!token || !phrase || map.has(token)) return;
+    map.set(token, phrase);
   };
   for (const it of items) {
     const phrase = expansionPhraseForRef(it, data, c, options);
@@ -1480,33 +1503,24 @@ export function resolvePromptPlaceholders(
         referenceImageIndexFromOptions(options, tok) ??
         referenceImageIndexFromOptions(options, `@资产:${a.slug}`) ??
         referenceImageIndexFromOptions(options, `@资产:${a.name.trim()}`);
-      if (!pairTokens.has(tok)) {
-        pairTokens.add(tok);
-        pairs.push({ token: tok, phrase: expansionPhraseForProjectAsset(a.name, n) });
+      if (!map.has(tok)) {
+        addPair(tok, expansionPhraseForProjectAsset(a.name, n));
       }
       const slugTok = `@资产:${a.slug}`;
-      if (slugTok !== tok && !pairTokens.has(slugTok)) {
+      if (slugTok !== tok && !map.has(slugTok)) {
         const nSlug = referenceImageIndexFromOptions(options, slugTok);
         if (nSlug != null) {
-          pairTokens.add(slugTok);
-          pairs.push({
-            token: slugTok,
-            phrase: expansionPhraseForProjectAsset(a.name, nSlug),
-          });
+          addPair(slugTok, expansionPhraseForProjectAsset(a.name, nSlug));
         }
       }
       const nameTok = `@资产:${a.name.trim()}`;
-      if (nameTok !== tok && nameTok !== slugTok && !pairTokens.has(nameTok)) {
+      if (nameTok !== tok && nameTok !== slugTok && !map.has(nameTok)) {
         const nName =
           referenceImageIndexFromOptions(options, nameTok) ??
           referenceImageIndexFromOptions(options, slugTok) ??
           n;
         if (nName != null) {
-          pairTokens.add(nameTok);
-          pairs.push({
-            token: nameTok,
-            phrase: expansionPhraseForProjectAsset(a.name, nName),
-          });
+          addPair(nameTok, expansionPhraseForProjectAsset(a.name, nName));
         }
       }
     }
@@ -1521,34 +1535,83 @@ export function resolvePromptPlaceholders(
               referenceImageIndexFromOptions(options, mainRef.insertText)
           )
         : expansionPhraseForRef(mainRef, data, c, options);
-    pairs.push({ token: '@主图', phrase: mainPhrase });
-    pairs.push({
-      token: '@主体',
-      phrase: options?.subjectCaption?.trim()
+    addPair('@主图', mainPhrase);
+    addPair(
+      '@主体',
+      options?.subjectCaption?.trim()
         ? `（主体：${options.subjectCaption.trim()}，同本请求主预览图）`
-        : mainPhrase,
-    });
+        : mainPhrase
+    );
   } else if (options?.subjectCaption?.trim()) {
-    pairs.push({
-      token: '@主体',
-      phrase: `（主体：${options.subjectCaption.trim()}）`,
-    });
+    addPair('@主体', `（主体：${options.subjectCaption.trim()}）`);
   }
-  /** 无序号简写：与 @图片1 / @视频1 / @音频1 同义（面板可点标签插入带序号，手写常用无序号） */
   const img1 =
     items.find((i) => i.insertText === '@图片1') ||
     items.find((i) => i.kind === 'image' && i.refFrameIndex === 0);
-  if (img1) pairs.push({ token: '@图片', phrase: expansionPhraseForRef(img1, data, c, options) });
+  if (img1) addPair('@图片', expansionPhraseForRef(img1, data, c, options));
   const vid1 = items.find((i) => i.insertText === '@视频1');
-  if (vid1) pairs.push({ token: '@视频', phrase: expansionPhraseForRef(vid1, data, c, options) });
+  if (vid1) addPair('@视频', expansionPhraseForRef(vid1, data, c, options));
   const aud1 = items.find((i) => i.insertText === '@音频1');
-  if (aud1) pairs.push({ token: '@音频', phrase: expansionPhraseForRef(aud1, data, c, options) });
+  if (aud1) addPair('@音频', expansionPhraseForRef(aud1, data, c, options));
+  return map;
+}
 
-  pairs.sort((a, b) => b.token.length - a.token.length);
+function lookupExpansionPhraseForToken(
+  token: string,
+  phraseMap: Map<string, string>,
+  projectAssets?: ProjectAssetLabelRow[]
+): string | undefined {
+  const direct = phraseMap.get(token);
+  if (direct) return direct;
+  if (token.startsWith('@资产:')) {
+    const key = token.slice('@资产:'.length).trim();
+    const candidates = new Set<string>([token, `@资产:${key}`]);
+    if (projectAssets?.length) {
+      const row = projectAssets.find((a) => a.slug === key || a.name.trim() === key);
+      if (row) {
+        candidates.add(buildProjectAssetPromptToken(row.slug, projectAssets));
+        candidates.add(`@资产:${row.name.trim()}`);
+        candidates.add(`@资产:${row.slug}`);
+      }
+    }
+    for (const cand of candidates) {
+      const phrase = phraseMap.get(cand);
+      if (phrase) return phrase;
+    }
+  }
+  if (token === '@图片' && phraseMap.has('@图片1')) return phraseMap.get('@图片1');
+  if (token === '@视频' && phraseMap.has('@视频1')) return phraseMap.get('@视频1');
+  if (token === '@音频' && phraseMap.has('@音频1')) return phraseMap.get('@音频1');
+  if (token === '@主体' && phraseMap.has('@主图')) return phraseMap.get('@主图');
+  return undefined;
+}
+
+/**
+ * 发模型前调用：将 @主图、@图片1、@图片（简写=第1张）、@视频、@音频 等换为与 API 入参顺序一致的中文说明。
+ * 媒体 URL 仍在各模型专用字段；本函数只增强 prompt 可理解性。
+ */
+export function resolvePromptPlaceholders(
+  userPrompt: string,
+  data: NodeData,
+  ctx?: PromptMediaRefContext,
+  options?: ResolvePromptPlaceholdersOptions
+): string {
+  if (userPrompt == null || userPrompt === '') return userPrompt;
+  const c: PromptMediaRefContext = {
+    ...(ctx ?? buildPromptMediaRefContextFromNode(data)),
+    projectAssets: ctx?.projectAssets ?? options?.projectAssets,
+  };
+  const phraseMap = buildPromptTokenPhraseMap(data, c, options);
+  const projectAssets = c.projectAssets ?? options?.projectAssets;
+  const matches = matchAllPromptMediaTokens(userPrompt, projectAssets);
+  if (matches.length === 0) return userPrompt;
+
   let out = userPrompt;
-  for (const { token, phrase } of pairs) {
-    if (!token) continue;
-    out = out.split(token).join(phrase);
+  const sorted = [...matches].sort((a, b) => b.index - a.index);
+  for (const { token, index } of sorted) {
+    const phrase = lookupExpansionPhraseForToken(token, phraseMap, projectAssets);
+    if (!phrase) continue;
+    out = out.slice(0, index) + phrase + out.slice(index + token.length);
   }
   return out;
 }
@@ -1607,8 +1670,10 @@ export function collectProjectAssetUrlsFromPrompt(
   if (!prompt || !bySlug.size) return [];
   const out: string[] = [];
   const seen = new Set<string>();
-  for (const m of prompt.matchAll(new RegExp(`@资产:\\s*(${PROMPT_ASSET_TOKEN_SUFFIX})`, 'g'))) {
-    const url = resolveProjectAssetUrlFromTokenKey(m[1], bySlug, assets);
+  for (const { token } of matchAllPromptMediaTokens(prompt, assets)) {
+    if (!token.startsWith('@资产:')) continue;
+    const key = token.slice('@资产:'.length).trim();
+    const url = resolveProjectAssetUrlFromTokenKey(key, bySlug, assets);
     if (url && !seen.has(url)) {
       seen.add(url);
       out.push(url);
@@ -1625,6 +1690,73 @@ export const PROMPT_MEDIA_TOKEN_RE = new RegExp(
   `@资产:\\s*${PROMPT_ASSET_TOKEN_SUFFIX}|@图片\\d+|@图片(?!\\d)|@主图|@主视频|@主体|@首帧图|@尾帧图|@视频\\d+|@视频(?!\\d)|@音频\\d+|@音频(?!\\d)`,
   'g'
 );
+
+const NON_ASSET_PROMPT_TOKEN_RE =
+  /^@图片\d+|@图片(?!\d)|@主图|@主视频|@主体|@首帧图|@尾帧图|@视频\d+|@视频(?!\d)|@音频\d+|@音频(?!\d)/;
+
+/** 已知资产库条目时优先最长前缀匹配，避免扫描无空格时「@资产:白泽走向」粘连 */
+export function matchLongestProjectAssetKey(
+  text: string,
+  projectAssets?: ProjectAssetLabelRow[]
+): string | null {
+  if (!text || !projectAssets?.length) return null;
+  const keys = new Set<string>();
+  for (const a of projectAssets) {
+    const name = a.name?.trim();
+    const slug = a.slug?.trim();
+    if (name) keys.add(name);
+    if (slug) keys.add(slug);
+  }
+  const sorted = [...keys].sort((a, b) => b.length - a.length);
+  for (const key of sorted) {
+    if (text.startsWith(key)) return key;
+  }
+  return null;
+}
+
+/** 按出现顺序提取创意描述中的 @ 媒体 token（@资产: 支持无空格扫描后的边界识别） */
+export function matchAllPromptMediaTokens(
+  prompt: string,
+  projectAssets?: ProjectAssetLabelRow[]
+): Array<{ token: string; index: number }> {
+  if (!prompt) return [];
+  const matches: Array<{ token: string; index: number }> = [];
+  let i = 0;
+  while (i < prompt.length) {
+    if (prompt[i] !== '@') {
+      i += 1;
+      continue;
+    }
+    const rest = prompt.slice(i);
+    if (rest.startsWith('@资产:')) {
+      let j = i + '@资产:'.length;
+      while (j < prompt.length && /\s/.test(prompt[j])) j += 1;
+      const tail = prompt.slice(j);
+      const known = matchLongestProjectAssetKey(tail, projectAssets);
+      if (known) {
+        matches.push({ token: `@资产:${known}`, index: i });
+        i = j + known.length;
+        continue;
+      }
+      const m = tail.match(new RegExp(`^${PROMPT_ASSET_TOKEN_SUFFIX}`));
+      if (m?.[0]) {
+        matches.push({ token: `@资产:${m[0]}`, index: i });
+        i = j + m[0].length;
+        continue;
+      }
+      i += 1;
+      continue;
+    }
+    const m = rest.match(NON_ASSET_PROMPT_TOKEN_RE);
+    if (m?.[0]) {
+      matches.push({ token: m[0], index: i });
+      i += m[0].length;
+      continue;
+    }
+    i += 1;
+  }
+  return matches;
+}
 
 const SEEDANCE_PROMPT_TOKEN_RE = PROMPT_MEDIA_TOKEN_RE;
 
@@ -2046,11 +2178,7 @@ export function collectReferencedMediaFromPrompt(
   const audios: ReferencedCollectedAudioRef[] = [];
   if (!prompt?.trim()) return { images, videos, audios };
 
-  const matches = [...prompt.matchAll(SEEDANCE_PROMPT_TOKEN_RE)].map((m) => ({
-    token: m[0],
-    index: m.index ?? 0,
-  }));
-  matches.sort((a, b) => a.index - b.index);
+  const matches = matchAllPromptMediaTokens(prompt, mergedCtx.projectAssets);
 
   const seenImageKeys = new Set<string>();
   const seenVideoKeys = new Set<string>();
@@ -2145,7 +2273,7 @@ export function scanPromptAppendProjectAssetTokens(
 
 /**
  * 扫描所有引用标记（主图、图片1、视频1、资产等）并在匹配的词后追加 @引用。
- * 例如："使用主图和猫咪" → "使用主图@主图 和猫咪@资产:猫咪"
+ * 例如："使用主图和猫咪" → "使用主图@主图和猫咪@资产:猫咪"
  */
 export function scanPromptAppendAllTokens(
   text: string,
@@ -2249,7 +2377,7 @@ export function scanPromptAppendAllTokens(
   let out = text;
   for (const m of matches) {
     const end = m.pos + m.name.length;
-    out = out.slice(0, end) + m.token + ' ' + out.slice(end);
+    out = out.slice(0, end) + m.token + out.slice(end);
   }
   
   return out;

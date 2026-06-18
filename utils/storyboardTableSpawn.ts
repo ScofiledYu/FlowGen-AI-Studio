@@ -141,23 +141,62 @@ export function validateTemplateUsesProjectAssetLibrary(
   return { ok: true };
 }
 
+/** 分镜模板节点是否已绑定项目资产库（归一化预览 URL 后再校验） */
+export function checkStoryboardTemplateAssetBinding(
+  rawData: NodeData,
+  projectId?: string
+): { ok: true } | { ok: false; error: string } {
+  const resolvedProjectId = resolveSpawnProjectId(projectId, rawData);
+  const templateData = normalizeTemplateNodeDataForSpawn(rawData, resolvedProjectId);
+  return validateTemplateUsesProjectAssetLibrary(templateData, resolvedProjectId);
+}
+
 /** 镜头 ID 列：模型输出常见「镜头编号」或「镜头编码」 */
 export const SHOT_ID_HEADER_ALIASES = ['镜头编号', '镜头编码'] as const;
 export const SHOT_ID_HEADER = SHOT_ID_HEADER_ALIASES[0];
 export const SHOT_DURATION_HEADER = '单镜秒数';
 export const SHOT_DURATION_HEADER_ALIASES = ['单镜秒数', '时长', '镜头时长'] as const;
 
+/** 表头单元格归一化：去 BOM / 空白，避免 Excel 导出带不可见字符 */
+export function normalizeStoryboardHeaderCell(raw: unknown): string {
+  return String(raw ?? '')
+    .replace(/^\uFEFF/, '')
+    .replace(/\u00A0/g, ' ')
+    .trim();
+}
+
 function findHeaderIndex(headers: string[], aliases: readonly string[]): number {
+  const normalized = headers.map((h) => normalizeStoryboardHeaderCell(h));
   for (const alias of aliases) {
-    const idx = headers.indexOf(alias);
+    const idx = normalized.indexOf(normalizeStoryboardHeaderCell(alias));
     if (idx >= 0) return idx;
   }
-  for (let i = 0; i < headers.length; i++) {
-    const h = headers[i];
+  // 对话内表格：允许列名互相包含（如「时长」≈「单镜秒数」）
+  for (let i = 0; i < normalized.length; i++) {
+    const h = normalized[i];
     if (aliases.some((a) => h.includes(a) || a.includes(h))) return i;
   }
   return -1;
 }
+
+/** Excel 导入：仅精确匹配列名，禁止「编号」「时长」等模糊命中 */
+export function findStrictStoryboardHeaderIndex(
+  headers: string[],
+  allowedNames: readonly string[]
+): number {
+  const normalized = headers.map((h) => normalizeStoryboardHeaderCell(h));
+  for (const name of allowedNames) {
+    const idx = normalized.indexOf(normalizeStoryboardHeaderCell(name));
+    if (idx >= 0) return idx;
+  }
+  return -1;
+}
+
+export const STORYBOARD_EXCEL_SHOT_HEADERS = ['镜头编码', '镜头编号'] as const;
+export const STORYBOARD_EXCEL_DURATION_HEADERS = ['单镜秒数'] as const;
+
+export const STORYBOARD_EXCEL_FORMAT_ERR =
+  'Excel 分镜表格式不正确：表头须包含「镜头编码」或「镜头编号」，以及「单镜秒数」两列（列名需与导出模板完全一致）。';
 
 export type SpawnHighlight = 'green' | 'yellow' | 'red';
 
@@ -192,11 +231,41 @@ export function resolveSingleTemplateNode(
   return null;
 }
 
-export function parseStoryboardTableColumns(rows: string[][]): StoryboardTableColumns | null {
+/** 对话内表格：缺列时返回中文列名（镜头编码含「镜头编号」别名） */
+export function getMissingStoryboardRequiredHeaders(headers: string[]): string[] {
+  const h = headers.map((x) => normalizeStoryboardHeaderCell(x));
+  const missing: string[] = [];
+  if (findHeaderIndex(h, SHOT_ID_HEADER_ALIASES) < 0) missing.push('镜头编码');
+  if (findHeaderIndex(h, SHOT_DURATION_HEADER_ALIASES) < 0) missing.push('单镜秒数');
+  return missing;
+}
+
+/** Excel 导入：仅精确列名 */
+export function getMissingStoryboardExcelRequiredHeaders(headers: string[]): string[] {
+  const h = headers.map((x) => normalizeStoryboardHeaderCell(x));
+  const missing: string[] = [];
+  if (findStrictStoryboardHeaderIndex(h, STORYBOARD_EXCEL_SHOT_HEADERS) < 0) {
+    missing.push('镜头编码（或镜头编号）');
+  }
+  if (findStrictStoryboardHeaderIndex(h, STORYBOARD_EXCEL_DURATION_HEADERS) < 0) {
+    missing.push('单镜秒数');
+  }
+  return missing;
+}
+
+export function parseStoryboardTableColumns(
+  rows: string[][],
+  options?: { strictExcelHeaders?: boolean }
+): StoryboardTableColumns | null {
   if (!rows.length) return null;
-  const headers = rows[0].map((h) => h.trim());
-  const shotIdIdx = findHeaderIndex(headers, SHOT_ID_HEADER_ALIASES);
-  const durationIdx = findHeaderIndex(headers, SHOT_DURATION_HEADER_ALIASES);
+  const headers = rows[0].map((h) => normalizeStoryboardHeaderCell(h));
+  const strict = options?.strictExcelHeaders === true;
+  const shotIdIdx = strict
+    ? findStrictStoryboardHeaderIndex(headers, STORYBOARD_EXCEL_SHOT_HEADERS)
+    : findHeaderIndex(headers, SHOT_ID_HEADER_ALIASES);
+  const durationIdx = strict
+    ? findStrictStoryboardHeaderIndex(headers, STORYBOARD_EXCEL_DURATION_HEADERS)
+    : findHeaderIndex(headers, SHOT_DURATION_HEADER_ALIASES);
   if (shotIdIdx < 0 || durationIdx < 0) return null;
 
   const promptColumnIndices = headers
@@ -204,6 +273,15 @@ export function parseStoryboardTableColumns(rows: string[][]): StoryboardTableCo
     .filter(({ idx }) => idx !== shotIdIdx && idx !== durationIdx);
 
   return { shotIdIdx, durationIdx, promptColumnIndices };
+}
+
+/** 在前若干行中定位分镜表表头行（Excel 严格模式） */
+export function findStoryboardExcelHeaderRowIndex(matrix: string[][], scanRows = 12): number {
+  const limit = Math.min(matrix.length, scanRows);
+  for (let i = 0; i < limit; i++) {
+    if (getMissingStoryboardExcelRequiredHeaders(matrix[i]).length === 0) return i;
+  }
+  return -1;
 }
 
 export function buildPromptFromRow(
@@ -277,10 +355,14 @@ export function applyShotDurationToNodeData(
 
 export function parseStoryboardSpawnRows(
   rows: string[][],
-  templateData: NodeData
+  templateData: NodeData,
+  options?: { strictExcelHeaders?: boolean }
 ): StoryboardSpawnRow[] | { error: string } {
-  const cols = parseStoryboardTableColumns(rows);
-  if (!cols) return { error: STORYBOARD_TABLE_ERR };
+  const strict = options?.strictExcelHeaders === true;
+  const cols = parseStoryboardTableColumns(rows, { strictExcelHeaders: strict });
+  if (!cols) {
+    return { error: strict ? STORYBOARD_EXCEL_FORMAT_ERR : STORYBOARD_TABLE_ERR };
+  }
 
   const result: StoryboardSpawnRow[] = [];
   for (let i = 1; i < rows.length; i++) {
@@ -302,7 +384,7 @@ export function parseStoryboardSpawnRows(
   }
 
   if (result.length === 0) {
-    return { error: STORYBOARD_TABLE_ERR };
+    return { error: strict ? STORYBOARD_EXCEL_FORMAT_ERR : STORYBOARD_TABLE_ERR };
   }
 
   return result;
@@ -346,6 +428,61 @@ export function validateStoryboardTableSpawn(
   }
 
   const spawnRows = parseStoryboardSpawnRows(rows, templateData);
+  if ('error' in spawnRows) {
+    return { ok: false, error: spawnRows.error };
+  }
+
+  return { ok: true, templateNode, spawnRows };
+}
+
+/** 画布 Excel 导入：严格表头 + 与对话分镜表相同的下游生成校验 */
+export function validateStoryboardExcelTableSpawn(
+  rows: string[][] | null | undefined,
+  selectedNodes: Node[],
+  selectedNode?: Node | null,
+  getLiveTemplateData?: (templateNodeId: string) => NodeData | undefined,
+  projectId?: string,
+  canvasNodes?: Node[]
+):
+  | { ok: true; templateNode: Node; spawnRows: StoryboardSpawnRow[] }
+  | { ok: false; error: string } {
+  if (!rows || rows.length < 2) {
+    return { ok: false, error: STORYBOARD_EXCEL_FORMAT_ERR };
+  }
+
+  const headerRowIdx = findStoryboardExcelHeaderRowIndex(rows);
+  if (headerRowIdx < 0) {
+    return { ok: false, error: STORYBOARD_EXCEL_FORMAT_ERR };
+  }
+
+  const tableRows = rows.slice(headerRowIdx);
+  if (tableRows.length < 2) {
+    return { ok: false, error: STORYBOARD_EXCEL_FORMAT_ERR };
+  }
+
+  if (!parseStoryboardTableColumns(tableRows, { strictExcelHeaders: true })) {
+    return { ok: false, error: STORYBOARD_EXCEL_FORMAT_ERR };
+  }
+
+  const templateNode = resolveSingleTemplateNode(selectedNodes, selectedNode, canvasNodes);
+  if (!templateNode) {
+    return { ok: false, error: STORYBOARD_TEMPLATE_ERR };
+  }
+
+  const rawTemplateData =
+    getLiveTemplateData?.(templateNode.id) ?? (templateNode.data as NodeData);
+  const resolvedProjectId = resolveSpawnProjectId(projectId, rawTemplateData);
+  const templateData = normalizeTemplateNodeDataForSpawn(rawTemplateData, resolvedProjectId);
+
+  const spawnPid = resolvedProjectId || resolveSpawnProjectId(undefined, templateData);
+  const assetCheck = validateTemplateUsesProjectAssetLibrary(templateData, spawnPid);
+  if (assetCheck.ok === false) {
+    return { ok: false, error: assetCheck.error };
+  }
+
+  const spawnRows = parseStoryboardSpawnRows(tableRows, templateData, {
+    strictExcelHeaders: true,
+  });
   if ('error' in spawnRows) {
     return { ok: false, error: spawnRows.error };
   }

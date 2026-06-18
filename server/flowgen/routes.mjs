@@ -6,6 +6,7 @@ import { randomUUID } from 'crypto';
 import {
   loadStore,
   saveStore,
+  flushStore,
   hashPassword,
   verifyPassword,
   bootstrapAdminIfNeeded,
@@ -23,11 +24,12 @@ import {
 import { sanitizeWorkspacePayload } from '../../utils/persistSanitize.mjs';
 import * as workspaceRepo from './repos/workspaceRepo.mjs';
 import * as chatRepo from './repos/chatRepo.mjs';
-import { deleteProjectRelational } from './relationalStore.mjs';
 import {
   canAccessProject,
   canManageProject,
   canManageProjectAssets,
+  canManageProjectCover,
+  isGlobalAdminRole,
   isMember,
   assertValidGlobalRole,
   normalizeGlobalRoleInput,
@@ -41,13 +43,14 @@ import {
   deleteProjectCoverFile,
   normalizeProjectCoverImageForApi,
 } from './projectCover.mjs';
-import { syncProjectCoverFromWorkspaceGraph } from './workspaceProjectCover.mjs';
+import { syncUserProjectsFromAitop, purgeLegacyNonAitopProjects } from './aitopProjectSync.mjs';
 import {
   assetThumbPath,
   deleteAssetThumbIfExists,
   ensureAssetThumbFile,
 } from './assetThumb.mjs';
 import { isImageAssetMime, normalizeAssetMime } from './assetMime.mjs';
+import * as assetsRepo from './repos/assetsRepo.mjs';
 
 function assetApiPaths(projectId, assetId) {
   const base = `/flowgen-api/projects/${projectId}/assets/${assetId}`;
@@ -65,6 +68,26 @@ function assetDebugEnabled() {
 
 function logAssetDebug(...args) {
   if (assetDebugEnabled()) console.warn('[flowgen:assets]', ...args);
+}
+
+function normalizeEpisodeForStore(raw) {
+  const s = String(raw ?? '').trim().toLowerCase();
+  if (!s) return '';
+  const m = s.match(/^ep(\d{1,3})$/i);
+  if (!m) return '';
+  const n = Number(m[1]);
+  if (!Number.isFinite(n) || n < 1 || n > 100) return '';
+  return `ep${String(n).padStart(3, '0')}`;
+}
+
+function normalizeSequenceForStore(raw) {
+  const s = String(raw ?? '').trim().toLowerCase();
+  if (!s) return '';
+  const m = s.match(/^seq(\d{1,3})$/i);
+  if (!m) return '';
+  const n = Number(m[1]);
+  if (!Number.isFinite(n) || n < 1 || n > 100) return '';
+  return `seq${String(n).padStart(3, '0')}`;
 }
 
 /** 从完整 URL 解析标签（含挂载前缀 /flowgen-api）；避免 req.query 在部分代理/版本下与 originalUrl 不一致 */
@@ -213,31 +236,29 @@ export function createFlowgenRouter() {
     res.json({ ok: true });
   });
 
-  router.get('/users', authMiddleware(true), requireAdmin, (req, res) => {
+  router.get('/users', authMiddleware(true), requireAdmin, async (req, res) => {
     let store = loadStore();
     store = bootstrapAdminIfNeeded(store);
     const q = (req.query.q || '').toString().trim().toLowerCase();
     const role = (req.query.role || '').toString().trim();
     const center = (req.query.center || '').toString().trim();
+    const department = (req.query.department || '').toString().trim();
+    const baseLocation = (req.query.baseLocation || '').toString().trim();
     const status = (req.query.status || '').toString().trim();
+    const page = Math.max(1, parseInt(String(req.query.page || '1'), 10) || 1);
+    const pageSize = Math.min(100, Math.max(1, parseInt(String(req.query.pageSize || '20'), 10) || 20));
 
-    /** 与项目成员表一致：用户列表附带已加入的项目，便于与用户管理/项目成员双向对照 */
-    /** @type {Map<string, Array<{ id: string; name: string }>>} */
-    const projectsByUser = new Map();
-    for (const m of store.members) {
-      const proj = store.projects.find((p) => p.id === m.projectId);
-      const name = projectNameFromRow(proj) || m.projectId;
-      const list = projectsByUser.get(m.userId) || [];
-      if (!list.some((x) => x.id === m.projectId)) {
-        list.push({ id: m.projectId, name });
-        projectsByUser.set(m.userId, list);
+    const purged = purgeLegacyNonAitopProjects(store);
+    if (purged > 0) {
+      saveStore(store);
+      if (getStorageMode() === 'relational') {
+        const { flushStore } = await import('./store.mjs');
+        await flushStore();
       }
-    }
-    for (const [, list] of projectsByUser) {
-      list.sort((a, b) => String(a.name).localeCompare(String(b.name), 'zh-CN'));
+      console.log(`[flowgen] purged ${purged} legacy non-AITOP project(s) on GET /users`);
     }
 
-    let rows = store.users.map((u) => {
+    const toListRow = (u) => {
       const ext = u.extendedJson || {};
       return {
         id: u.id,
@@ -245,16 +266,62 @@ export function createFlowgenRouter() {
         displayName: ext.displayName || ext.realName || ext.name || '',
         role: u.role,
         center: ext.center || '',
+        department: ext.department || '',
+        baseLocation: ext.baseLocation || '',
         status: u.status || 'active',
         extendedJson: ext,
         mustChangePassword: !!u.mustChangePassword,
         createdAt: u.createdAt,
         updatedAt: u.updatedAt,
-        projects: projectsByUser.get(u.id) || [],
+        projects: [],
+        projectsSource: 'aitop',
       };
-    });
-    
+    };
+
+    let rows = store.users.map(toListRow);
+
+    const summary = {
+      totalUsers: rows.length,
+      admins: rows.filter((r) => r.role === 'admin' || r.role === 'super_admin').length,
+      active: rows.filter((r) => r.status === 'active').length,
+      disabled: rows.filter((r) => r.status === 'disabled').length,
+    };
+
+    const facets = {
+      centers: [...new Set(rows.map((r) => r.center).filter(Boolean))].sort((a, b) => a.localeCompare(b, 'zh-CN')),
+      departments: [...new Set(rows.map((r) => r.department).filter(Boolean))].sort((a, b) => a.localeCompare(b, 'zh-CN')),
+      baseLocations: [...new Set(rows.map((r) => r.baseLocation).filter(Boolean))].sort((a, b) => a.localeCompare(b, 'zh-CN')),
+    };
+
+    if (role) rows = rows.filter((r) => r.role === role);
+    if (center) rows = rows.filter((r) => r.center === center);
+    if (department) rows = rows.filter((r) => r.department === department);
+    if (baseLocation) rows = rows.filter((r) => r.baseLocation === baseLocation);
+    if (status) rows = rows.filter((r) => r.status === status);
+
+    const { fetchAitopProjectRowsForUser } = await import('./aitopApi.mjs');
+    const attachAitopProjects = async (targetRows) => {
+      await Promise.all(
+        targetRows.map(async (r) => {
+          if (r._aitopLoaded) return;
+          const u = store.users.find((x) => x.id === r.id);
+          if (!u) return;
+          try {
+            r.projects = await fetchAitopProjectRowsForUser(u.username);
+          } catch (e) {
+            console.warn(
+              `[flowgen] AITOP projects for user ${u.username} failed:`,
+              e?.message || e
+            );
+            r.projects = [];
+          }
+          r._aitopLoaded = true;
+        })
+      );
+    };
+
     if (q) {
+      await attachAitopProjects(rows);
       rows = rows.filter(
         (r) =>
           r.username.toLowerCase().includes(q) ||
@@ -264,15 +331,40 @@ export function createFlowgenRouter() {
             r.projects.some((p) => String(p.name).toLowerCase().includes(q)))
       );
     }
-    if (role) rows = rows.filter((r) => r.role === role);
-    if (center) rows = rows.filter((r) => r.center === center);
-    if (status) rows = rows.filter((r) => r.status === status);
-    
-    res.json({ users: rows });
+
+    const total = rows.length;
+    const totalPages = Math.max(1, Math.ceil(total / pageSize));
+    const safePage = Math.min(page, totalPages);
+    const offset = (safePage - 1) * pageSize;
+    const pageRows = rows.slice(offset, offset + pageSize);
+
+    await attachAitopProjects(pageRows);
+
+    const users = pageRows.map(({ _aitopLoaded, ...rest }) => rest);
+
+    res.json({
+      users,
+      total,
+      page: safePage,
+      pageSize,
+      totalPages,
+      summary,
+      facets,
+    });
   });
 
   router.post('/users', authMiddleware(true), requireAdmin, (req, res) => {
-    const { username, password, role = 'user', center = '', status = 'active', extendedJson = {}, mustChangePassword = true } = req.body || {};
+    const {
+      username,
+      password,
+      role = 'user',
+      center = '',
+      department = '',
+      baseLocation = '',
+      status = 'active',
+      extendedJson = {},
+      mustChangePassword = true,
+    } = req.body || {};
     if (!username || !password) return res.status(400).json({ error: '需要用户名与初始密码' });
     const store = loadStore();
     if (store.users.some((u) => u.username === String(username))) {
@@ -281,6 +373,8 @@ export function createFlowgenRouter() {
     const now = new Date().toISOString();
     const ext = typeof extendedJson === 'object' && extendedJson ? extendedJson : {};
     if (center) ext.center = center;
+    if (department) ext.department = department;
+    if (baseLocation) ext.baseLocation = baseLocation;
     const row = {
       id: randomUUID(),
       username: String(username),
@@ -299,6 +393,8 @@ export function createFlowgenRouter() {
       username: row.username,
       role: row.role,
       center: ext.center || '',
+      department: ext.department || '',
+      baseLocation: ext.baseLocation || '',
       status: row.status,
       extendedJson: row.extendedJson,
       mustChangePassword: row.mustChangePassword,
@@ -310,20 +406,25 @@ export function createFlowgenRouter() {
     const store = loadStore();
     const user = getUser(store, req.params.id);
     if (!user) return res.status(404).json({ error: '用户不存在' });
-    const { password, role, center, status, extendedJson, mustChangePassword } = req.body || {};
+    const { password, role, center, department, baseLocation, status, extendedJson, mustChangePassword } = req.body || {};
     if (password) user.passwordHash = hashPassword(password);
     if (role) user.role = assertValidGlobalRole(role);
     if (status) user.status = String(status);
     if (extendedJson && typeof extendedJson === 'object') {
       user.extendedJson = { ...user.extendedJson, ...extendedJson };
     }
+    user.extendedJson = user.extendedJson || {};
     if (center !== undefined) {
-      user.extendedJson = user.extendedJson || {};
-      if (center) {
-        user.extendedJson.center = center;
-      } else {
-        delete user.extendedJson.center;
-      }
+      if (center) user.extendedJson.center = center;
+      else delete user.extendedJson.center;
+    }
+    if (department !== undefined) {
+      if (department) user.extendedJson.department = department;
+      else delete user.extendedJson.department;
+    }
+    if (baseLocation !== undefined) {
+      if (baseLocation) user.extendedJson.baseLocation = baseLocation;
+      else delete user.extendedJson.baseLocation;
     }
     if (mustChangePassword !== undefined) user.mustChangePassword = !!mustChangePassword;
     user.updatedAt = new Date().toISOString();
@@ -365,12 +466,22 @@ export function createFlowgenRouter() {
           return;
         }
         const now = new Date().toISOString();
+        const ext =
+          typeof row.extendedJson === 'object' && row.extendedJson ? { ...row.extendedJson } : {};
+        const rowCenter = row.center ?? row['中心'] ?? ext.center;
+        const rowDepartment = row.department ?? row['部门'] ?? ext.department;
+        const rowBase = row.baseLocation ?? row['基地'] ?? ext.baseLocation;
+        if (rowCenter) ext.center = String(rowCenter);
+        if (rowDepartment) ext.department = String(rowDepartment);
+        if (rowBase) ext.baseLocation = String(rowBase);
+        const displayName = row.displayName ?? row['中文名'] ?? row['姓名'] ?? row['昵称'] ?? ext.displayName;
+        if (displayName) ext.displayName = String(displayName);
         store.users.push({
           id: randomUUID(),
           username: String(username),
           passwordHash: hashPassword(password),
           role: normalizeGlobalRoleInput(row.role ?? row['权限'] ?? row['角色'] ?? 'user'),
-          extendedJson: typeof row.extendedJson === 'object' ? row.extendedJson : {},
+          extendedJson: ext,
           mustChangePassword: true,
           createdAt: now,
           updatedAt: now,
@@ -400,12 +511,35 @@ export function createFlowgenRouter() {
     res.json(store.fieldDefinitions);
   });
 
-  router.get('/projects', authMiddleware(true), (req, res) => {
+  router.get('/projects', authMiddleware(true), async (req, res) => {
     const store = loadStore();
+    let syncResult;
+    try {
+      syncResult = await syncUserProjectsFromAitop(store, req.user, saveStore);
+      const purged = purgeLegacyNonAitopProjects(store);
+      if (purged > 0) {
+        saveStore(store);
+        console.log(`[flowgen] purged ${purged} legacy non-AITOP project(s)`);
+      }
+      if (getStorageMode() === 'relational') {
+        const { flushStore } = await import('./store.mjs');
+        await flushStore();
+      }
+    } catch (e) {
+      console.error('[flowgen] AITOP project sync failed:', e?.message || e);
+      return res.status(502).json({
+        error: 'AITOP 项目列表同步失败',
+        message: e?.message || String(e),
+      });
+    }
+
     const q = (req.query.q || '').toString().trim().toLowerCase();
     const status = (req.query.status || '').toString().trim();
+    /** 只返回本次 AITOP 同步到的项目；平台管理员/超管可见 allowedIds 内全部项目 */
+    const allowedIds = syncResult?.allowedIds ?? new Set();
     let list = store.projects.filter((p) => {
-      if (req.user.role === 'super_admin' || req.user.role === 'admin') return true;
+      if (!allowedIds.has(p.id)) return false;
+      if (isGlobalAdminRole(req.user.role)) return true;
       return isMember(store, p.id, req.user.id);
     });
     if (q) {
@@ -444,24 +578,10 @@ export function createFlowgenRouter() {
     res.json({ projects });
   });
 
-  router.post('/projects', authMiddleware(true), requireAdmin, (req, res) => {
-    const { name, status = 'active', extendedJson = {} } = req.body || {};
-    if (!name) return res.status(400).json({ error: '需要项目名称' });
-    const store = loadStore();
-    const now = new Date().toISOString();
-    const row = {
-      id: randomUUID(),
-      name: String(name),
-      status: String(status),
-      extendedJson: typeof extendedJson === 'object' ? extendedJson : {},
-      createdBy: req.user.id,
-      createdAt: now,
-      updatedAt: now,
-    };
-    store.projects.push(row);
-    store.members.push({ projectId: row.id, userId: req.user.id, role: 'owner' });
-    saveStore(store);
-    res.status(201).json(row);
+  router.post('/projects', authMiddleware(true), requireAdmin, (_req, res) => {
+    return res.status(403).json({
+      error: '项目由 AITOP100 平台管理，请从 AITOP 分配项目权限，不支持在 FlowGen 内手动创建',
+    });
   });
 
   router.patch('/projects/:projectId', authMiddleware(true), async (req, res) => {
@@ -473,7 +593,11 @@ export function createFlowgenRouter() {
       return res.status(403).json({ error: '需要项目管理员、owner/editor 或平台管理员' });
     }
     const { name, status, coverImage, extendedJson } = req.body || {};
-    if (name) p.name = String(name);
+    if (name !== undefined && String(name).trim() !== p.name) {
+      return res.status(403).json({
+        error: '项目名称由 AITOP100 同步，不支持在 FlowGen 内重命名',
+      });
+    }
     if (status) p.status = String(status);
     if (coverImage !== undefined) {
       const next = coverImage ? String(coverImage) : null;
@@ -501,8 +625,8 @@ export function createFlowgenRouter() {
       const p = getProject(store, req.params.projectId);
       if (!p) return res.status(404).json({ error: '项目不存在' });
       if (!canAccessProject(store, req.user, p.id)) return res.status(403).json({ error: '无权访问' });
-      if (!canManageProject(store, req.user, p.id)) {
-        return res.status(403).json({ error: '需要项目管理员、owner/editor 或平台管理员' });
+      if (!canManageProjectCover(store, req.user, p.id)) {
+        return res.status(403).json({ error: '需要超级管理员、管理员权限，或作为项目管理员管理已分配项目' });
       }
       if (!req.file || !req.file.mimetype?.startsWith('image/')) {
         return res.status(400).json({ error: '需要图片文件 file' });
@@ -535,10 +659,9 @@ export function createFlowgenRouter() {
     const p = getProject(store, req.params.projectId);
     if (!p) return res.status(404).json({ error: '项目不存在' });
     if (!canAccessProject(store, req.user, p.id)) return res.status(403).json({ error: '无权访问' });
-    if (!canManageProject(store, req.user, p.id)) {
-      return res.status(403).json({ error: '需要项目管理员、owner/editor 或平台管理员' });
+    if (!canManageProjectCover(store, req.user, p.id)) {
+      return res.status(403).json({ error: '需要超级管理员、管理员权限，或作为项目管理员管理已分配项目' });
     }
-    deleteProjectCoverFile(p.id);
     const { clearProjectCoverSource } = await import('./projectCoverMeta.mjs');
     p.coverImage = null;
     p.extendedJson = clearProjectCoverSource(p.extendedJson || {});
@@ -576,47 +699,10 @@ export function createFlowgenRouter() {
     fs.createReadStream(fp).pipe(res);
   });
 
-  /** 删除项目及关联数据（成员、工作区、素材文件、该项目下的聊天记录） */
-  function deleteProjectCascade(store, projectId) {
-    const assets = store.assets.filter((a) => a.projectId === projectId);
-    for (const a of assets) {
-      try {
-        fs.unlinkSync(path.join(uploadsDir(projectId), a.fileName));
-      } catch {
-        /* ignore missing file */
-      }
-    }
-    store.assets = store.assets.filter((a) => a.projectId !== projectId);
-    store.members = store.members.filter((m) => m.projectId !== projectId);
-    if (store.workspaces && typeof store.workspaces === 'object') {
-      delete store.workspaces[projectId];
-    }
-    if (store.chatHistory && typeof store.chatHistory === 'object') {
-      for (const [chatId, record] of Object.entries(store.chatHistory)) {
-        if (record?.projectId === projectId) delete store.chatHistory[chatId];
-      }
-    }
-    store.projects = store.projects.filter((p) => p.id !== projectId);
-    try {
-      const dir = uploadsDir(projectId);
-      if (fs.existsSync(dir)) fs.rmSync(dir, { recursive: true, force: true });
-    } catch {
-      /* ignore */
-    }
-  }
-
-  router.delete('/projects/:projectId', authMiddleware(true), requireAdmin, async (req, res) => {
-    const store = loadStore();
-    const p = getProject(store, req.params.projectId);
-    if (!p) return res.status(404).json({ error: '项目不存在' });
-    if (getStorageMode() === 'relational') {
-      deleteProjectCascade(store, p.id);
-      await deleteProjectRelational(p.id);
-    } else {
-      deleteProjectCascade(store, p.id);
-      saveStore(store);
-    }
-    res.json({ ok: true });
+  router.delete('/projects/:projectId', authMiddleware(true), requireAdmin, (_req, res) => {
+    return res.status(403).json({
+      error: '项目由 AITOP100 平台管理，不支持在 FlowGen 内删除；请在 AITOP 平台调整项目与权限',
+    });
   });
 
   router.get('/projects/:projectId/members', authMiddleware(true), (req, res) => {
@@ -664,53 +750,22 @@ export function createFlowgenRouter() {
     res.json({ users });
   });
 
-  router.post('/projects/:projectId/members', authMiddleware(true), (req, res) => {
-    const { userId, role = 'editor' } = req.body || {};
-    if (!userId) return res.status(400).json({ error: '需要 userId' });
-    const store = loadStore();
-    const p = getProject(store, req.params.projectId);
-    if (!p) return res.status(404).json({ error: '项目不存在' });
-    if (!canManageProject(store, req.user, p.id)) {
-      return res.status(403).json({ error: '无权管理该项目成员' });
-    }
-    if (!getUser(store, userId)) return res.status(404).json({ error: '用户不存在' });
-    const exists = store.members.some((m) => m.projectId === p.id && m.userId === userId);
-    if (exists) return res.status(409).json({ error: '已在项目中' });
-    store.members.push({ projectId: p.id, userId, role: String(role) });
-    saveStore(store);
-    res.status(201).json({ ok: true });
+  router.post('/projects/:projectId/members', authMiddleware(true), (_req, res) => {
+    return res.status(403).json({
+      error: '项目成员由 AITOP100 平台管理，请在 AITOP 配置域账号与项目权限',
+    });
   });
 
-  router.delete('/projects/:projectId/members/:userId', authMiddleware(true), (req, res) => {
-    const store = loadStore();
-    const p = getProject(store, req.params.projectId);
-    if (!p) return res.status(404).json({ error: '项目不存在' });
-    if (!canManageProject(store, req.user, p.id)) {
-      return res.status(403).json({ error: '无权管理该项目成员' });
-    }
-    store.members = store.members.filter(
-      (m) => !(m.projectId === req.params.projectId && m.userId === req.params.userId)
-    );
-    saveStore(store);
-    res.json({ ok: true });
+  router.delete('/projects/:projectId/members/:userId', authMiddleware(true), (_req, res) => {
+    return res.status(403).json({
+      error: '项目成员由 AITOP100 平台管理，请在 AITOP 配置域账号与项目权限',
+    });
   });
 
-  router.patch('/projects/:projectId/members/:userId', authMiddleware(true), (req, res) => {
-    const { role } = req.body || {};
-    if (!role) return res.status(400).json({ error: '需要 role' });
-    const store = loadStore();
-    const p = getProject(store, req.params.projectId);
-    if (!p) return res.status(404).json({ error: '项目不存在' });
-    if (!canManageProject(store, req.user, p.id)) {
-      return res.status(403).json({ error: '无权管理该项目成员' });
-    }
-    const m = store.members.find(
-      (x) => x.projectId === req.params.projectId && x.userId === req.params.userId
-    );
-    if (!m) return res.status(404).json({ error: '不在项目中' });
-    m.role = String(role);
-    saveStore(store);
-    res.json({ ok: true, role: m.role });
+  router.patch('/projects/:projectId/members/:userId', authMiddleware(true), (_req, res) => {
+    return res.status(403).json({
+      error: '项目成员由 AITOP100 平台管理，请在 AITOP 配置域账号与项目权限',
+    });
   });
 
   router.post('/projects/:projectId/users', authMiddleware(true), requireAdmin, (req, res) => {
@@ -739,42 +794,10 @@ export function createFlowgenRouter() {
     res.status(201).json({ user: { id: row.id, username: row.username }, member: { role: memberRole } });
   });
 
-  router.post('/projects/import', authMiddleware(true), requireAdmin, (req, res) => {
-    const { rows } = req.body || {};
-    if (!Array.isArray(rows)) return res.status(400).json({ error: '需要 rows 数组' });
-    const store = loadStore();
-    const errors = [];
-    let ok = 0;
-    rows.forEach((row, i) => {
-      try {
-        const name = row.name ?? row['项目名称'];
-        if (!name) {
-          errors.push({ row: i + 1, message: '缺少项目名称' });
-          return;
-        }
-        if (store.projects.some((p) => p.name === String(name))) {
-          errors.push({ row: i + 1, message: `项目 ${name} 已存在` });
-          return;
-        }
-        const now = new Date().toISOString();
-        const proj = {
-          id: randomUUID(),
-          name: String(name),
-          status: String(row.status || 'active'),
-          extendedJson: typeof row.extendedJson === 'object' ? row.extendedJson : {},
-          createdBy: req.user.id,
-          createdAt: now,
-          updatedAt: now,
-        };
-        store.projects.push(proj);
-        store.members.push({ projectId: proj.id, userId: req.user.id, role: 'owner' });
-        ok++;
-      } catch (e) {
-        errors.push({ row: i + 1, message: String(e?.message || e) });
-      }
+  router.post('/projects/import', authMiddleware(true), requireAdmin, (_req, res) => {
+    return res.status(403).json({
+      error: '项目由 AITOP100 平台管理，不支持批量导入',
     });
-    saveStore(store);
-    res.json({ imported: ok, errors });
   });
 
   router.get('/projects/:projectId/workspace', authMiddleware(true), async (req, res) => {
@@ -869,7 +892,6 @@ export function createFlowgenRouter() {
     const { payload, version, allowEmptyGraph } = req.body || {};
     try {
       const sanitizedPayload = sanitizeWorkspacePayload(payload);
-      const graphNodes = sanitizedPayload?.graph?.nodes;
       const putBody = {
         payload: sanitizedPayload,
         version,
@@ -877,20 +899,10 @@ export function createFlowgenRouter() {
       };
       if (getStorageMode() === 'relational') {
         const out = await workspaceRepo.putUserWorkspaceSlice(p.id, req.user.id, putBody);
-        try {
-          await syncProjectCoverFromWorkspaceGraph(p.id, graphNodes);
-        } catch (coverErr) {
-          console.warn('[flowgen] workspace project cover sync failed', p.id, coverErr);
-        }
         return res.json(out);
       }
       const out = putUserWorkspaceSlice(store, p.id, req.user.id, putBody);
       saveStore(store);
-      try {
-        await syncProjectCoverFromWorkspaceGraph(p.id, graphNodes);
-      } catch (coverErr) {
-        console.warn('[flowgen] workspace project cover sync failed', p.id, coverErr);
-      }
       res.json(out);
     } catch (e) {
       if (e && typeof e === 'object' && e.code === 'VERSION_CONFLICT') {
@@ -923,6 +935,8 @@ export function createFlowgenRouter() {
           id: a.id,
           name: a.name,
           category: normalizeCategoryForStore(a.category),
+          episode: a.episode || '',
+          sequence: a.sequence || '',
           url: paths.file,
           thumbUrl: paths.thumb,
           mime: a.mime,
@@ -939,7 +953,7 @@ export function createFlowgenRouter() {
     authMiddleware(true),
     requireProjectAssetWrite,
     upload.single('file'),
-    (req, res) => {
+    async (req, res) => {
       const store = loadStore();
       const p = getProject(store, req.params.projectId);
       if (!p) return res.status(404).json({ error: '项目不存在' });
@@ -975,6 +989,12 @@ export function createFlowgenRouter() {
         pickStr(req.body?.label) ||
         pickStr(req.headers['x-asset-category']);
       const category = normalizeCategoryForStore(categoryRaw);
+      const episode = normalizeEpisodeForStore(
+        pickStr(req.query?.episode) || pickStr(req.body?.episode)
+      );
+      const sequence = normalizeSequenceForStore(
+        pickStr(req.query?.sequence) || pickStr(req.body?.sequence)
+      );
       logAssetDebug('POST asset', {
         projectId: p.id,
         queryKeys: Object.keys(req.query || {}),
@@ -1001,18 +1021,40 @@ export function createFlowgenRouter() {
         projectId: p.id,
         name,
         category,
+        episode,
+        sequence,
         fileName: safeName,
         mime,
         createdBy: req.user.id,
         createdAt: now,
+        updatedAt: now,
       };
       store.assets.push(row);
-      saveStore(store);
+      try {
+        if (getStorageMode() === 'relational') {
+          await assetsRepo.insertAsset(row);
+          saveStore(store);
+          await flushStore();
+        } else {
+          saveStore(store);
+        }
+      } catch (e) {
+        store.assets.pop();
+        try {
+          fs.unlinkSync(fp);
+        } catch {
+          /* ignore */
+        }
+        console.error('[flowgen] asset insert failed:', e?.message || e);
+        return res.status(500).json({ error: '素材入库失败，请重试' });
+      }
       const paths = assetApiPaths(p.id, row.id);
       res.status(201).json({
         id: row.id,
         name: row.name,
         category: row.category,
+        episode: row.episode,
+        sequence: row.sequence,
         url: paths.file,
         thumbUrl: paths.thumb,
         mime: row.mime,
@@ -1055,6 +1097,12 @@ export function createFlowgenRouter() {
     if (categoryInput !== undefined && categoryInput !== null) {
       a.category = normalizeCategoryForStore(categoryInput);
     }
+    if (body.episode !== undefined) {
+      a.episode = normalizeEpisodeForStore(body.episode);
+    }
+    if (body.sequence !== undefined) {
+      a.sequence = normalizeSequenceForStore(body.sequence);
+    }
     logAssetDebug('asset meta', {
       method: req.method,
       projectId: p.id,
@@ -1067,6 +1115,8 @@ export function createFlowgenRouter() {
       id: a.id,
       name: a.name,
       category: normalizeCategoryForStore(a.category),
+      episode: a.episode || '',
+      sequence: a.sequence || '',
     });
   }
 

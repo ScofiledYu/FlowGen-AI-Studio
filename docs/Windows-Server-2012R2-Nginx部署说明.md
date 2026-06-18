@@ -461,6 +461,7 @@ npm start
 | 用户仍访问 :3001 | 正常，3001 仍可直连调试；对外宣传统一用 `http://IP/` |
 | 更新后 502 / 白屏 | 见 [4.4 出问题怎么回滚](#44-出问题怎么回滚)；优先 Nginx 切回旧端口 |
 | 切回旧版后页面仍异常 | Ctrl+F5；确认备份已正确覆盖 `dist\` |
+| 资产库 / 封面上传 **`Request Entity Too Large`**（413） | Nginx 默认 `client_max_body_size` 为 1MB；本说明步骤-4 已设 `100m`。若仍报错，检查 `nginx.conf` 的 `http { }` 是否含该行，执行 `nginx.exe -t` 与 `nginx.exe -s reload`。开发机直连 3001 正常、经 80 失败即为此因 |
 
 ---
 

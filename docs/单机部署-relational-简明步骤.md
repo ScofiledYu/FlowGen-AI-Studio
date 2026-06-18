@@ -221,6 +221,7 @@ npm start
 | 页面没变 | Ctrl+F5；确认 `dist\` 已覆盖 |
 | `Cannot find module ... persistSanitize.mjs` | 从开发机拷 `utils\persistSanitize.mjs` 到服务器同路径后重启 |
 | 项目列表全是占位图、无封面 | 见下文「项目封面」；磁盘有 `project-cover.*` 时执行 `npm run repair:project-covers` |
+| 资产库 / 封面上传 **`Request Entity Too Large`** | Nginx 默认只允许 1MB；在 `D:\nginx\conf\nginx.conf` 的 `http { }` 加 `client_max_body_size 100m;` 后 `nginx.exe -t` 与 `nginx.exe -s reload`。详见 [Nginx 部署说明 · 常见问题](./Windows-Server-2012R2-Nginx部署说明.md#第五部分常见问题) 与 [蓝绿指南 · 10.10](./Windows-Server-2022-128GB-蓝绿部署指南.md#1010-资产库--封面上传报-request-entity-too-large413) |
 
 ### 项目封面（列表缩略图）
 
@@ -237,7 +238,7 @@ npm start
 
 1. 确认升级时**没有覆盖**服务器上的 `data\` 文件夹（含 `uploads\`）。
 2. 在服务器执行：`npm run repair:project-covers`（根据磁盘上的 `project-cover.*` 写回数据库）。
-3. 仍无图：进入项目改画布并保存（约 10 秒），或项目菜单里**重新上传封面**。
+3. 仍无图：由**超级管理员 / 管理员 / 项目管理员**在项目列表 ⋮ 菜单中**手动上传封面**（保存画布不会自动改封面）。
 
 ---
 

@@ -47,11 +47,12 @@ describe('AiTop Service', () => {
       expect(global.fetch).toHaveBeenCalledTimes(2);
     });
 
-    it('should return null on upload failure', async () => {
+    it('should throw on upload failure with API detail', async () => {
       const mockImageUrl = 'https://example.com/image.png';
       const mockResponse = {
-        code: 1,
-        success: false
+        code: 1102,
+        success: false,
+        message: 'account balance not enough',
       };
 
       (global.fetch as any).mockResolvedValueOnce({
@@ -64,22 +65,18 @@ describe('AiTop Service', () => {
         ok: true,
         status: 200,
         statusText: 'OK',
-        json: () => Promise.resolve(mockResponse)
+        json: () => Promise.resolve(mockResponse),
       });
 
-      const result = await uploadImage(mockImageUrl);
-      
-      expect(result).toBeNull();
+      await expect(uploadImage(mockImageUrl)).rejects.toThrow(/account balance not enough/);
     });
 
-    it('should handle errors gracefully', async () => {
+    it('should throw on network error', async () => {
       const mockImageUrl = 'https://example.com/image.png';
 
-      (global.fetch as any).mockRejectedValueOnce(new Error('Network error'));
+      (global.fetch as any).mockRejectedValue(new Error('Network error'));
 
-      const result = await uploadImage(mockImageUrl);
-      
-      expect(result).toBeNull();
+      await expect(uploadImage(mockImageUrl)).rejects.toThrow(/Network error/);
     });
 
     it('should fetch flowgen protected asset with JWT before upload', async () => {
@@ -155,7 +152,7 @@ describe('AiTop Service', () => {
             'Content-Type': 'application/json'
           }),
           body: JSON.stringify({
-            platform: 'NANO_BANANA_2',
+            platform: 'NANO_BANANA_2_FLASH',
             prompt: 'test prompt',
             aspectRatio: '1:1',
             image: ['image1.png'],

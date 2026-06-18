@@ -5,6 +5,7 @@
  * npx tsx scripts/panel-ref-media-simulation-test.ts
  */
 import type { NodeData } from '../types.ts';
+import { MODEL_IMAGE_2, MODEL_NANO_BANANA_2 } from '../types.ts';
 import {
   buildPromptMediaRefContextFromNode,
   buildPromptMediaRefContextForRun,
@@ -27,6 +28,8 @@ import {
   remapPromptMainImageToAssetToken,
   collectPromptAssetScanRefs,
   scanPromptAppendMediaTokensForNode,
+  scanPromptAppendAllTokens,
+  matchAllPromptMediaTokens,
 } from '../utils/promptMediaRefs.ts';
 import {
   panelReferencesAlreadyContainUrl,
@@ -76,7 +79,6 @@ import {
   nodeUsesHiddenMainPreviewSlot,
   resolveNodeSelectionPreviewUrl,
 } from '../utils/nodeDetailsPreview.ts';
-import { MODEL_IMAGE_2, MODEL_NANO_BANANA_2 } from '../types.ts';
 
 let pass = 0;
 let fail = 0;
@@ -963,6 +965,51 @@ console.log('\n=== 12a. Nano 未 @主图：主预览=首个 @ 参考图 ===\n');
   );
   ok('参考槽仍保留狐狸', merged[0] === 'https://cos/fox.png|UP');
   ok('合并时未因主图去重掏空参考', merged.length >= 1);
+}
+
+console.log('\n=== 12a-main. Nano 仅 @主图：勿出现重复「图片1」槽 ===\n');
+
+{
+  const main = 'https://cos.example.com/proj/assets/aa/file';
+  const dupRef = 'https://cos.example.com/proj/assets/aa/thumb';
+  const data = simNode({
+    selectedModel: 'Nano Banana 2.0',
+    imagePreview: main,
+    referenceImages: [dupRef],
+    prompt: '把这张图片@主图变成二维风格',
+  });
+  const ctx = buildPromptMediaRefContextFromNode(data);
+  const plan = collectReferencedMediaFromPrompt(data.prompt!, data, ctx, new Map());
+  ok('plan 仅含 @主图', plan.images.length === 1 && plan.images[0].token === '@主图');
+  const uploaded = mockUploadedByToken(plan);
+  const merged = mergeAndPrunePanelReferenceImagesAfterUpload(
+    data.referenceImages || [],
+    plan.images,
+    uploaded,
+    panelMergeOptionsForReferencedUpload(plan.images, uploaded, data.imagePreview)
+  );
+  ok('运行合并后参考槽为空', merged.length === 0, JSON.stringify(merged));
+  const pruned = prunePanelReferenceImagesToPromptRefs(
+    data.referenceImages,
+    plan.images,
+    merged
+  );
+  ok('prune 后参考槽为空', pruned.length === 0);
+  const display = buildPanelReferenceDisplayEntries(data.referenceImages, {
+    imagePreview: main,
+    dedupeAgainstMain: true,
+    projectAssets: [],
+  });
+  const filtered = filterPanelReferenceDisplayEntriesExcludingMainPreview(
+    display,
+    main,
+    undefined,
+    data.referenceImageLabels,
+    []
+  );
+  ok('展示层过滤后与主图同素材的参考格', filtered.length === 0, JSON.stringify(filtered));
+  const patch = referenceImagesDedupePatchIfNeeded(data, { dedupeAgainstMain: true });
+  ok('面板去重 patch 清空重复槽', patch?.referenceImages?.length === 0);
 }
 
 /** 同屏「图片n」底栏不得重复（主图格单独展示时不计入图片n） */
@@ -3254,6 +3301,58 @@ console.log('\n=== 41c. sc009：夏茉槽水墨 COS + 槽位 File 仍上传库�
   );
   ok('Omni multi: 合并后不含误拖主预览', !after.includes('https://cos/wrong-main.png'), JSON.stringify(after));
   ok('Omni multi: 保留 @ 参考狐狸', after.some((u) => u.includes('fox')), JSON.stringify(after));
+}
+
+console.log('\n=== 42. 无空格扫描 + 各模型 token 解析/展开 ===\n');
+
+{
+  const assets = [{ slug: 'baize', name: '白泽', url: 'https://x/baize.png' }];
+  const slugMap = new Map([['baize', assets[0].url!]]);
+  const raw = '白泽走向镜头';
+  const scanned = scanPromptAppendAllTokens(raw, [
+    { label: '白泽', insertText: '@资产:白泽' },
+  ]);
+  ok('扫描无尾随空格', !scanned.includes('@资产:白泽 '));
+  ok('扫描结果', scanned === '白泽@资产:白泽走向镜头', scanned);
+  const tokens = matchAllPromptMediaTokens(scanned, assets);
+  ok('token 边界仅白泽', tokens.length === 1 && tokens[0].token === '@资产:白泽');
+  ok('token 后保留走向', scanned.endsWith('走向镜头'));
+
+  const models = [
+    MODEL_NANO_BANANA_2,
+    MODEL_IMAGE_2,
+    '可灵3.0 Omni',
+    '可灵 2.5 Turbo',
+    'vidu 2.0',
+    'seedance2.0 (高质量版)',
+    '即梦3.0 Pro',
+  ] as const;
+  for (const selectedModel of models) {
+    const data = simNode({
+      selectedModel,
+      imagePreview: assets[0].url,
+      imageName: '白泽',
+      referenceImages: [assets[0].url!],
+      referenceImageLabels: ['白泽'],
+      prompt: scanned,
+      ...(selectedModel === '可灵3.0 Omni'
+        ? { klingOmniTab: 'multi' as const, klingOmniMultiPrompt: scanned, klingOmniMultiReferenceImages: [assets[0].url!] }
+        : {}),
+      ...(selectedModel.startsWith('seedance2.0')
+        ? {
+            seedanceGenerationMode: 'reference' as const,
+            seedanceTabConfigs: { reference: { prompt: scanned } },
+          }
+        : {}),
+    });
+    const ctx = buildPromptMediaRefContextForRun(data, assets);
+    const plan = collectReferencedMediaFromPrompt(scanned, data, ctx, slugMap, assets);
+    ok(`${selectedModel}: plan 含白泽`, plan.images.some((e) => e.label === '白泽'));
+    const opts = buildReferenceIndexOptionsFromPlan(plan, { projectAssets: assets });
+    const expanded = resolvePromptPlaceholders(scanned, data, ctx, opts);
+    ok(`${selectedModel}: 展开后无裸 @资产:白泽`, !expanded.includes('@资产:白泽'));
+    ok(`${selectedModel}: 展开保留走向`, expanded.includes('走向镜头'));
+  }
 }
 
 console.log('\n=== 汇总 ===\n');

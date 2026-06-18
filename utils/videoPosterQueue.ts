@@ -8,6 +8,7 @@ type QueueTask = {
 
 const MAX_CONCURRENT_POSTER_CAPTURES = 2;
 const pending: QueueTask[] = [];
+const inFlightByUrl = new Map<string, Promise<string | null>>();
 let running = 0;
 
 function runNext() {
@@ -29,9 +30,16 @@ function runNext() {
 }
 
 export function captureVideoMiddleFrameQueued(url: string): Promise<string | null> {
-  return new Promise((resolve) => {
+  const existing = inFlightByUrl.get(url);
+  if (existing) return existing;
+  const promise = new Promise<string | null>((resolve) => {
     pending.push({ url, resolve });
     runNext();
   });
+  inFlightByUrl.set(url, promise);
+  void promise.finally(() => {
+    if (inFlightByUrl.get(url) === promise) inFlightByUrl.delete(url);
+  });
+  return promise;
 }
 

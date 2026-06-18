@@ -21,6 +21,7 @@ import {
   buildPromptMediaRefLabels,
   buildReferenceIndexOptionsFromPlan,
   collectReferencedMediaFromPrompt,
+  findPromptMediaRefItemForToken,
   resolvePromptPlaceholders,
 } from '../utils/promptMediaRefs.ts';
 import {
@@ -79,18 +80,18 @@ function mockUploaded(plan: ReturnType<typeof collectReferencedMediaFromPrompt>)
 }
 
 function urlAtToken(data: NodeData, token: string): string | null {
+  if (token === '@主图' || token === '@主体') return data.imagePreview?.trim() || null;
+  if (token === '@首帧图') return data.firstFrameImageUrl || data.firstFrameImage || null;
+  if (token === '@尾帧图') return data.lastFrameImageUrl || data.lastFrameImage || null;
   const ctx = buildPromptMediaRefContextFromNode(data);
   const labels = buildPromptMediaRefLabels(data, ctx);
   const alias =
     token === '@图片' ? '@图片1' : token === '@视频' ? '@视频1' : token === '@音频' ? '@音频1' : token;
-  const item = labels.find((i) => i.insertText === alias);
+  const item = findPromptMediaRefItemForToken(labels, token, alias);
   if (!item) return null;
-  if (item.kind === 'image' && item.refImageIndex != null) {
+  if ((item.kind === 'image' || item.kind === 'projectAsset') && item.refImageIndex != null) {
     return refArrayForModel(data)[item.refImageIndex]?.trim() || null;
   }
-  if (token === '@主图' || token === '@主体') return data.imagePreview?.trim() || null;
-  if (token === '@首帧图') return data.firstFrameImageUrl || data.firstFrameImage || null;
-  if (token === '@尾帧图') return data.lastFrameImageUrl || data.lastFrameImage || null;
   return null;
 }
 
@@ -145,9 +146,12 @@ function runPanelAndAtScenario(s: Scenario) {
   const normUrl = (u: string | null) =>
     u ? u.replace(/\|UP$/i, '').split('?')[0] : null;
   for (const entry of plan.images) {
-    const resolved = urlAtToken(dataAfter, entry.token);
     const slot =
       entry.refImageSlotIndex != null ? panelBefore[entry.refImageSlotIndex] : null;
+    const resolved =
+      entry.refImageSlotIndex != null
+        ? String(panelAfter[entry.refImageSlotIndex] || '').trim() || null
+        : urlAtToken(dataAfter, entry.token);
     ok(
       `${s.id}: ${entry.token} 定位面板`,
       resolved != null && (slot == null || normUrl(resolved) === normUrl(slot)),
@@ -314,7 +318,8 @@ const SCENARIOS: Scenario[] = [
       selectedModel: 'seedance2.0 (急速版)',
       seedanceGenerationMode: 'reference',
       imagePreview: 'https://ex/sd-main.png',
-      referenceImages: ['https://ex/sd1.png', 'https://ex/sd2.png', 'https://ex/sd3.png'],
+      /** 槽0 与主图同素材时 UI 不占 @图片1，@图片2 → 第三张参考图 */
+      referenceImages: ['https://ex/sd-main.png', 'https://ex/sd2.png', 'https://ex/sd3.png'],
       prompt: '@主图 场景 @图片2 人物',
     }),
     apiImageUrls: ['https://ex/sd-main.png', 'https://ex/sd3.png'],

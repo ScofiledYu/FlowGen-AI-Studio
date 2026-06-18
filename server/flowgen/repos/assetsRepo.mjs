@@ -7,6 +7,8 @@ function rowToAsset(row) {
     projectId: row.project_id,
     name: row.name,
     category: row.category || 'OTHER',
+    episode: row.episode || '',
+    sequence: row.sequence || '',
     mime: row.mime,
     fileName: row.file_name,
     createdBy: row.created_by,
@@ -31,13 +33,15 @@ export async function insertAsset(asset) {
   const pool = getPool();
   await pool.query(
     `INSERT INTO flowgen_assets
-      (id, project_id, name, category, mime, file_name, created_by, created_at, updated_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      (id, project_id, name, category, episode, sequence, mime, file_name, created_by, created_at, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     [
       asset.id,
       asset.projectId,
       asset.name,
       asset.category || 'OTHER',
+      asset.episode || null,
+      asset.sequence || null,
       asset.mime,
       asset.fileName,
       asset.createdBy || null,
@@ -51,9 +55,18 @@ export async function updateAsset(asset) {
   const pool = getPool();
   await pool.query(
     `UPDATE flowgen_assets SET
-      name = ?, category = ?, mime = ?, file_name = ?, updated_at = ?
+      name = ?, category = ?, episode = ?, sequence = ?, mime = ?, file_name = ?, updated_at = ?
      WHERE id = ?`,
-    [asset.name, asset.category || 'OTHER', asset.mime, asset.fileName, toSqlDatetime(asset.updatedAt), asset.id]
+    [
+      asset.name,
+      asset.category || 'OTHER',
+      asset.episode || null,
+      asset.sequence || null,
+      asset.mime,
+      asset.fileName,
+      toSqlDatetime(asset.updatedAt),
+      asset.id,
+    ]
   );
 }
 
@@ -80,11 +93,13 @@ export async function syncAllAssets(assets) {
     for (const a of assets) {
       await conn.query(
         `INSERT INTO flowgen_assets
-          (id, project_id, name, category, mime, file_name, created_by, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+          (id, project_id, name, category, episode, sequence, mime, file_name, created_by, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
          ON DUPLICATE KEY UPDATE
           name = VALUES(name),
           category = VALUES(category),
+          episode = VALUES(episode),
+          sequence = VALUES(sequence),
           mime = VALUES(mime),
           file_name = VALUES(file_name),
           updated_at = VALUES(updated_at)`,
@@ -93,6 +108,8 @@ export async function syncAllAssets(assets) {
           a.projectId,
           a.name,
           a.category || 'OTHER',
+          a.episode || null,
+          a.sequence || null,
           a.mime,
           a.fileName,
           a.createdBy || null,

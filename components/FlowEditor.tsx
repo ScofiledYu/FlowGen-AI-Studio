@@ -43,6 +43,7 @@ import {
   mergeOmniMultiTabReferenceImagesForDetails,
   mergeSeedanceImageModeDetailsReferenceImages,
   buildNodeDetailsReferencePreview,
+  buildOmniInstructionVideoTabDetailsReferencePreview,
   resolveNodeDetailsHeroImageUrl,
   shouldIncludeImagePreviewInNodeDetailsUrlPool,
 } from '../utils/nodeDetailsPreview';
@@ -50,8 +51,11 @@ import {
   parseStoryboardSpawnRows,
   STORYBOARD_TEMPLATE_ERR,
   isProjectAssetLibraryImageUrl,
+  checkStoryboardTemplateAssetBinding,
+  validateStoryboardExcelTableSpawn,
   validateTemplateUsesProjectAssetLibrary,
 } from '../utils/storyboardTableSpawn';
+import { parseStoryboardExcelFile } from '../utils/parseStoryboardExcel';
 import {
   parseProjectAssetIdsFromMediaUrl,
   resolveCanonicalProjectAssetPreviewUrl,
@@ -79,7 +83,7 @@ import { DragDropContext } from './DragDropContext';
 import { ErrorBoundary } from './ErrorBoundary';
 import { Sidebar } from './Sidebar';
 import { ChatPanel } from './ChatPanel';
-import { Play, Download, Trash2, UploadCloud, Search, X, Clapperboard, Hand, MousePointer, LayoutGrid, Film, ChevronRight, StopCircle, Workflow, FileText, Info, Layers, Ratio, Monitor, Copy, Link as LinkIcon, ArrowRightLeft, Save, Frame, ImagePlus } from 'lucide-react';
+import { Play, Download, Trash2, UploadCloud, Search, X, Clapperboard, Hand, MousePointer, LayoutGrid, Film, ChevronRight, StopCircle, Workflow, FileText, Info, Layers, Ratio, Monitor, Copy, Link as LinkIcon, ArrowRightLeft, Save, Frame, ImagePlus, GitBranch, Clock, Calendar, ChevronDown } from 'lucide-react';
 import {
   uploadImage,
   uploadVideo,
@@ -92,7 +96,7 @@ import {
   createJimengVideoTask,
   createViduVideoTask,
   createDoubaoSeedanceVideoTask,
-  logPreloadJson,
+  setAitopBillingContext,
 } from '../services/aitop';
 import { getImageAspectRatioFromSource } from '../utils/imageRatio';
 import { remoteMediaUrlPreferSameOriginProxy } from '../utils/remoteMediaFetch';
@@ -149,7 +153,8 @@ import {
   buildSeedanceImageModePanelPersistPatchFromPlan,
   enrichSpawnedStoryboardNodeData,
 } from '../utils/enrichSpawnedStoryboardNode';
-import { shouldAppendRunMediaDiagnostics } from '../utils/runErrorDisplay';
+import { shouldAppendRunMediaDiagnostics, formatAitopPlatformSupportHint } from '../utils/runErrorDisplay';
+import { getAitopBillingContext } from '../utils/aitopBilling';
 import {
   assignSeedanceUploadedRefsToPanelSlotsByUrlMatch,
   assignStartEndUrlsFromImagePlan,
@@ -230,6 +235,7 @@ import { dedupeReferenceImageUrlsForSlotFallback } from '../utils/referenceImage
 import { pickVideoResourceUrlFromTaskStatus } from '../utils/taskStatusVideoUrl';
 import { pickImageResourceUrlFromTaskStatus } from '../utils/taskStatusImageUrl';
 import { normalizeNodeRunStateForPersist } from '../utils/runRecovery';
+import { resolveNodeDownloadFilename } from '../utils/nodeDownloadFilename';
 import {
   fixMisnamedOutputNodesOnGraph,
   resolveOutputNodeNamingFromUpstream,
@@ -1531,15 +1537,11 @@ function stripSpawnedStoryboardNodeData(nodeType: string, data: NodeData): NodeD
 function logFlowGenGraph(_phase: string, _payload: Record<string, unknown>) {}
 function logRefDebug(_stage: string, _payload: Record<string, unknown>) {}
 
-/** 运行前客户端阶段（上传、比例探测等）；关闭：`window.__FLOWGEN_DEBUG_PRELOAD__ = false` */
-function logPreloadDebug(payload: Record<string, unknown>) {
-  logPreloadJson({ debugType: 'preload-client', ...payload });
-}
+/** 运行前客户端阶段（已合并至 services/aitop.ts 单次 preload，此处不再打印） */
+function logPreloadDebug(_payload: Record<string, unknown>) {}
 
-/** 即将发往 AiTop 的请求体摘要 */
-function logModelRequest(model: string, payload: Record<string, unknown>) {
-  logPreloadJson({ debugType: 'preload', model, body: payload });
-}
+/** 即将发往 AiTop 的请求（由 services/aitop.ts 在 fetch 前统一打印 preload） */
+function logModelRequest(_model: string, _payload: Record<string, unknown>) {}
 
 /**
  * image 2 多图参考串位/重复排查。
@@ -1560,9 +1562,12 @@ function summarizeImageRefUrlForDebug(u: unknown, idx: number): string {
 }
 
 function logImage2Debug(stage: string, payload: Record<string, unknown>) {
+  if (typeof window === 'undefined') return;
   try {
+    if (localStorage.getItem('flowgen:debugImage2') !== '1') return;
     console.info(`[FlowGen:image2-debug] ${stage} ${JSON.stringify(payload, null, 2)}`);
   } catch {
+    if (localStorage.getItem('flowgen:debugImage2') !== '1') return;
     console.info('[FlowGen:image2-debug]', stage, payload);
   }
 }
@@ -1779,6 +1784,20 @@ const FlowEditor = ({
   useEffect(() => {
     reloadProjectSkill();
   }, [reloadProjectSkill]);
+
+  /** 进入项目后：生图/生视频请求携带域账号与 scoreProjectId（AITOP 项目 id） */
+  useEffect(() => {
+    const user = getStoredUser();
+    if (serverProjectId && user?.username) {
+      setAitopBillingContext({
+        domainAccount: user.username,
+        scoreProjectId: serverProjectId,
+      });
+    } else {
+      setAitopBillingContext(null);
+    }
+    return () => setAitopBillingContext(null);
+  }, [serverProjectId]);
 
   useEffect(() => {
     if (!serverProjectId) return;
@@ -3538,6 +3557,11 @@ const FlowEditor = ({
 
   // Context Menu State
   const [nodeContextMenu, setNodeContextMenu] = useState<{ x: number; y: number } | null>(null);
+  const [runScheduleMenu, setRunScheduleMenu] = useState<{ x: number; y: number; action: 'selected' | 'all' } | null>(null);
+  const [customTimePicker, setCustomTimePicker] = useState<{ action: 'selected' | 'all'; defaultValue: string } | null>(null);
+  const customTimeInputRef = useRef<HTMLInputElement>(null);
+  const storyboardExcelInputRef = useRef<HTMLInputElement>(null);
+  const pendingStoryboardTemplateIdRef = useRef<string | null>(null);
 
   const { selectedNode, selectedNodes } = useMemo(() => {
     let nextSelectedNode: RFNode | undefined;
@@ -4487,7 +4511,7 @@ const FlowEditor = ({
 
   /** 分镜表右键：按行克隆模板节点的下游节点并连线 */
   const spawnStoryboardDownstreamNodes = useCallback(
-    (payload: { rows: string[][]; templateNodeId: string }):
+    (payload: { rows: string[][]; templateNodeId: string; strictExcelHeaders?: boolean }):
       | { ok: true; created: number }
       | { ok: false; error: string } => {
       const currentNodes = getNodes();
@@ -4508,7 +4532,9 @@ const FlowEditor = ({
         return { ok: false, error: assetCheck.error };
       }
 
-      const spawnRows = parseStoryboardSpawnRows(payload.rows, templateData);
+      const spawnRows = parseStoryboardSpawnRows(payload.rows, templateData, {
+        strictExcelHeaders: payload.strictExcelHeaders,
+      });
       if ('error' in spawnRows) {
         return { ok: false, error: spawnRows.error };
       }
@@ -4619,6 +4645,87 @@ const FlowEditor = ({
       setEdges,
       projectAssetRefItems,
       serverProjectId,
+    ]
+  );
+
+  const getLiveTemplateDataForSpawn = useCallback(
+    (templateNodeId: string): NodeData | undefined => {
+      const n = getNodes().find((x) => x.id === templateNodeId);
+      return n?.data as NodeData | undefined;
+    },
+    [getNodes]
+  );
+
+  const beginSpawnStoryboardFromExcel = useCallback(() => {
+    setNodeContextMenu(null);
+    const currentNodes = getNodes();
+    const liveSelected = currentNodes.filter(
+      (n) =>
+        n.selected &&
+        n.type !== NodeType.BACKDROP &&
+        n.type !== NodeType.CHAIN_FOLDER
+    );
+    if (liveSelected.length !== 1) {
+      alert('请先在画布上选中 1 个节点作为模板，再按分镜表生成下游节点。');
+      return;
+    }
+    const assetCheck = checkStoryboardTemplateAssetBinding(
+      liveSelected[0].data as NodeData,
+      serverProjectId ?? undefined
+    );
+    if (assetCheck.ok === false) {
+      alert(assetCheck.error);
+      return;
+    }
+    pendingStoryboardTemplateIdRef.current = liveSelected[0].id;
+    storyboardExcelInputRef.current?.click();
+  }, [getNodes, serverProjectId]);
+
+  const handleStoryboardExcelFileChange = useCallback(
+    async (e: React.ChangeEvent<HTMLInputElement>) => {
+      const file = e.target.files?.[0] ?? null;
+      e.target.value = '';
+      const templateId = pendingStoryboardTemplateIdRef.current;
+      pendingStoryboardTemplateIdRef.current = null;
+      if (!file || !templateId) return;
+
+      const parsed = await parseStoryboardExcelFile(file);
+      if (parsed.ok === false) {
+        alert(parsed.error);
+        return;
+      }
+
+      const currentNodes = getNodes();
+      const liveSelected = currentNodes.filter((n) => n.id === templateId);
+      const validation = validateStoryboardExcelTableSpawn(
+        parsed.rows,
+        liveSelected,
+        liveSelected[0] ?? null,
+        getLiveTemplateDataForSpawn,
+        serverProjectId,
+        currentNodes
+      );
+      if (validation.ok === false) {
+        alert(validation.error);
+        return;
+      }
+
+      const result = spawnStoryboardDownstreamNodes({
+        rows: parsed.rows,
+        templateNodeId: validation.templateNode.id,
+        strictExcelHeaders: true,
+      });
+      if (result.ok === false) {
+        alert(result.error);
+      } else {
+        alert(`已生成 ${result.created} 个下游节点`);
+      }
+    },
+    [
+      getNodes,
+      getLiveTemplateDataForSpawn,
+      serverProjectId,
+      spawnStoryboardDownstreamNodes,
     ]
   );
 
@@ -5220,7 +5327,7 @@ const FlowEditor = ({
     if (event) {
       const target = event.target as HTMLElement;
       // 如果点击的是菜单或其子元素，不关闭菜单
-      if (target.closest('.node-context-menu')) {
+      if (target.closest('.node-context-menu') || target.closest('.run-schedule-menu')) {
         return;
       }
     }
@@ -5230,6 +5337,8 @@ const FlowEditor = ({
     }
     setMenu(null);
     setNodeContextMenu(null); // Close context menu
+    setRunScheduleMenu(null);
+    setCustomTimePicker(null);
     setSelectedNodeId(null);
   }, []);
 
@@ -6250,7 +6359,8 @@ const FlowEditor = ({
                 rawNanoPrompt,
                 currentNode.data,
                 nanoCtx,
-                projectAssetBySlugRef.current
+                projectAssetBySlugRef.current,
+                projectAssetResolveOptsRef.current.projectAssets
             );
             const nanoPrOpts = buildReferenceIndexOptionsFromPlan(
                 nanoMediaPlan,
@@ -6342,12 +6452,12 @@ const FlowEditor = ({
                     })
                 );
                 // Node Details / generationParams：记录本次 API 实际 imageUrls（含 @主图），而非仅面板 referenceImages 槽位
-                nanoPanelMergedRefs = mergedNanoRefs.length ? [...mergedNanoRefs] : null;
+                nanoPanelMergedRefs = [...mergedNanoRefs];
                 nanoRunReferenceSnapshot =
                     imageUrls.length > 0
                         ? [...imageUrls]
-                        : nanoPanelMergedRefs?.length
-                          ? [...nanoPanelMergedRefs]
+                        : mergedNanoRefs.length
+                          ? [...mergedNanoRefs]
                           : null;
                 Object.assign(runCaptureForGp, {
                     ...nanoPreviewPatch,
@@ -6410,7 +6520,7 @@ const FlowEditor = ({
             }
             validTaskIds.forEach((id) => appendRunTaskId(id));
 
-            // Poll for Completion
+            // Poll for Completion（与 image 2 一致：优先解析图片 URL）
             const pollTask = async (taskId: string): Promise<string> => {
                 let attempts = 0;
                 while (attempts < 150) { // ~5 mins
@@ -6418,30 +6528,28 @@ const FlowEditor = ({
                     attempts++;
                     const statusData = await getTaskStatus(taskId);
                     if (!statusData) continue;
-                    
-                    // 只在 TRANSFER_SUCCESS 状态时获取 URL
-                    if (statusData.status === 'TRANSFER_SUCCESS') {
-                        const resourceUrl = pickVideoResourceUrlFromTaskStatus(statusData);
+
+                    if (
+                        statusData.status === 'TRANSFER_SUCCESS' ||
+                        statusData.status === 'SUCCESS' ||
+                        statusData.status === '2' ||
+                        statusData.status === '5'
+                    ) {
+                        const resourceUrl =
+                            pickImageResourceUrlFromTaskStatus(statusData) ||
+                            pickVideoResourceUrlFromTaskStatus(statusData);
                         if (resourceUrl) {
                             return resourceUrl;
                         }
-                        // 如果 resourceUrl 为空，继续轮询
                         continue;
                     }
-                    
-                    // SUCCESS 状态时继续轮询，等待 TRANSFER_SUCCESS
-                    if (['2', 'SUCCESS', '5'].includes(statusData.status)) {
-                        // 继续轮询，等待 TRANSFER_SUCCESS
-                        continue;
+
+                    if (['3', 'FAIL', '6', 'TRANSFER_FAIL'].includes(statusData.status)) {
+                        const errorMsg = statusData.errorDescription || statusData.errorMsg || '任务失败';
+                        throw new Error(`**❌ Nano Banana 任务失败**\n\n**错误消息：** ${errorMsg}`);
                     }
-                    
-                        // 失败状态
-                        if (['3', 'FAIL', '6', 'TRANSFER_FAIL'].includes(statusData.status)) {
-                            const errorMsg = statusData.errorDescription || statusData.errorMsg || "任务失败";
-                            throw new Error(`**❌ Kling Video 任务失败**\n\n**错误消息：** ${errorMsg}`);
-                        }
                 }
-                throw new Error("Timeout");
+                throw new Error('**❌ Nano Banana 任务失败**\n\n**错误消息：** 轮询超时，未获取到生成结果 URL');
             };
 
             const pollPromises = validTaskIds.map(id => pollTask(id));
@@ -6471,7 +6579,8 @@ const FlowEditor = ({
                 rawImage2Prompt,
                 currentNode.data,
                 image2Ctx,
-                projectAssetBySlugRef.current
+                projectAssetBySlugRef.current,
+                projectAssetResolveOptsRef.current.projectAssets
             );
             const image2PrOpts = buildReferenceIndexOptionsFromPlan(
                 image2MediaPlan,
@@ -6822,6 +6931,12 @@ const FlowEditor = ({
         }
         // --- REAL API LOGIC FOR KLING VIDEO ---
         else if (model === '可灵3.0 Omni') {
+            /** 上传视频/参考图 + 截帧可能耗时数分钟；与 Nano/image2 一致在全程 tick 进度，避免长期停在 0% */
+            bumpRunningNodeProgress(3, 95);
+            const omniProgressInterval = window.setInterval(() => {
+                bumpRunningNodeProgress(1, 95);
+            }, 1000);
+            try {
             const originalsKeling = getOriginals(idToRun);
 
             const klingOmniTab = currentNode.data.klingOmniTab || 'multi';
@@ -6854,7 +6969,8 @@ const FlowEditor = ({
                 prompt,
                 d,
                 omniPhCtx,
-                projectAssetBySlugRef.current
+                projectAssetBySlugRef.current,
+                projectAssetResolveOptsRef.current.projectAssets
             );
             const omniPrOpts = buildReferenceIndexOptionsFromPlan(
                 omniMediaPlan,
@@ -7725,7 +7841,6 @@ const FlowEditor = ({
             while (attempts < maxAttempts) {
                 await new Promise(r => setTimeout(r, 5000));
                 attempts++;
-                bumpRunningNodeProgress(1, 95);
                 const statusData = await getTaskStatus(taskId);
                 if (!statusData) continue;
 
@@ -7747,6 +7862,9 @@ const FlowEditor = ({
                 }
             }
             if (!generatedImages.length) throw new Error('可灵3.0 Omni 视频生成超时');
+            } finally {
+                window.clearInterval(omniProgressInterval);
+            }
         }
         // --- REAL API LOGIC FOR KLING VIDEO ---
         else if (model.includes('可灵') || model.includes('Keling')) {
@@ -7768,7 +7886,8 @@ const FlowEditor = ({
                 rawKlingPrompt,
                 currentNode.data,
                 klingCtx,
-                projectAssetBySlugRef.current
+                projectAssetBySlugRef.current,
+                projectAssetResolveOptsRef.current.projectAssets
             );
             const klingPrOpts = buildReferenceIndexOptionsFromPlan(
                 klingMediaPlan,
@@ -7829,31 +7948,9 @@ const FlowEditor = ({
             // 上传图片，确保只使用 URL（不允许 base64）
             // 辅助函数：将 base64 转换为 blob 并上传
             const base64ToUrl = async (base64Str: string): Promise<string> => {
-                // 将 base64 转换为 blob
-                const response = await fetch(base64Str);
-                const blob = await response.blob();
-                
-                // 创建 FormData 并上传
-                const formData = new FormData();
-                formData.append('file', blob, 'image.png');
-                
-                const API_KEY = "aitop-key-4MGEBAFEArM3HRaJ0P77EkhEAtxseJma";
-                const BASE_URL = "https://aitop100-api.hytch.com";
-                const FILE_PREFIX = "https://aitop100app-1251510006.cos.ap-shanghai.myqcloud.com/";
-                
-                const uploadResponse = await fetch(`${BASE_URL}/api/v1/file/upload`, {
-                    method: 'POST',
-                    headers: {
-                        'api-key': API_KEY
-                    },
-                    body: formData
-                });
-                
-                const data = await uploadResponse.json();
-                if (data.code === 0 && data.success && data.data?.key) {
-                    return FILE_PREFIX + data.data.key;
-                }
-                throw new Error('Base64 图片上传失败');
+                const u = await uploadImage(base64Str);
+                if (!u) throw new Error('Base64 图片上传失败');
+                return u;
             };
 
             // 处理首帧图：确保转换为 URL
@@ -8215,7 +8312,8 @@ const FlowEditor = ({
                 rawViduPrompt,
                 currentNode.data,
                 viduCtx,
-                projectAssetBySlugRef.current
+                projectAssetBySlugRef.current,
+                projectAssetResolveOptsRef.current.projectAssets
             );
             const viduPrOpts = buildReferenceIndexOptionsFromPlan(
                 viduMediaPlan,
@@ -8265,23 +8363,9 @@ const FlowEditor = ({
                 lastFrameImage = await prepareLocalImageSrcCached(lastFrameImage);
             }
             const base64ToUrl = async (base64Str: string): Promise<string> => {
-                const response = await fetch(base64Str);
-                const blob = await response.blob();
-                const formData = new FormData();
-                formData.append('file', blob, 'image.png');
-                const API_KEY = "aitop-key-4MGEBAFEArM3HRaJ0P77EkhEAtxseJma";
-                const BASE_URL = "https://aitop100-api.hytch.com";
-                const FILE_PREFIX = "https://aitop100app-1251510006.cos.ap-shanghai.myqcloud.com/";
-                const uploadResponse = await fetch(`${BASE_URL}/api/v1/file/upload`, {
-                    method: 'POST',
-                    headers: { 'api-key': API_KEY },
-                    body: formData
-                });
-                const data = await uploadResponse.json();
-                if (data.code === 0 && data.success && data.data?.key) {
-                    return FILE_PREFIX + data.data.key;
-                }
-                throw new Error('图片上传失败');
+                const u = await uploadImage(base64Str);
+                if (!u) throw new Error('图片上传失败');
+                return u;
             };
             let firstUrl = firstFrameImage;
             if (firstUrl.startsWith('data:image/')) {
@@ -8557,23 +8641,9 @@ const FlowEditor = ({
             if (firstFrameImage) seedanceDataForPromptExpand = { ...seedanceDataForPromptExpand, firstFrameImage };
             if (lastFrameImage) seedanceDataForPromptExpand = { ...seedanceDataForPromptExpand, lastFrameImage };
             const base64ToUrl = async (base64Str: string): Promise<string> => {
-                const response = await fetch(base64Str);
-                const blob = await response.blob();
-                const formData = new FormData();
-                formData.append('file', blob, 'image.png');
-                const API_KEY = "aitop-key-4MGEBAFEArM3HRaJ0P77EkhEAtxseJma";
-                const BASE_URL = "https://aitop100-api.hytch.com";
-                const FILE_PREFIX = "https://aitop100app-1251510006.cos.ap-shanghai.myqcloud.com/";
-                const uploadResponse = await fetch(`${BASE_URL}/api/v1/file/upload`, {
-                    method: 'POST',
-                    headers: { 'api-key': API_KEY },
-                    body: formData
-                });
-                const data = await uploadResponse.json();
-                if (data.code === 0 && data.success && data.data?.key) {
-                    return FILE_PREFIX + data.data.key;
-                }
-                throw new Error('图片上传失败');
+                const u = await uploadImage(base64Str);
+                if (!u) throw new Error('图片上传失败');
+                return u;
             };
             const detectVideoRatioFromUrl = async (videoUrl: string): Promise<'16:9' | '9:16' | undefined> => {
                 if (!videoUrl) return undefined;
@@ -8635,7 +8705,8 @@ const FlowEditor = ({
                 ) || '',
                 currentNode.data,
                 buildRunPromptCtx(currentNode.data),
-                projectAssetBySlugRef.current
+                projectAssetBySlugRef.current,
+                projectAssetResolveOptsRef.current.projectAssets
               );
               if (imagePlan.images.length === 0) {
                 throw new Error(
@@ -8803,7 +8874,8 @@ const FlowEditor = ({
                 seedanceRefPrompt,
                 currentNode.data,
                 seedanceRefCtx,
-                projectAssetBySlugRef.current
+                projectAssetBySlugRef.current,
+                projectAssetResolveOptsRef.current.projectAssets
               );
               if (mediaPlan.images.length === 0 && mediaPlan.videos.length === 0) {
                 const promptText = getCanonicalInspectorPromptText(
@@ -9269,7 +9341,8 @@ const FlowEditor = ({
                 rawJimengPrompt,
                 currentNode.data,
                 jimengCtx,
-                projectAssetBySlugRef.current
+                projectAssetBySlugRef.current,
+                projectAssetResolveOptsRef.current.projectAssets
             );
             const jimengPrOpts = buildReferenceIndexOptionsFromPlan(
                 jimengMediaPlan,
@@ -10113,11 +10186,9 @@ const FlowEditor = ({
               ...(generationParams.seedanceAspectRatio
                 ? { seedanceAspectRatio: generationParams.seedanceAspectRatio }
                 : {}),
-              ...(isNanoBanana2Model(currentModelName) && (nanoPanelMergedRefs?.length || nanoRunReferenceSnapshot?.length)
+              ...(isNanoBanana2Model(currentModelName) && nanoPanelMergedRefs !== null
                 ? {
-                    referenceImages: [
-                      ...(nanoPanelMergedRefs?.length ? nanoPanelMergedRefs : nanoRunReferenceSnapshot!),
-                    ],
+                    referenceImages: [...nanoPanelMergedRefs],
                     ...((runCaptureForGp as { referenceImageLabels?: string[] }).referenceImageLabels
                       ?.length
                       ? {
@@ -10721,15 +10792,22 @@ const FlowEditor = ({
           const mediaDiagnostics = shouldAppendRunMediaDiagnostics(diagReason)
             ? await collectRunMediaDiagnostics(diagReason)
             : '';
+          const aitopPlatformHint = formatAitopPlatformSupportHint(
+            diagReason,
+            getAitopBillingContext()
+          );
           if (isImage2Model(currentNode.data.selectedModel || '')) {
               logImage2Debug('handleNodeRun-after-diagnostics', {
                   nodeId: idToRun,
                   hasDiagnostics: Boolean(mediaDiagnostics),
+                  hasAitopHint: Boolean(aitopPlatformHint),
                   errorMessagePreview: errorMessage.slice(0, 280),
               });
           }
           if (mediaDiagnostics) {
               errorMessage += mediaDiagnostics;
+          } else if (aitopPlatformHint) {
+              errorMessage += aitopPlatformHint;
           }
           
           // 原始节点不进入 error 态；仅恢复为 idle，错误信息放到独立 Error Result Node
@@ -10910,7 +10988,7 @@ const FlowEditor = ({
   );
 
   // --- Global Run Flow：分镜绿色节点，每 15s 启动下一镜（可多镜并行），队列结束后等待全部完成 ---
-  const runFlow = useCallback(async () => {
+  const runFlow = useCallback(async (options?: { skipConfirm?: boolean }) => {
       const currentNodes = getNodes();
       const currentEdges = getEdges();
       const queue = collectStoryboardGreenRunQueue(currentNodes, currentEdges);
@@ -10922,18 +11000,20 @@ const FlowEditor = ({
         return;
       }
 
-      const confirmed = confirm(
-        `将按镜头顺序启动 ${queue.length} 个绿色分镜节点：\n` +
-          `• 每隔 ${BATCH_RUN_NODE_INTERVAL_MS / 1000} 秒启动下一镜（可与上一镜并行）\n` +
-          `• 仅包含尚无 OUTPUT/MOV 下游的节点\n\n` +
-          `确定开始？`
-      );
-      if (!confirmed) return;
+      if (!options?.skipConfirm) {
+        const confirmed = confirm(
+          `将按镜头顺序启动 ${queue.length} 个绿色分镜节点：\n` +
+            `• 每隔 ${BATCH_RUN_NODE_INTERVAL_MS / 1000} 秒启动下一镜（可与上一镜并行）\n` +
+            `• 仅包含尚无 OUTPUT/MOV 下游的节点\n\n` +
+            `确定开始？`
+        );
+        if (!confirmed) return;
+      }
 
       await runStaggeredQueue(queue, 'storyboard');
   }, [getNodes, getEdges, runStaggeredQueue]);
 
-  const runSelectedFlow = useCallback(async () => {
+  const runSelectedFlow = useCallback(async (options?: { skipConfirm?: boolean }) => {
       const queue = collectSelectedRunQueue(getNodes());
 
       if (queue.length === 0) {
@@ -10943,13 +11023,15 @@ const FlowEditor = ({
         return;
       }
 
-      const confirmed = confirm(
-        `将按顺序启动 ${queue.length} 个选中节点：\n` +
-          `• 每隔 ${BATCH_RUN_NODE_INTERVAL_MS / 1000} 秒启动下一个（可与上一个并行）\n` +
-          `• 生成的视频节点命名继承队列中上一节点的名称（首个节点用自身名称）\n\n` +
-          `确定开始？`
-      );
-      if (!confirmed) return;
+      if (!options?.skipConfirm) {
+        const confirmed = confirm(
+          `将按顺序启动 ${queue.length} 个选中节点：\n` +
+            `• 每隔 ${BATCH_RUN_NODE_INTERVAL_MS / 1000} 秒启动下一个（可与上一个并行）\n` +
+            `• 生成的视频节点命名继承队列中上一节点的名称（首个节点用自身名称）\n\n` +
+            `确定开始？`
+        );
+        if (!confirmed) return;
+      }
 
       await runStaggeredQueue(queue, 'selected');
   }, [getNodes, runStaggeredQueue]);
@@ -10958,6 +11040,124 @@ const FlowEditor = ({
     () => collectSelectedRunQueue(nodes).length,
     [nodes]
   );
+
+  const getRunScheduleOptions = useCallback(() => {
+    const now = new Date();
+    const pad = (n: number) => n.toString().padStart(2, '0');
+    const fmt = (d: Date) => `${pad(d.getHours())}:${pad(d.getMinutes())}`;
+    return [
+      { label: '马上运行', sub: `当前 ${fmt(now)}`, delayMs: 0 },
+      { label: '5分钟后', sub: fmt(new Date(now.getTime() + 5 * 60 * 1000)), delayMs: 5 * 60 * 1000 },
+      { label: '15分钟后', sub: fmt(new Date(now.getTime() + 15 * 60 * 1000)), delayMs: 15 * 60 * 1000 },
+      { label: '30分钟后', sub: fmt(new Date(now.getTime() + 30 * 60 * 1000)), delayMs: 30 * 60 * 1000 },
+      { label: '1小时后', sub: fmt(new Date(now.getTime() + 60 * 60 * 1000)), delayMs: 60 * 60 * 1000 },
+      { label: '2小时后', sub: fmt(new Date(now.getTime() + 2 * 60 * 60 * 1000)), delayMs: 2 * 60 * 60 * 1000 },
+    ];
+  }, []);
+
+  const handleScheduleRun = useCallback((action: 'selected' | 'all', delayMs: number) => {
+    const runFn = action === 'selected' ? runSelectedFlow : runFlow;
+    if (delayMs <= 0) {
+      // 立即运行：保留原有确认对话框
+      void runFn();
+    } else {
+      // 定时运行：跳过确认对话框，直接在指定时间执行
+      setTimeout(() => {
+        void runFn({ skipConfirm: true });
+      }, delayMs);
+    }
+  }, [runSelectedFlow, runFlow]);
+
+  const openRunScheduleMenu = useCallback((e: React.MouseEvent, action: 'selected' | 'all') => {
+    if (action === 'selected' && selectedRunQueueCount === 0) return;
+    e.stopPropagation();
+    setCustomTimePicker(null);
+    setRunScheduleMenu({ x: e.clientX, y: e.clientY + 10, action });
+  }, [selectedRunQueueCount]);
+
+  /** 选择运行 / 全部运行：主按钮立即运行 + 右侧定时下拉（两按钮结构一致） */
+  const renderRunQueueSplitButton = useCallback(
+    (
+      action: 'selected' | 'all',
+      opts: {
+        icon: React.ReactNode;
+        label: string;
+        count?: number;
+        disabled?: boolean;
+        mainTitle: string;
+        scheduleTitle: string;
+        shellClass: string;
+        mainClass: string;
+        chevronClass: string;
+      }
+    ) => {
+      const runNow = () => {
+        if (action === 'selected') void runSelectedFlow();
+        else void runFlow();
+      };
+      return (
+        <div
+          className={`flex rounded-lg font-semibold shadow-lg transition-all active:scale-95 border overflow-hidden ${opts.shellClass}`}
+        >
+          <button
+            type="button"
+            disabled={opts.disabled}
+            onClick={() => runNow()}
+            title={opts.mainTitle}
+            className={`flex items-center gap-2 px-4 py-2.5 transition-colors ${opts.mainClass}`}
+          >
+            {opts.icon}
+            {opts.label}
+            {opts.count != null && opts.count > 0 ? (
+              <span className="text-xs font-mono text-brand-300/90">({opts.count})</span>
+            ) : null}
+          </button>
+          <button
+            type="button"
+            disabled={opts.disabled}
+            onClick={(e) => openRunScheduleMenu(e, action)}
+            title={opts.scheduleTitle}
+            className={`flex items-center justify-center px-2.5 py-2.5 border-l transition-colors ${opts.chevronClass}`}
+          >
+            <ChevronDown className="w-4 h-4" />
+          </button>
+        </div>
+      );
+    },
+    [runFlow, runSelectedFlow, openRunScheduleMenu]
+  );
+
+  const getDefaultDateTimeLocalValue = useCallback(() => {
+    const d = new Date(Date.now() + 10 * 60 * 1000); // 默认 10 分钟后
+    d.setSeconds(0, 0);
+    const pad = (n: number) => n.toString().padStart(2, '0');
+    return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
+  }, []);
+
+  const openCustomTimePicker = useCallback((action: 'selected' | 'all') => {
+    setRunScheduleMenu(null);
+    setCustomTimePicker({ action, defaultValue: getDefaultDateTimeLocalValue() });
+    // 下一帧聚焦输入框
+    setTimeout(() => customTimeInputRef.current?.focus(), 0);
+  }, [getDefaultDateTimeLocalValue]);
+
+  const confirmCustomTime = useCallback(() => {
+    if (!customTimePicker) return;
+    const input = customTimeInputRef.current;
+    if (!input || !input.value) {
+      alert('请选择启动时间');
+      return;
+    }
+    const chosen = new Date(input.value);
+    const now = new Date();
+    const delayMs = chosen.getTime() - now.getTime();
+    if (delayMs < 0) {
+      alert('所选时间已过期，请选择未来时间');
+      return;
+    }
+    handleScheduleRun(customTimePicker.action, delayMs);
+    setCustomTimePicker(null);
+  }, [customTimePicker, handleScheduleRun]);
 
   const selectedDownloadableCount = useMemo(
     () => nodes.filter((n) => n.selected && n.data?.imagePreview).length,
@@ -11645,45 +11845,43 @@ const FlowEditor = ({
       const imagePreview = node.data?.imagePreview;
       if (!imagePreview) return;
 
-      let extension = 'png';
-      if (node.type === NodeType.MOV) {
-        extension = 'mov';
-      } else if (imagePreview.match(/\.(jpg|jpeg|png|gif|webp|bmp|mp4|webm|avi|mkv|flv|wmv|m4v)(\?|$)/i)) {
-        const match = imagePreview.match(/\.(jpg|jpeg|png|gif|webp|bmp|mp4|webm|avi|mkv|flv|wmv|m4v)(\?|$)/i);
-        if (match) extension = match[1].toLowerCase();
-      }
+      const filename = resolveNodeDownloadFilename(node.data, {
+        nodeType: node.type,
+        nodeId: node.id,
+        imagePreview,
+        urlFallback: imagePreview,
+      });
 
-      let filename = node.data.imageName;
-      if (!filename) {
-        filename = `${node.data.label || 'node'}_${node.id.slice(-6)}.${extension}`;
-      } else if (!filename.includes('.')) {
-        filename = `${filename}.${extension}`;
-      }
+      const nodeLabel =
+        node.data.customName?.trim() || node.data.label?.trim() || node.id;
+
+      const downloadFromPreviewUrl = async (): Promise<void> => {
+        let urlForDownload = (await resolveFreshDownloadUrl(node)) || imagePreview;
+        try {
+          await downloadFile(urlForDownload, filename);
+        } catch {
+          const retryUrl = await resolveFreshDownloadUrl(node);
+          if (retryUrl && retryUrl !== urlForDownload) {
+            urlForDownload = retryUrl;
+          }
+          await downloadFile(urlForDownload, filename);
+        }
+      };
 
       const latestTaskId = getLatestTaskIdFromNode(node);
       if (latestTaskId) {
-        await downloadByTaskId(latestTaskId, filename);
-        return;
-      }
-
-      const isLikelyVideoDownload =
-        node.type === NodeType.MOV ||
-        /\/video\//i.test(imagePreview) ||
-        /mime_type=video/i.test(imagePreview) ||
-        /\.(mov|mp4|webm|avi|mkv|flv|wmv|m4v)(\?|$)/i.test(imagePreview);
-      if (isLikelyVideoDownload) {
-        throw new Error(`节点「${node.data.label || node.id}」缺少 taskId，无法稳定下载视频。请重新运行后再试。`);
-      }
-
-      let urlForDownload = (await resolveFreshDownloadUrl(node)) || imagePreview;
-      try {
-        await downloadFile(urlForDownload, filename);
-      } catch {
-        const retryUrl = await resolveFreshDownloadUrl(node);
-        if (retryUrl && retryUrl !== urlForDownload) {
-          urlForDownload = retryUrl;
+        try {
+          await downloadByTaskId(latestTaskId, filename);
+          return;
+        } catch {
+          // task 接口暂无资源时，回退到节点预览 URL（与 CustomNode 卡片下载一致）
         }
-        await downloadFile(urlForDownload, filename);
+      }
+
+      try {
+        await downloadFromPreviewUrl();
+      } catch {
+        throw new Error(`链接可能已过期，请重新运行节点「${nodeLabel}」后再下载。`);
       }
     },
     [downloadFile, downloadByTaskId, getLatestTaskIdFromNode, resolveFreshDownloadUrl]
@@ -11719,7 +11917,7 @@ const FlowEditor = ({
         await downloadNodePreviewMedia(node);
       } catch (error) {
         const msg = error instanceof Error ? error.message : String(error);
-        failures.push(`${node.data.label || node.id}: ${msg}`);
+        failures.push(`${node.data.customName?.trim() || node.data.label || node.id}: ${msg}`);
       }
     }
 
@@ -12666,7 +12864,7 @@ const FlowEditor = ({
       };
     }
 
-    // 可灵3.0 Omni（非首尾帧 tab）：面板顺序 + 底栏标签（含未 @ 主图）
+    // 可灵3.0 Omni（非首尾帧 tab）：面板顺序 + 底栏标签；指令/视频参考在面板槽空时回退 gp 快照
     if (isOmniModel && omniTab !== 'frames') {
       const movUrlSet = new Set((baseRefMovs || []).map((m) => m.url).filter(Boolean));
       const panelSource: Partial<NodeData> =
@@ -12681,12 +12879,22 @@ const FlowEditor = ({
         ...(panelSource.klingOmniInstructionReferenceImages || []),
         ...(panelSource.klingOmniVideoReferenceImages || []),
       ]).filter((u) => !movUrlSet.has(u));
-      const refPreview = buildNodeDetailsReferencePreview({
-        panelSource,
-        urlPool,
-        projectAssets: projectAssetLabelRows,
-        filterItem: (it) => Boolean(it.url) && !movUrlSet.has(it.url),
-      });
+      const refPreview =
+        omniTab === 'instruction' || omniTab === 'video'
+          ? buildOmniInstructionVideoTabDetailsReferencePreview({
+              panelSource,
+              omniTab,
+              urlPool,
+              snapshotRefs: baseRefs,
+              movUrlSet,
+              projectAssets: projectAssetLabelRows,
+            })
+          : buildNodeDetailsReferencePreview({
+              panelSource,
+              urlPool,
+              projectAssets: projectAssetLabelRows,
+              filterItem: (it) => Boolean(it.url) && !movUrlSet.has(it.url),
+            });
       return {
         ...withoutFirstFrameFieldsWhenRefVideo(baseParams, baseRefMovs.length > 0),
         referenceImages: refPreview.referenceImages,
@@ -13703,74 +13911,12 @@ const FlowEditor = ({
                                     btn.innerHTML = '<svg class="animate-spin" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 12a9 9 0 11-6.219-8.56"/></svg> 正在下载...';
                                     
                                     try {
-                                        // Determine file extension based on node type or URL
-                                        let extension = 'png';
-                                        if (previewNode.type === NodeType.MOV) {
-                                            extension = 'mov';
-                                        } else if (previewNode.data.imagePreview.match(/\.(jpg|jpeg|png|gif|webp|bmp|mp4|webm|avi|mkv|flv|wmv|m4v)(\?|$)/i)) {
-                                            const match = previewNode.data.imagePreview.match(/\.(jpg|jpeg|png|gif|webp|bmp|mp4|webm|avi|mkv|flv|wmv|m4v)(\?|$)/i);
-                                            if (match) extension = match[1].toLowerCase();
-                                        }
-                                        
-                                        // Use existing name or generate one
-                                        let filename = previewNode.data.imageName;
-                                        if (!filename) {
-                                            filename = `download.${extension}`;
-                                        } else if (!filename.includes('.')) {
-                                            // If filename doesn't have extension, add it
-                                            filename = `${filename}.${extension}`;
-                                        }
-
-                                        const latestTaskId = getLatestTaskIdFromNode(previewNode);
-                                        if (latestTaskId) {
-                                            await downloadByTaskId(latestTaskId, filename);
-                                            btn.innerHTML = originalContent;
-                                            btn.disabled = false;
-                                            return;
-                                        }
-
-                                        const isLikelyVideoDownload =
-                                            previewNode.type === NodeType.MOV ||
-                                            /\/video\//i.test(previewNode.data.imagePreview || '') ||
-                                            /mime_type=video/i.test(previewNode.data.imagePreview || '') ||
-                                            /\.(mov|mp4|webm|avi|mkv|flv|wmv|m4v)(\?|$)/i.test(previewNode.data.imagePreview || '');
-                                        if (isLikelyVideoDownload) {
-                                            throw new Error('当前视频节点缺少 taskId，无法稳定下载。请重新运行该节点后再下载。');
-                                        }
-                                        
-                                        const latestUrl = await resolveFreshDownloadUrl(previewNode);
-                                        let urlForDownload = latestUrl || previewNode.data.imagePreview;
-                                        if (latestUrl && latestUrl !== previewNode.data.imagePreview) {
-                                            // 同步刷新到节点，避免预览/后续下载继续使用过期链接
-                                            setNodes((nds) => nds.map((n) =>
-                                                n.id === previewNode.id
-                                                    ? { ...n, data: { ...n.data, imagePreview: latestUrl } }
-                                                    : n
-                                            ));
-                                        }
-                                        try {
-                                            await downloadFile(urlForDownload, filename);
-                                        } catch (firstErr) {
-                                            // 同一次点击内自动二次重试：再刷新一次 task 资源地址并下载
-                                            const retryUrl = await resolveFreshDownloadUrl(previewNode);
-                                            if (retryUrl && retryUrl !== urlForDownload) {
-                                                urlForDownload = retryUrl;
-                                                setNodes((nds) => nds.map((n) =>
-                                                    n.id === previewNode.id
-                                                        ? { ...n, data: { ...n.data, imagePreview: retryUrl } }
-                                                        : n
-                                                ));
-                                            }
-                                            await downloadFile(urlForDownload, filename);
-                                        }
-                                        
-                                        // 恢复按钮状态
+                                        await downloadNodePreviewMedia(previewNode);
                                         btn.innerHTML = originalContent;
                                         btn.disabled = false;
                                     } catch (error) {
                                         const msg = error instanceof Error ? error.message : String(error);
-                                        alert(`下载失败：${msg}\n请稍后重试；若持续失败，可能是源站链接已失效。`);
-                                        // 恢复按钮状态
+                                        alert(`下载失败：${msg}`);
                                         btn.innerHTML = originalContent;
                                         btn.disabled = false;
                                     }
@@ -13899,13 +14045,32 @@ const FlowEditor = ({
                 )}
 
                 {/* Node Context Menu - 必须在覆盖层之前渲染，确保事件能正常触发 */}
+                <input
+                  ref={storyboardExcelInputRef}
+                  type="file"
+                  accept=".xlsx,.xls,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-excel"
+                  className="hidden"
+                  onChange={(e) => void handleStoryboardExcelFileChange(e)}
+                />
+
                 {nodeContextMenu && (() => {
-                  const backdropMenuSubjectCount = nodes.filter(
+                  const storyboardMenuSubjects = nodes.filter(
                     (n) =>
                       n.selected &&
                       n.type !== NodeType.BACKDROP &&
                       n.type !== NodeType.CHAIN_FOLDER
-                  ).length;
+                  );
+                  const backdropMenuSubjectCount = storyboardMenuSubjects.length;
+                  const storyboardTemplateNode =
+                    storyboardMenuSubjects.length === 1 ? storyboardMenuSubjects[0] : null;
+                  const storyboardAssetCheck = storyboardTemplateNode
+                    ? checkStoryboardTemplateAssetBinding(
+                        storyboardTemplateNode.data as NodeData,
+                        serverProjectId ?? undefined
+                      )
+                    : null;
+                  const storyboardTemplateReady =
+                    backdropMenuSubjectCount === 1 && storyboardAssetCheck?.ok === true;
                   return (
                     <div 
                         style={{ top: nodeContextMenu.y, left: nodeContextMenu.x }} 
@@ -13944,6 +14109,45 @@ const FlowEditor = ({
                                           {backdropMenuSubjectCount > 0
                                             ? `包裹已选 ${backdropMenuSubjectCount} 个节点；拖入框内可联动移动`
                                             : '请先框选画布节点（不含背景框）'}
+                                        </div>
+                                    </div>
+                                </button>
+                                <div className="h-px bg-gray-800 my-1"></div>
+                                <button
+                                    type="button"
+                                    disabled={!storyboardTemplateReady}
+                                    onClick={beginSpawnStoryboardFromExcel}
+                                    className={`w-full text-left px-4 py-2.5 text-xs transition-colors flex items-center gap-3 group border-l-[3px] ${
+                                      storyboardTemplateReady
+                                        ? 'text-gray-300 hover:bg-lime-900/40 hover:text-white border-l-lime-400/60'
+                                        : 'text-gray-600 cursor-not-allowed border-l-transparent'
+                                    }`}
+                                    title={
+                                      storyboardTemplateReady
+                                        ? '选择 Excel 分镜表，以当前节点为模板批量生成下游节点'
+                                        : backdropMenuSubjectCount !== 1
+                                          ? '请先选中 1 个模板节点（不含背景框）'
+                                          : storyboardAssetCheck && storyboardAssetCheck.ok === false
+                                            ? storyboardAssetCheck.error
+                                            : '模板须使用项目资产库图片，不支持本地拖入'
+                                    }
+                                >
+                                    <GitBranch
+                                      className={`w-4 h-4 shrink-0 ${
+                                        storyboardTemplateReady
+                                          ? 'text-lime-400 group-hover:text-lime-300'
+                                          : 'text-gray-600'
+                                      }`}
+                                      strokeWidth={2.5}
+                                    />
+                                    <div>
+                                        <div className="font-semibold">按分镜表生成下游节点</div>
+                                        <div className="text-[9px] text-gray-500 group-hover:text-gray-300">
+                                          {storyboardTemplateReady
+                                            ? '从 Excel 导入分镜表（.xlsx）'
+                                            : backdropMenuSubjectCount !== 1
+                                              ? '需选中 1 个模板节点'
+                                              : '须为项目资产库图片'}
                                         </div>
                                     </div>
                                 </button>
@@ -13993,6 +14197,103 @@ const FlowEditor = ({
                     </div>
                     </div>
                 </div>
+                )}
+
+                {/* Run Schedule Dropdown Menu */}
+                {runScheduleMenu && (() => {
+                  const options = getRunScheduleOptions();
+                  return (
+                    <div
+                      className="run-schedule-menu fixed z-[120] origin-top-left"
+                      style={{ top: runScheduleMenu.y, left: runScheduleMenu.x }}
+                      onClick={(e) => e.stopPropagation()}
+                      onMouseDown={(e) => e.stopPropagation()}
+                    >
+                      <div className="bg-gray-900 border border-gray-700 shadow-2xl rounded-lg w-64 overflow-hidden animate-[scaleIn_0.1s_ease-out]">
+                        <div className="px-3 py-2 text-[10px] text-gray-500 border-b border-gray-800 flex items-center gap-2">
+                          <Clock className="w-3.5 h-3.5" /> 选择定时运行时间
+                        </div>
+                        <div className="py-1">
+                          {options.map((opt, idx) => (
+                            <button
+                              key={idx}
+                              type="button"
+                              onClick={() => {
+                                handleScheduleRun(runScheduleMenu.action, opt.delayMs);
+                                setRunScheduleMenu(null);
+                              }}
+                              className="w-full text-left px-4 py-2 text-sm text-gray-200 hover:bg-gray-800 flex items-center justify-between group"
+                            >
+                              <div className="flex items-center gap-2">
+                                <Clock className="w-4 h-4 text-brand-400/70 group-hover:text-brand-400" />
+                                <span className="font-medium">{opt.label}</span>
+                              </div>
+                              <span className="text-xs text-gray-500 font-mono tabular-nums">{opt.sub}</span>
+                            </button>
+                          ))}
+                          <div className="h-px bg-gray-800 my-1 mx-2" />
+                          <button
+                            type="button"
+                            onClick={() => openCustomTimePicker(runScheduleMenu.action)}
+                            className="w-full text-left px-4 py-2 text-sm text-gray-200 hover:bg-gray-800 flex items-center gap-2 group border-l-[3px] border-l-brand-500/60"
+                          >
+                            <Calendar className="w-4 h-4 text-brand-400/70 group-hover:text-brand-400" />
+                            <span className="font-medium">自定义时间…</span>
+                            <span className="ml-auto text-[10px] text-gray-500">手动设置</span>
+                          </button>
+                        </div>
+                        <div className="px-3 py-1.5 text-[10px] text-gray-600 border-t border-gray-800">
+                          选择后将按设定时间启动队列
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })()}
+
+                {/* Custom Time Picker */}
+                {customTimePicker && (
+                  <div
+                    className="run-schedule-menu fixed z-[130] origin-top-left"
+                    style={{ top: (runScheduleMenu?.y ?? window.innerHeight / 2) - 80, left: (runScheduleMenu?.x ?? window.innerWidth / 2) - 140 }}
+                    onClick={(e) => e.stopPropagation()}
+                    onMouseDown={(e) => e.stopPropagation()}
+                  >
+                    <div className="bg-gray-900 border border-gray-700 shadow-2xl rounded-xl w-72 overflow-hidden">
+                      <div className="px-4 py-3 border-b border-gray-800 flex items-center gap-2 text-sm text-gray-200">
+                        <Calendar className="w-4 h-4 text-brand-400" /> 手动设置启动时间
+                      </div>
+                      <div className="p-4 space-y-3">
+                        <div>
+                          <div className="text-xs text-gray-500 mb-1">启动时间（本地时间）</div>
+                          <input
+                            ref={customTimeInputRef}
+                            type="datetime-local"
+                            step="60"
+                            defaultValue={customTimePicker.defaultValue}
+                            className="w-full bg-gray-950 border border-gray-700 rounded-lg px-3 py-2 text-sm text-white font-mono focus:outline-none focus:border-brand-500"
+                          />
+                        </div>
+                        <div className="text-[10px] text-gray-500">将按所选时间启动「{customTimePicker.action === 'selected' ? '选择运行' : '全部运行'}」队列</div>
+                      </div>
+                      <div className="flex border-t border-gray-800">
+                        <button
+                          type="button"
+                          onClick={() => setCustomTimePicker(null)}
+                          className="flex-1 py-2.5 text-sm text-gray-400 hover:text-gray-200 hover:bg-gray-800 transition-colors"
+                        >
+                          取消
+                        </button>
+                        <div className="w-px bg-gray-800" />
+                        <button
+                          type="button"
+                          onClick={confirmCustomTime}
+                          className="flex-1 py-2.5 text-sm text-brand-300 hover:text-white hover:bg-brand-600/80 transition-colors font-medium"
+                        >
+                          确定定时
+                        </button>
+                      </div>
+                    </div>
+                  </div>
                 )}
 
                 {/* Drag Overlay */}
@@ -14204,32 +14505,40 @@ const FlowEditor = ({
                             </button>
                         ) : (
                             <>
-                            <button
-                                onClick={runSelectedFlow}
-                                disabled={selectedRunQueueCount === 0}
-                                title={
-                                  selectedRunQueueCount === 0
-                                    ? '请选中 INPUT/PROCESSOR 节点并填写创意描述'
-                                    : `已选 ${selectedRunQueueCount} 个节点：每 ${BATCH_RUN_NODE_INTERVAL_MS / 1000}s 启动下一个；视频输出继承上一节点命名`
-                                }
-                                className={`flex items-center gap-2 px-4 py-2.5 rounded-lg font-semibold shadow-lg transition-all active:scale-95 border ${
-                                  selectedRunQueueCount === 0
-                                    ? 'bg-gray-800 text-gray-500 border-gray-700 cursor-not-allowed'
-                                    : 'bg-gray-800 hover:bg-gray-700 text-white border-gray-600 hover:border-brand-500/40'
-                                }`}
-                            >
-                                <MousePointer size={18} /> 选择运行
-                                {selectedRunQueueCount > 0 ? (
-                                  <span className="text-xs font-mono text-brand-300/90">({selectedRunQueueCount})</span>
-                                ) : null}
-                            </button>
-                            <button 
-                                onClick={runFlow}
-                                title={`分镜绿色节点队列：每 ${BATCH_RUN_NODE_INTERVAL_MS / 1000}s 启动下一镜（可并行），仅尚无 OUTPUT/MOV 下游的节点`}
-                                className="flex items-center gap-2 bg-gradient-to-r from-brand-600 to-brand-500 hover:from-brand-500 hover:to-brand-400 text-white px-5 py-2.5 rounded-lg font-semibold shadow-lg transition-all active:scale-95 border border-brand-400/20"
-                            >
-                                <Play size={18} fill="currentColor" /> 全部运行
-                            </button>
+                            {renderRunQueueSplitButton('selected', {
+                              icon: <MousePointer size={18} />,
+                              label: '选择运行',
+                              count: selectedRunQueueCount,
+                              disabled: selectedRunQueueCount === 0,
+                              mainTitle:
+                                selectedRunQueueCount === 0
+                                  ? '请选中 INPUT/PROCESSOR 节点并填写创意描述'
+                                  : `立即运行已选 ${selectedRunQueueCount} 个节点（每 ${BATCH_RUN_NODE_INTERVAL_MS / 1000}s 启动下一个）`,
+                              scheduleTitle: '选择定时运行时间',
+                              shellClass:
+                                selectedRunQueueCount === 0
+                                  ? 'border-gray-700 opacity-60'
+                                  : 'border-gray-600 hover:border-brand-500/40',
+                              mainClass:
+                                selectedRunQueueCount === 0
+                                  ? 'bg-gray-800 text-gray-500 cursor-not-allowed'
+                                  : 'bg-gray-800 hover:bg-gray-700 text-white',
+                              chevronClass:
+                                selectedRunQueueCount === 0
+                                  ? 'border-gray-700 bg-gray-800 text-gray-600 cursor-not-allowed'
+                                  : 'border-gray-600 bg-gray-800/90 hover:bg-gray-700 text-gray-300 hover:text-white',
+                            })}
+                            {renderRunQueueSplitButton('all', {
+                              icon: <Play size={18} fill="currentColor" />,
+                              label: '全部运行',
+                              mainTitle: `立即运行分镜绿色节点队列（每 ${BATCH_RUN_NODE_INTERVAL_MS / 1000}s 启动下一镜）`,
+                              scheduleTitle: '选择定时运行时间',
+                              shellClass: 'border-brand-400/20',
+                              mainClass:
+                                'bg-gradient-to-r from-brand-600 to-brand-500 hover:from-brand-500 hover:to-brand-400 text-white',
+                              chevronClass:
+                                'border-brand-400/30 bg-brand-600/90 hover:bg-brand-500 text-brand-100 hover:text-white',
+                            })}
                             </>
                         )}
                         
@@ -14263,7 +14572,7 @@ const FlowEditor = ({
                 {/* 覆盖层：只在菜单显示时出现，确保不拦截节点右键事件 */}
                 {/* 关键：覆盖层应该在 ReactFlow 之后渲染，这样节点事件会先处理 */}
                 {/* 但是，覆盖层不应该在框选后出现，只有在菜单显示时才出现 */}
-                {(menu || nodeContextMenu) && (
+                {(menu || nodeContextMenu || runScheduleMenu || customTimePicker) && (
                     <div 
                         className="absolute inset-0 z-40" 
                         style={{
@@ -14275,10 +14584,12 @@ const FlowEditor = ({
                             // 如果点击的是菜单本身或节点，不关闭菜单
                             const target = e.target as HTMLElement;
                             if (target.closest('.node-context-menu') || 
+                                target.closest('.run-schedule-menu') ||
                                 target.closest('.bg-gray-900.border.border-gray-700') ||
                                 target.closest('.react-flow__node')) {
                                 return;
                             }
+                            setCustomTimePicker(null);
                             onPaneClick(e);
                         }}
                         // 关键：不添加 onContextMenu，让节点右键事件能正常触发
@@ -14407,6 +14718,7 @@ const FlowEditor = ({
                         onRun={async (nodeId: string) => handleNodeRun(nodeId)}
                         projectAssetRefItems={projectAssetRefItems}
                         projectAssetLabelRows={projectAssetLabelRows}
+                        projectAssetLibraryEnabled={!!serverProjectId}
                     />
                     </Suspense>
                     </ErrorBoundary>

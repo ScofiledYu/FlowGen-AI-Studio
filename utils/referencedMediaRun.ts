@@ -974,6 +974,10 @@ export function prunePanelReferenceImagesToPromptRefs(
   options?: PanelReferenceSlotMatchOptions
 ): string[] {
   if (!promptPlanReferencesPanelImages(planImages)) {
+    /** 仅 @主图：主图走 imagePreview，参考槽应为空（勿把 API 主图 URL 或历史脏槽留在「图片1」） */
+    if (promptPlanReferencesMainImage(planImages)) {
+      return [];
+    }
     return mergedSlots?.length ? [...mergedSlots] : [...(panelRefs || [])];
   }
   const refs = panelRefs || [];

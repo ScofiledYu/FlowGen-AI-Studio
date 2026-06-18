@@ -1,6 +1,6 @@
 import React, { useMemo, useState, useRef, useEffect, useImperativeHandle, memo, useCallback } from 'react';
 import { Node } from 'reactflow';
-import { Send, Loader2, ChevronDown, ChevronUp, MessageSquare, User, Bot, X, Brain, Link2, Image as ImageIcon, ArrowRight, Ban, FileSpreadsheet, Table2, GitBranch } from 'lucide-react';
+import { Send, Loader2, ChevronDown, ChevronUp, MessageSquare, User, Bot, X, Brain, Link2, Image as ImageIcon, ArrowRight, Ban, FileSpreadsheet, Table2, GitBranch, Zap, Sparkles } from 'lucide-react';
 import { NodeType, NodeData } from '../types';
 import axios from 'axios';
 import { uploadImage } from '../services/aitop';
@@ -27,6 +27,7 @@ import {
   type ProjectSkillConfig,
 } from '../utils/projectSkill';
 import { validateStoryboardTableSpawn } from '../utils/storyboardTableSpawn';
+import { DIRECTOR_STORYBOARD_ADVANCED_MD, DIRECTOR_STORYBOARD_CORE_MD } from '../utils/storyboardPresets';
 import { resolveNodeSelectionPreviewUrl } from '../utils/nodeDetailsPreview';
 import type { ProjectAssetLabelRow } from '../utils/referenceImageSlotLabels';
 import { profileSync } from '../utils/runtimeProfile';
@@ -3819,6 +3820,88 @@ export const ChatPanel = React.forwardRef<ChatPanelHandle, ChatPanelProps>(
     }
   };
 
+  const handleSendPresetToModel = async (presetName: string, presetContent: string) => {
+    if (isLoading) return;
+    const text = (presetContent || '').trim();
+    if (!text) {
+      setContextMenu(null);
+      return;
+    }
+
+    const userMessage: ChatMessage = {
+      id: `preset-${Date.now()}`,
+      role: 'user',
+      content: text,
+      timestamp: new Date(),
+    };
+    shouldAutoScrollRef.current = true;
+    const nextMessages = [...messages, userMessage];
+    setMessages(nextMessages);
+    persistSnapshotRef.current = {
+      ...persistSnapshotRef.current,
+      messages: nextMessages,
+    };
+    setContextMenu(null);
+
+    if (!chatIdRef.current) {
+      sessionDisplayModelRef.current = normalizeModelId(selectedModel);
+    }
+    const currentChatIdForActivity = ensureConversationSessionId();
+    onChatActivity?.(currentChatIdForActivity, {
+      modelId: sessionDisplayModelRef.current,
+    });
+
+    setIsLoading(true);
+    try {
+      const usedModel = await attemptSendWithFallback(
+        selectedModel,
+        text,
+        [],
+        currentChatIdForActivity,
+        userMessage.id
+      );
+      if (normalizeModelId(usedModel) !== normalizeModelId(selectedModel)) {
+        setSelectedModel(usedModel);
+      }
+      commitTurnSession(currentChatIdForActivity, text, usedModel);
+    } catch (error) {
+      const errorMessage =
+        error instanceof Error
+          ? error.message
+          : `**❌ ${presetName} 发送失败**\n\n${String(error)}`;
+      setMessages((prev) => {
+        let next = prev.filter(
+          (m) =>
+            !(
+              m.role === 'assistant' &&
+              m.content === '' &&
+              String(m.id).startsWith('assistant-')
+            )
+        );
+        next = pruneTurnToSingleAssistantReply(next, userMessage.id);
+        next = [
+          ...next,
+          {
+            id: `preset-error-${Date.now()}`,
+            role: 'assistant' as const,
+            content: errorMessage.includes('**❌')
+              ? errorMessage
+              : `**❌ ${presetName} 发送失败**\n\n${errorMessage}`,
+            timestamp: new Date(),
+          },
+        ];
+        persistSnapshotRef.current = {
+          ...persistSnapshotRef.current,
+          messages: next,
+        };
+        return next;
+      });
+      commitTurnSession(currentChatIdForActivity, text);
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
   // Gemini API????
   const handleGeminiSend = async (
     currentInput: string,
@@ -6230,6 +6313,22 @@ export const ChatPanel = React.forwardRef<ChatPanelHandle, ChatPanelProps>(
             onClick={(e) => e.stopPropagation()}
           >
             <div className="bg-gray-900/98 backdrop-blur-xl border border-gray-700/60 rounded-xl shadow-2xl overflow-hidden min-w-[200px]">
+              <button
+                onClick={() => handleSendPresetToModel('核心版分镜技能', DIRECTOR_STORYBOARD_CORE_MD)}
+                className="w-full text-left px-4 py-3 text-sm font-medium text-white hover:bg-gradient-to-r hover:from-brand-600/20 hover:to-purple-600/20 transition-all duration-200 flex items-center gap-2"
+                title="发送 director-storyboard-core.md 内容到当前模型"
+              >
+                <Zap size={16} strokeWidth={2.5} className="text-brand-400" />
+                <span>发送分镜核心版</span>
+              </button>
+              <button
+                onClick={() => handleSendPresetToModel('进阶版分镜技能', DIRECTOR_STORYBOARD_ADVANCED_MD)}
+                className="w-full text-left px-4 py-3 text-sm font-medium text-white hover:bg-gradient-to-r hover:from-brand-600/20 hover:to-purple-600/20 transition-all duration-200 flex items-center gap-2 border-t border-gray-700/60"
+                title="发送 director-storyboard-advanced.md 内容到当前模型"
+              >
+                <Sparkles size={16} strokeWidth={2.5} className="text-purple-400" />
+                <span>发送分镜进阶版</span>
+              </button>
               {(selectedText.trim().length > 0 || (contextTableRows && contextTableRows.length > 0)) && (
                 <>
                   <button

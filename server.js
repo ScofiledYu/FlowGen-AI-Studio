@@ -11,6 +11,7 @@ import {
   buildPromptMediaRefContextFromNode,
   resolvePromptPlaceholders,
 } from './promptPlaceholders.mjs';
+import { pickMediaResourceUrlFromTaskStatus } from './utils/taskStatusMediaUrl.mjs';
 import { createFlowgenRouter } from './server/flowgen/routes.mjs';
 import { initStore, loadStore, bootstrapAdminIfNeeded } from './server/flowgen/store.mjs';
 
@@ -66,13 +67,16 @@ const AITOP_STATUS_RETRY_TIMES = 1;
 // 配置端口：优先使用环境变量，否则使用 3001（服务器部署默认端口）
 const PORT = process.env.PORT || 3001;
 
-async function fetchTaskStatusWithRetry(taskId) {
+async function fetchTaskStatusWithRetry(taskId, domainAccount) {
   const url = `${AITOP_API_BASE}/api/v1/task/${encodeURIComponent(taskId)}`;
+  const headers = { 'api-key': AITOP_API_KEY };
+  const da = typeof domainAccount === 'string' ? domainAccount.trim() : '';
+  if (da) headers['domain-account'] = da;
   let lastError = null;
   for (let i = 0; i <= AITOP_STATUS_RETRY_TIMES; i++) {
     try {
       return await axios.get(url, {
-        headers: { 'api-key': AITOP_API_KEY },
+        headers,
         timeout: AITOP_STATUS_TIMEOUT_MS,
         validateStatus: () => true,
       });
@@ -303,7 +307,9 @@ app.get('/download-task-file', async (req, res) => {
   try {
     const statusResp = await fetchTaskStatusWithRetry(taskId);
     const statusJson = statusResp?.data || {};
-    const resourceUrl = statusJson?.data?.resourceUrl;
+    const resourceUrl =
+      pickMediaResourceUrlFromTaskStatus(statusJson?.data) ||
+      pickMediaResourceUrlFromTaskStatus(statusJson);
     if (!resourceUrl || typeof resourceUrl !== 'string') {
       return res.status(404).json({ error: '任务暂无可下载资源', taskId, detail: statusJson?.message || '' });
     }
@@ -361,13 +367,7 @@ app.post('/mirror-media-to-aitop', async (req, res) => {
     if (taskId) {
       const statusResp = await fetchTaskStatusWithRetry(taskId);
       const envelope = statusResp?.data || {};
-      const sd = envelope?.data && typeof envelope.data === 'object' ? envelope.data : envelope;
-      const statusUrl =
-        typeof sd?.resourceUrl === 'string'
-          ? sd.resourceUrl.trim()
-          : typeof sd?.videoUrl === 'string'
-            ? sd.videoUrl.trim()
-            : '';
+      const statusUrl = pickMediaResourceUrlFromTaskStatus(envelope?.data) || pickMediaResourceUrlFromTaskStatus(envelope);
       if (statusUrl) src = statusUrl;
       if (isAitopCosMediaUrl(src)) {
         return res.json({ ok: true, url: src, via: 'task-status' });
@@ -399,8 +399,10 @@ app.get('/task-status', async (req, res) => {
   if (!taskId || typeof taskId !== 'string') {
     return res.status(400).json({ error: '缺少 taskId 参数' });
   }
+  const domainAccount =
+    typeof req.query.domainAccount === 'string' ? req.query.domainAccount.trim() : '';
   try {
-    const statusResp = await fetchTaskStatusWithRetry(taskId);
+    const statusResp = await fetchTaskStatusWithRetry(taskId, domainAccount);
     res.status(statusResp.status || 500);
     res.setHeader('Content-Type', 'application/json; charset=utf-8');
     res.setHeader('Cache-Control', 'no-store');
