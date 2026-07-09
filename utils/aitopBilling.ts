@@ -25,6 +25,13 @@ export function buildAitopBillingQuery(ctx?: AitopBillingContext | null): string
   return parts.length ? `&${parts.join('&')}` : '';
 }
 
+/** 与 /task-status 一致：下载中转需携带 domainAccount 才能查到计费任务资源 */
+export function buildDownloadTaskFileUrl(taskId: string, ctx?: AitopBillingContext | null): string {
+  const id = String(taskId || '').trim();
+  if (!id) return '';
+  return `/download-task-file?taskId=${encodeURIComponent(id)}${buildAitopBillingQuery(ctx)}`;
+}
+
 /** 平台类报错展示：直接打印域账号与 scoreProjectId，便于用户复制给 AITOP 排查 */
 export function formatAitopBillingContextForSupport(
   ctx?: AitopBillingContext | null

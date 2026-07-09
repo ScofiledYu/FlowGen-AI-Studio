@@ -1,12 +1,20 @@
 import React, { useState, useRef, useEffect, useLayoutEffect, useMemo, useCallback } from 'react';
 import {
   resolveDisplayMediaUrl,
-  flowgenAssetFileUrlFromMediaUrl,
-  isFlowgenAssetThumbUrl,
 } from '../services/flowgenApi';
 import { resolveUrlForVideoCapture } from '../utils/videoThumbnail';
 import { deleteLocalMediaRef, getLocalMediaBlob } from '../utils/localNodeMediaStore';
-import { isPersistableMediaUrl } from '../utils/workspaceMediaPersist';
+import {
+  removeReferenceImageLocalRefAtIndex,
+  anyPanelRefsPendingLocalHydrate,
+  panelNeedsPostRunBlobHydrateRecheck,
+  hydrateAllPanelReferenceLocalRefs,
+  alignPanelReferenceSlotsFromLocalRefs,
+  stripRestoredNodeMediaForLocalRefHydrate,
+  panelReferenceImagesFieldForLocalRefs,
+  type PanelReferenceLocalRefField,
+} from '../utils/hydratePanelReferenceLocalRefs';
+import { isPersistableMediaUrl, isEphemeralMediaUrl } from '../utils/workspaceMediaPersist';
 
 function revokeBlobPreviewUrl(url: string | undefined) {
   if (url && url.startsWith('blob:')) {
@@ -32,50 +40,12 @@ function inspectorVideoDisplaySrc(url: string | undefined): string {
   return resolveUrlForVideoCapture(url);
 }
 
-/** 首尾帧槽展示：本地 blob/data 优先，避免残留 COS URL 盖住新上传图导致裂图 */
-function resolveInspectorFramePreviewUrl(
-  imageUrl?: string | null,
-  imageData?: string | null
-): string | undefined {
-  const url = String(imageUrl || '').trim();
-  const data = String(imageData || '').trim();
-  if (data && data.startsWith('blob:')) return data;
-  if (data && /^data:image\//i.test(data)) {
-    const resolved = resolveDisplayMediaUrl(data);
-    if (resolved) return resolved;
-  }
-  if (url && isPersistableMediaUrl(url)) {
-    const resolved = resolveDisplayMediaUrl(url);
-    if (resolved) return resolved;
-  }
-  if (data) {
-    const resolved = resolveDisplayMediaUrl(data);
-    if (resolved) return resolved;
-  }
-  if (url) {
-    const resolved = resolveDisplayMediaUrl(url);
-    if (resolved) return resolved;
-  }
-  return undefined;
-}
-
-function patchFirstFrameFromPreviewUpdate(img?: string): {
-  firstFrameImage?: string;
-  firstFrameImageUrl?: string;
-  firstFrameLocalRef?: string;
-} {
-  if (!img) {
-    return {
-      firstFrameImage: undefined,
-      firstFrameImageUrl: undefined,
-      firstFrameLocalRef: undefined,
-    };
-  }
-  if (/^https?:\/\//i.test(img) || img.startsWith('/flowgen-api/')) {
-    return { firstFrameImage: img, firstFrameImageUrl: img, firstFrameLocalRef: undefined };
-  }
-  return { firstFrameImage: img, firstFrameImageUrl: undefined };
-}
+import {
+  buildFirstFrameDefaultFillPatch,
+  needsFirstFramePanelModel,
+  patchFirstFrameFromPreviewUpdate,
+  resolveFirstFramePanelPreviewUrl,
+} from '../utils/firstFramePanel';
 
 function patchLastFrameFromPreviewUpdate(img?: string): {
   lastFrameImage?: string;
@@ -211,29 +181,49 @@ async function createVideoPosterLite(file: File): Promise<string | undefined> {
     video.src = objUrl;
   });
 }
-import { ChevronDown, Image as ImageIcon, Plus, Type, Sparkles, X, Settings2, Play, Pause, Loader2, Ratio, Monitor, Layers, UploadCloud, ArrowRightLeft, Clock, Zap, SlidersHorizontal, Film, Ban, Info, Search, Trash2, FileText, Music } from 'lucide-react';
+import { ChevronDown, Image as ImageIcon, Plus, Type, Sparkles, X, Settings2, Play, Pause, Loader2, Ratio, Monitor, Layers, UploadCloud, ArrowRightLeft, Clock, Zap, SlidersHorizontal, Film, Ban, Info, Search, Trash2, FileText, Music, Copy } from 'lucide-react';
 import {
   MODEL_IMAGE_2,
   MODEL_NANO_BANANA_2,
   NodeData,
   NodeType,
+  INSPECTOR_SELECTABLE_MODELS,
+  isDeprecatedInspectorModel,
   isImage2Model,
   isNanoBanana2Model,
 } from '../types';
 import {
   IMAGE2_ASPECT_OPTIONS,
+  IMAGE2_MAX_API_IMAGES,
+  IMAGE2_QUALITY_LEVEL_OPTIONS,
+  IMAGE2_QUALITY_OPTIONS,
   image2AspectForSize,
   image2CoerceSizeForAspect,
+  image2NormalizeQuality,
+  image2NormalizeQualityLevel,
+  image2ResolveQuality,
   image2SizesForAspect,
+  image2NormalizeAspectRatio,
 } from '../utils/image2Model';
 import {
+  buildImage2PanelDisplayEntries,
   compactImage2PanelReferences,
   image2MaxReferenceSlots,
   image2PanelRefsPatchIfChanged,
   image2MainPatchOnModelSwitch,
   clearInheritedPanelRefsOnFrameModelSwitch,
   patchImage2ReferenceAtRefSlot,
+  removeImage2PanelReferenceAtDisplaySlot,
+  IMAGE2_MAX_PANEL_SLOTS,
 } from '../utils/image2PanelRefs';
+import { nanoBananaMainPatchOnModelSwitch } from '../utils/modelSwitchPanelIsolation';
+import {
+  applyKlingOmniActiveTabLivePanel,
+  buildKlingOmniTabSwitchPatch,
+  snapshotKlingOmniTabConfigsWithLivePanel,
+  type KlingOmniPanelTab,
+} from '../utils/klingOmniTabPanelIsolation';
+import { sanitizeOutputNodePanelReferenceImages, buildPanelRefSlotSyncPatch } from '../utils/panelRefPersistence';
 import {
   formatSeedanceDurationLabel,
   parseSeedanceDurationSeconds,
@@ -249,6 +239,14 @@ import {
   getSeedance20PanelDefaultsPatch,
   shouldMigrateSeedance20AspectToDefault,
 } from '../utils/seedanceAspectRatio';
+import {
+  buildSeedanceModelConfigSnapshot,
+  isSeedance20VariantModel,
+  isSeedance20VariantSwitch,
+  resolveSeedanceConfigForModelSwitch,
+  type SeedanceModelConfigSnapshot,
+  snapshotSeedanceTabConfigsWithLivePanel,
+} from '../utils/seedance20ModelSwitch';
 import {
   compressImageForPreview,
   normalizeInspectorIngestImageUrl,
@@ -274,51 +272,69 @@ import {
   buildPromptMediaRefLabels,
   filterMediaRefs,
   getActiveAtMention,
-  isDuplicateOfMainImagePreview,
   isLikelyMainVideoUrl,
+  isOmniMultiReferenceSlotVideo,
+  isOmniTabVideoMainVideoReference,
+  isSeedanceReferenceMovMainVideo,
   mainAwareRefImageSlotLabel,
   panelReferenceSlotLabel,
   seedanceReferenceSlotLabel,
   omniMixedRefSlotCaption,
   matchAllPromptMediaTokens,
-  scanPromptAppendAllTokens,
   getNodeInspectorPromptText,
   buildNodePromptUpdatePatch,
-  buildCanonicalInspectorPromptPatch,
+  buildPromptPictureOrdinalRepairPatch,
   buildInspectorPromptMentionItems,
-  scanPromptAppendMediaTokensForNode,
+  buildScanPromptAndPanelPatch,
   buildPromptMediaRefContextForRun,
   remapPromptPanelImageTokensToAssetTokens,
   refImageOrdinalForSlot,
+  stripPromptMediaTokensForPlainCopy,
   type PromptMediaRefItem,
 } from '../utils/promptMediaRefs';
 import {
+  buildPanelMainImageRestorePatchForEditing,
+  buildPanelMainImagePreservePatchOnEdit,
+  buildStalePanelMainBackupClearPatch,
+  nodeModelUsesPanelMainImageRestore,
   panelReferenceDisplaySlots,
   panelReferenceLabelImagePreview,
   shouldDedupePanelRefsAgainstMainPreview,
   shouldShowPanelMainImageSlot,
+  resolvePanelMainSlotPreviewUrl,
 } from '../utils/referencedMediaRun';
 import {
   FLOWGEN_MEDIA_URL_DROP,
+  isCanvasNodeMediaDragSource,
   type FlowgenMediaUrlDropDetail,
 } from '../utils/middleButtonMediaDrag';
+import { logMiddleDrag, summarizeMiddleDragUrl } from '../utils/middleDragDebug';
 import { extractInspectorDragUrl, extractInspectorDragUrls } from '../utils/inspectorMediaDrop';
+import { enqueueInspectorReferenceDrop } from '../utils/inspectorReferenceDropQueue';
 import {
   alignReferenceImageLabels,
-  appendPromptReferencedAssetDisplayEntries,
   buildPanelReferenceDisplayEntries,
   dedupePanelReferenceDisplayEntries,
   filterPanelReferenceDisplayEntriesExcludingMainPreview,
+  firstEmptyPanelReferenceSlotIndex,
+  isPanelRefDuplicateOfMainImageSlot,
+  isStalePanelAssetDisplayLabel,
   panelRefDisplayDedupeKey,
   panelReferencesAlreadyContainAsset,
+  panelReferencesAlreadyContainCanvasSource,
+  panelReferencesAlreadyContainIncoming,
   panelReferencesAlreadyContainUrl,
+  buildPanelRefElementIdsAfterWrite,
+  canvasOmniRefElementId,
   resolvePanelReferenceDisplayCaption,
   projectAssetDisplayNameFromUrl,
   referenceImagesDedupePatchIfNeeded,
   removeReferenceImageAt,
+  syncGenericReferenceImageLabelsToSlotOrdinals,
   resolveFirstLastFramePanelDisplayLabel,
   resolveMainImagePanelDisplayLabel,
   resolvePanelReferenceSlotDisplayUrl,
+  resolvePanelRefLabelForInspectorDrop,
   resolveReferenceSlotDisplayLabel,
   tryAppendReferenceImageWithLabel,
   upgradeReferenceImageLabelsFromAssets,
@@ -335,6 +351,7 @@ const FrameDropZone = React.memo(function FrameDropZone({
   imageData,
   onImageUpdate,
   displayUrl,
+  fallbackMainPreview,
   showImage = true,
   compact = false,
   mediaRefCaption,
@@ -348,6 +365,8 @@ const FrameDropZone = React.memo(function FrameDropZone({
   imageData?: string;
   onImageUpdate: (img?: string) => void;
   displayUrl?: string;
+  /** 首帧槽为空时回退展示节点主预览（仅展示，写入仍走 default fill patch） */
+  fallbackMainPreview?: string;
   showImage?: boolean;
   compact?: boolean;
   /** 与创意描述 @ 引用一致，如 图片1 / 图片2 */
@@ -355,17 +374,19 @@ const FrameDropZone = React.memo(function FrameDropZone({
 }) {
   const [isZoneDragOver, setIsZoneDragOver] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
-  const hasImage = Boolean(
+  const hasSlotData = Boolean(
     String(imageUrl || '').trim() ||
       String(imageData || '').trim() ||
       String(image || '').trim()
   );
   const displaySrc = useMemo(
     () =>
-      resolveInspectorFramePreviewUrl(imageUrl, imageData) ||
+      resolveFirstFramePanelPreviewUrl(imageUrl, imageData, fallbackMainPreview) ||
       (image ? resolveDisplayMediaUrl(image) : ''),
-    [imageUrl, imageData, image]
+    [imageUrl, imageData, image, fallbackMainPreview]
   );
+  /** 槽位有图，或主预览回退可展示时均显示缩略图（不仅依赖槽位字段） */
+  const hasDisplayContent = Boolean(displaySrc);
 
   const registerOriginal = (file: File) => {
     window.dispatchEvent(
@@ -397,6 +418,17 @@ const FrameDropZone = React.memo(function FrameDropZone({
     }
     const internalUrl = extractInspectorDragUrl(e.dataTransfer);
     if (internalUrl) {
+      // ephemeral URL（blob:/data:）需写入 IDB，刷新后才能恢复；https 资产库 URL 直接持久化
+      if (!isPersistableMediaUrl(internalUrl)) {
+        void fetch(internalUrl)
+          .then((r) => r.blob())
+          .then((blob) => {
+            const ext = blob.type?.includes('png') ? 'png' : 'jpg';
+            const file = new File([blob], `frame-${frameType}.${ext}`, { type: blob.type || 'image/jpeg' });
+            registerOriginal(file);
+          })
+          .catch(() => {});
+      }
       void normalizeInspectorIngestImageUrl(internalUrl).then(onImageUpdate);
     }
   };
@@ -421,8 +453,8 @@ const FrameDropZone = React.memo(function FrameDropZone({
   return (
     <div
       className={`
-                flex-1 rounded-lg border-2 border-dashed relative overflow-hidden transition-all group cursor-pointer
-                ${compact ? 'h-full' : 'aspect-[4/3]'}
+                ${compact ? 'h-full w-full min-h-0' : 'flex-1 aspect-[4/3]'}
+                rounded-lg border-2 border-dashed relative overflow-hidden transition-all group cursor-pointer
                 ${isZoneDragOver ? 'border-brand-500 bg-brand-500/10' : 'border-gray-700 bg-gray-950/50 hover:border-gray-600'}
             `}
       data-flowgen-media-drop="1"
@@ -449,18 +481,12 @@ const FrameDropZone = React.memo(function FrameDropZone({
         onChange={handleFileSelect}
       />
 
-      {hasImage ? (
+      {hasDisplayContent ? (
         <>
           {showImage && displaySrc ? (
             <img src={displaySrc} alt={label} className="w-full h-full object-cover" />
           ) : null}
-          {!mediaRefCaption && (
-            <div
-              className={`absolute top-1 left-1 bg-black/70 text-white font-bold rounded z-10 pointer-events-none ${compact ? 'text-[8px] px-1.5 py-0.5' : 'text-[9px] px-1.5 py-0.5'}`}
-            >
-              {label === '首帧图' ? '[首帧图]' : label === '尾帧图' ? '[尾帧图]' : label}
-            </div>
-          )}
+          {hasSlotData ? (
           <button
             onClick={(e) => {
               e.stopPropagation();
@@ -471,6 +497,7 @@ const FrameDropZone = React.memo(function FrameDropZone({
           >
             <X size={12} />
           </button>
+          ) : null}
           {mediaRefCaption ? (
             <div className="absolute bottom-0 left-0 right-0 bg-black/70 backdrop-blur-sm z-10 pointer-events-none">
               <div
@@ -560,7 +587,7 @@ const InspectorOmniTabVideoPreview = React.memo(function InspectorOmniTabVideoPr
   omniTab,
   displayUrl,
   posterUrl,
-  mainPreview,
+  nodeData,
   onRemove,
   onVideoPlayStateChange,
   onTogglePlay,
@@ -571,7 +598,7 @@ const InspectorOmniTabVideoPreview = React.memo(function InspectorOmniTabVideoPr
   omniTab: 'instruction' | 'video';
   displayUrl: string;
   posterUrl?: string;
-  mainPreview?: string;
+  nodeData: Partial<NodeData>;
   onRemove: () => void;
   onVideoPlayStateChange: (videoId: string, playing: boolean) => void;
   onTogglePlay: (videoId: string) => void;
@@ -580,10 +607,10 @@ const InspectorOmniTabVideoPreview = React.memo(function InspectorOmniTabVideoPr
 }) {
   const videoId = `omni-video-preview-${nodeId}-${omniTab}`;
   const videoSrc = useMemo(() => inspectorVideoDisplaySrc(displayUrl), [displayUrl]);
-  const isMainVideo = useMemo(() => {
-    const mainPrev = mainPreview?.trim();
-    return Boolean(mainPrev && isLikelyMainVideoUrl(mainPrev) && mainPrev === displayUrl);
-  }, [mainPreview, displayUrl]);
+  const isMainVideo = useMemo(
+    () => isOmniTabVideoMainVideoReference(nodeData, displayUrl, omniTab),
+    [nodeData, displayUrl, omniTab]
+  );
   const showPoster = Boolean(posterUrl && !isPlaying);
 
   return (
@@ -889,8 +916,8 @@ function NodeInspector({
 
   const { getNodes, getEdges } = useReactFlow();
   const mainPreviewDisplaySrc = useMemo(
-    () => resolveDisplayMediaUrl(data.imagePreview),
-    [data.imagePreview]
+    () => resolveDisplayMediaUrl(resolvePanelMainSlotPreviewUrl(data)),
+    [data.imagePreview, data.panelMainImageUrl, data.panelMainSlotVisible, data.imageLocalRef]
   );
   // 展示态：优先用节点真实状态；本地态仅用于点击后的短暂反馈
   const isCurrentNodeRunning = data.status === 'running' || Boolean(runningByNode[nodeId]);
@@ -1087,12 +1114,19 @@ function NodeInspector({
   /** 拖放/上传回调中读取最新节点数据，避免异步闭包陈旧 */
   const nodeDataRef = useRef(data);
   nodeDataRef.current = data;
+  const mergeNodeDataRef = (patch: Partial<NodeData>) => {
+    nodeDataRef.current = { ...nodeDataRef.current, ...patch };
+  };
   // Ref for prompt textarea (for inserting image references)
   const promptTextareaRef = useRef<HTMLTextAreaElement>(null);
   const promptHighlightRef = useRef<HTMLDivElement>(null);
   const promptHighlightInnerRef = useRef<HTMLDivElement>(null);
   /** 受控 prompt 重渲染后恢复光标（避免空格/换行后 caret 错位） */
   const pendingPromptSelectionRef = useRef<{ start: number; end: number } | null>(null);
+  /** 粘贴后忽略紧随其后的 onChange，避免与手动写入重复或触发其它副作用 */
+  const skipNextPromptChangeRef = useRef(false);
+  /** 粘贴目标文案：仅用于识别粘贴后的首次同步 onChange，之后须解除 */
+  const pendingPastePromptRef = useRef<string | null>(null);
   
   // State for library file selector modal
   const [showLibraryModal, setShowLibraryModal] = useState(false);
@@ -1179,6 +1213,9 @@ function NodeInspector({
   /** 刷新后：顶层首尾帧被剥离时，从 seedance 图生 tab 快照或持久化 COS 链接恢复 */
   useEffect(() => {
     if (!isSeedance20 || seedanceMode !== 'image') return;
+    // OUTPUT/MOV 面板首尾帧由 sanitize 清空（产品规则：不继承），此处恢复会与
+    // sanitize 形成「恢复→清空→恢复」循环导致首帧图不停抖动，故仅对非 OUTPUT/MOV 恢复。
+    if (nodeType === NodeType.OUTPUT || nodeType === NodeType.MOV) return;
     const tab = data.seedanceTabConfigs?.image;
     if (!tab) return;
     const patch: Partial<NodeData> = {};
@@ -1209,6 +1246,7 @@ function NodeInspector({
     if (Object.keys(patch).length > 0) onUpdate(patch);
   }, [
     nodeId,
+    nodeType,
     isSeedance20,
     seedanceMode,
     data.firstFrameImage,
@@ -1245,7 +1283,7 @@ function NodeInspector({
         frameHydrateTokenRef.current[tokenKey] = ref;
         return;
       }
-      if (frameHydrateTokenRef.current[tokenKey] === ref) return;
+      if (frameHydrateTokenRef.current[tokenKey] === ref && cur && String(cur).trim()) return;
       const blob = await getLocalMediaBlob(ref);
       if (!blob || cancelled) return;
       revokeBlobPreviewUrl(typeof cur === 'string' ? cur : undefined);
@@ -1268,6 +1306,105 @@ function NodeInspector({
     onUpdate,
   ]);
 
+  /** 主预览被剥离或为空时，从 imageLocalRef 恢复 blob（供首帧默认填充与 FrameDropZone 回退） */
+  const mainHydrateTokenRef = useRef<{ nodeId: string; ref?: string }>({ nodeId: '' });
+  useEffect(() => {
+    if (mainHydrateTokenRef.current.nodeId !== nodeId) {
+      mainHydrateTokenRef.current = { nodeId };
+    } else {
+      mainHydrateTokenRef.current.ref = undefined;
+    }
+    let cancelled = false;
+    const ref = data.imageLocalRef;
+    const main = String(data.imagePreview || '').trim();
+    if (main && isPersistableMediaUrl(main)) return;
+    if (main && main.startsWith('blob:')) {
+      mainHydrateTokenRef.current.ref = ref;
+      return;
+    }
+    if (!ref) return;
+    void (async () => {
+      const blob = await getLocalMediaBlob(ref);
+      if (cancelled) return;
+      if (!blob) return;
+      const url = safeCreateObjectURL(blob);
+      if (!url) return;
+      mainHydrateTokenRef.current.ref = ref;
+      revokeBlobPreviewUrl(main.startsWith('blob:') ? main : undefined);
+      onUpdate({ imagePreview: url });
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [nodeId, data.selectedModel, data.imagePreview, data.imageLocalRef, onUpdate]);
+
+  /** 切模型或刷新后：referenceImages 槽空但 localRefs 在 → 从 IndexedDB 恢复面板预览 */
+  const panelRefHydrateGenRef = useRef(0);
+  useEffect(() => {
+    const needsHydrate =
+      anyPanelRefsPendingLocalHydrate(data) || panelNeedsPostRunBlobHydrateRecheck(data);
+    if (!needsHydrate) return;
+    const gen = ++panelRefHydrateGenRef.current;
+    let cancelled = false;
+    void (async () => {
+      const patch = await hydrateAllPanelReferenceLocalRefs(data);
+      if (cancelled || gen !== panelRefHydrateGenRef.current || !patch) return;
+      // 仅 revoke 被替换的旧 blob URL（保留新数组中仍存在的，避免误回收未变化槽）
+      const revokeReplaced = (oldArr: string[] | undefined, newArr: string[] | undefined) => {
+        const kept = new Set((newArr || []).filter((u) => u && u.startsWith('blob:')));
+        (oldArr || []).forEach((u) => {
+          if (u && u.startsWith('blob:') && !kept.has(u)) revokeBlobPreviewUrl(u);
+        });
+      };
+      if (patch.referenceImages) revokeReplaced(data.referenceImages, patch.referenceImages);
+      if (patch.klingOmniMultiReferenceImages) revokeReplaced(data.klingOmniMultiReferenceImages, patch.klingOmniMultiReferenceImages);
+      if (patch.klingOmniInstructionReferenceImages) revokeReplaced(data.klingOmniInstructionReferenceImages, patch.klingOmniInstructionReferenceImages);
+      if (patch.klingOmniVideoReferenceImages) revokeReplaced(data.klingOmniVideoReferenceImages, patch.klingOmniVideoReferenceImages);
+      if (patch.panelMainImageUrl) {
+        const kept2 = String(patch.panelMainImageUrl || '').startsWith('blob:') ? new Set([patch.panelMainImageUrl]) : new Set<string>();
+        if (data.panelMainImageUrl && data.panelMainImageUrl.startsWith('blob:') && !kept2.has(data.panelMainImageUrl)) {
+          revokeBlobPreviewUrl(data.panelMainImageUrl);
+        }
+      }
+      onUpdate(patch);
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    nodeId,
+    data.selectedModel,
+    data.referenceImages,
+    data.referenceImageLocalRefs,
+    data.klingOmniMultiReferenceImages,
+    data.klingOmniMultiReferenceLocalRefs,
+    data.klingOmniInstructionReferenceImages,
+    data.klingOmniInstructionReferenceLocalRefs,
+    data.klingOmniVideoReferenceImages,
+    data.klingOmniVideoReferenceLocalRefs,
+    data.firstFrameLocalRef,
+    data.lastFrameLocalRef,
+    data.imageLocalRef,
+    data.panelMainImageUrl,
+    data.panelMainSlotVisible,
+    data.status,
+    onUpdate,
+  ]);
+
+  const inspectorMainPreviewFallback = useMemo(() => {
+    if (nodeType === NodeType.MOV) return undefined;
+    const main = String(data.imagePreview || '').trim();
+    if (!main || isLikelyMainVideoUrl(main)) return undefined;
+    // OUTPUT 节点：首尾帧面板模型（可灵3.0 Omni frames / seedance2.0 image /
+    // 可灵 2.5 Turbo / vidu / seedance1.5 / 即梦）时，首/尾帧格用主图回退显示
+    // （不写入 firstFrameImageUrl，由 sanitize 保持槽位空，避免 default fill 与 sanitize 循环闪动）
+    if (nodeType === NodeType.OUTPUT) {
+      if (!needsFirstFramePanelModel(data, { seedanceMode, klingOmniTab })) return undefined;
+      return main;
+    }
+    return main;
+  }, [nodeType, data.imagePreview, data.selectedModel, seedanceMode, klingOmniTab]);
+
   /** 1080p 仅高质量版：旧数据或切换模型后纠正 */
   useEffect(() => {
     if (!isSeedance || isSeedance20HighQuality) return;
@@ -1287,40 +1424,10 @@ function NodeInspector({
     // eslint-disable-next-line react-hooks/exhaustive-deps -- 仅 nodeId 切换时补默认
   }, [nodeId, isSeedance20]);
 
-  /** Seedance 参考生：打开面板时写回去重后的 referenceImages（分镜克隆/旧数据常留同资产双槽） */
-  useLayoutEffect(() => {
-    if (!isSeedance20 || seedanceMode !== 'reference') return;
-    const patch = referenceImagesDedupePatchIfNeeded(data, {
-      dedupeAgainstMain: shouldDedupePanelRefsAgainstMainPreview(data),
-      projectAssets: projectAssetLabelRows,
-    });
-    if (!patch) return;
-    const tabs = { ...(data.seedanceTabConfigs || {}) } as NonNullable<NodeData['seedanceTabConfigs']>;
-    const refTab = { ...(tabs.reference || {}) };
-    refTab.prompt = getInspectorPromptValue();
-    refTab.referenceImages = patch.referenceImages;
-    refTab.referenceImageLabels = patch.referenceImageLabels;
-    tabs.reference = refTab;
-    onUpdate({
-      ...buildNodePromptUpdatePatch(data, getInspectorPromptValue()),
-      ...patch,
-      seedanceTabConfigs: tabs,
-    });
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- 仅在槽位/主图变化时去重
-  }, [
-    nodeId,
-    isSeedance20,
-    seedanceMode,
-    data.referenceImages,
-    data.referenceImageLabels,
-    data.imagePreview,
-    data.panelMainSlotVisible,
-    projectAssetLabelRows,
-  ]);
-
   /** Seedance 参考生：泛称「图片n」升级为资产库展示名（分镜克隆/旧节点） */
   useLayoutEffect(() => {
     if (!isSeedance20 || seedanceMode !== 'reference') return;
+    if (isCurrentNodeRunning) return;
     if (!projectAssetLabelRows.length) return;
     const refs = data.referenceImages || [];
     if (!refs.length) return;
@@ -1346,14 +1453,57 @@ function NodeInspector({
     projectAssetLabelRows,
   ]);
 
-  /** Nano Banana 2.0：打开面板时写回去重后的 referenceImages（主图勿重复进「图片1」槽） */
+  /** 删库后 persisted referenceImageLabels 仍存旧资产名 → 清空 stale 标签，底栏回退「图片n」 */
   useLayoutEffect(() => {
-    if (!isNanoBanana2Model(data.selectedModel)) return;
-    const patch = referenceImagesDedupePatchIfNeeded(data, {
-      dedupeAgainstMain: shouldDedupePanelRefsAgainstMainPreview(data),
+    if (isCurrentNodeRunning) return;
+    if (!projectAssetLabelRows.length) return;
+    const refs = data.referenceImages || [];
+    if (!refs.length) return;
+    const aligned = alignReferenceImageLabels(refs, data.referenceImageLabels);
+    const sanitized = aligned.map((label, i) =>
+      isStalePanelAssetDisplayLabel(label, refs[i], projectAssetLabelRows) ? '' : label
+    );
+    if (sanitized.every((l, i) => l === aligned[i])) return;
+    onUpdate({ referenceImageLabels: sanitized });
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- 槽位/资产库变化时清理 stale 标签
+  }, [
+    nodeId,
+    isCurrentNodeRunning,
+    data.referenceImages,
+    data.referenceImageLabels,
+    projectAssetLabelRows,
+  ]);
+
+  /** 多图参考面板模型：gp 恢复 + 标签同步 + 创意描述 @图片n 修正（Nano / image2 / Seedance 参考生 / Omni 多图·指令） */
+  useLayoutEffect(() => {
+    if (isCurrentNodeRunning || data.status === 'completed') return;
+    if (anyPanelRefsPendingLocalHydrate(data)) return;
+    const model = data.selectedModel || '';
+    const omniTab = (data.klingOmniTab || 'multi') as 'multi' | 'instruction' | 'video' | 'frames';
+    const usePanelRefSync =
+      isNanoBanana2Model(model) ||
+      isImage2Model(model) ||
+      (isSeedance20 && seedanceMode === 'reference') ||
+      (model === '可灵3.0 Omni' && (omniTab === 'multi' || omniTab === 'instruction'));
+    if (!usePanelRefSync) return;
+    const patch = buildPanelRefSlotSyncPatch(data, {
+      dedupeAgainstMain: isNanoBanana2Model(model)
+        ? false
+        : shouldDedupePanelRefsAgainstMainPreview(data),
       projectAssets: projectAssetLabelRows,
     });
     if (!patch) return;
+    if (isSeedance20 && seedanceMode === 'reference') {
+      const tabs = { ...(data.seedanceTabConfigs || {}) } as NonNullable<NodeData['seedanceTabConfigs']>;
+      const refTab = { ...(tabs.reference || {}) };
+      if (patch.referenceImages) refTab.referenceImages = patch.referenceImages;
+      if (patch.referenceImageLabels) refTab.referenceImageLabels = patch.referenceImageLabels;
+      if (patch.referenceElementIds) refTab.referenceElementIds = patch.referenceElementIds;
+      if (patch.prompt != null) refTab.prompt = patch.prompt;
+      tabs.reference = refTab;
+      onUpdate({ ...patch, seedanceTabConfigs: tabs });
+      return;
+    }
     onUpdate(patch);
     // eslint-disable-next-line react-hooks/exhaustive-deps -- 仅在槽位/主图变化时去重
   }, [
@@ -1361,45 +1511,121 @@ function NodeInspector({
     data.selectedModel,
     data.referenceImages,
     data.referenceImageLabels,
+    data.generationParams?.referenceImages,
+    data.generationParams?.referenceImageLabels,
     data.imagePreview,
     data.panelMainSlotVisible,
     projectAssetLabelRows,
   ]);
 
+  /** 运行后隐藏的主图格：重新选中节点时恢复主图（Nano / image2 / 可灵3.0 Omni） */
+  useLayoutEffect(() => {
+    const d = nodeDataRef.current;
+    if (!nodeModelUsesPanelMainImageRestore(d.selectedModel)) return;
+    const patch = buildPanelMainImageRestorePatchForEditing(d);
+    if (!patch) return;
+    onUpdate(patch);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- 仅在选中节点切换时恢复主图
+  }, [nodeId]);
+
+  /** 运行后有 panelMainImageUrl 备份时：编辑创意描述须保留主图格（清除 legacy panelMainSlotVisible=false） */
+  useLayoutEffect(() => {
+    if (isCurrentNodeRunning) return;
+    if (!nodeModelUsesPanelMainImageRestore(data.selectedModel)) return;
+    const patch = buildPanelMainImagePreservePatchOnEdit(data);
+    if (!patch) return;
+    onUpdate(patch);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- 创意描述 / 主图备份变化时保留主图格
+  }, [
+    nodeId,
+    data.prompt,
+    data.klingOmniMultiPrompt,
+    data.klingOmniInstructionPrompt,
+    data.klingOmniVideoPrompt,
+    data.klingOmniFramesPrompt,
+    data.seedanceTabConfigs,
+    data.panelMainImageUrl,
+    data.panelMainSlotVisible,
+    data.selectedModel,
+    isCurrentNodeRunning,
+  ]);
+
+  /** 创意描述清空 @ 后：清遗留 panelMainImageUrl，避免画布缩略图误显示参考图 1 */
+  useLayoutEffect(() => {
+    if (isCurrentNodeRunning) return;
+    if (!nodeModelUsesPanelMainImageRestore(data.selectedModel)) return;
+    const patch = buildStalePanelMainBackupClearPatch(data);
+    if (!patch) return;
+    onUpdate(patch);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- prompt / 备份变化时清理遗留主图备份
+  }, [
+    nodeId,
+    data.prompt,
+    data.klingOmniMultiPrompt,
+    data.klingOmniInstructionPrompt,
+    data.klingOmniVideoPrompt,
+    data.klingOmniFramesPrompt,
+    data.seedanceTabConfigs,
+    data.panelMainImageUrl,
+    data.panelMainSlotVisible,
+    data.selectedModel,
+    isCurrentNodeRunning,
+  ]);
+
   /** 仅 Nano Banana 2.0 走多图参考/拖入规则（勿把「非视频模型」都当 Nano） */
   const isNano = isNanoBanana2Model(data.selectedModel);
   const isImage2 = isImage2Model(data.selectedModel);
-  const maxStandardRefImages = isImage2 ? 3 : 14;
+  const maxStandardRefImages = isImage2 ? IMAGE2_MAX_API_IMAGES : 14;
+
+  /** 面板侧栏展示用参考图：OUTPUT/MOV 继承的参考已在 spawn 与加载时清空，
+   *  运行时直接用 data.referenceImages（用户可手动拖入 / @引用），不再强制清空； */
+  const effectivePanelReferenceImages = useMemo(
+    () => {
+      if (nodeType !== NodeType.MOV && nodeType !== NodeType.OUTPUT) {
+        return sanitizeOutputNodePanelReferenceImages(data, nodeType);
+      }
+      return (data.referenceImages || []).map((u) => String(u || '').trim()).filter(Boolean);
+    },
+    [
+      nodeType,
+      data.referenceImages,
+      data.generationParams?.referenceImages,
+      data.prompt,
+      data.seedanceTabConfigs,
+      data.klingOmniTab,
+      data.klingOmniMultiPrompt,
+      data.klingOmniInstructionPrompt,
+      data.klingOmniVideoPrompt,
+      data.klingOmniFramesPrompt,
+    ]
+  );
 
   const seedanceRefDisplayEntries = useMemo(() => {
-    const prompt = getNodeInspectorPromptText(data);
     if (!isSeedance20 || seedanceMode !== 'reference') {
-      return buildPanelReferenceDisplayEntries(data.referenceImages);
+      return buildPanelReferenceDisplayEntries(effectivePanelReferenceImages);
     }
-    const base = buildPanelReferenceDisplayEntries(data.referenceImages, {
-      imagePreview: data.imagePreview,
+    // 用原始 data.referenceImages（保留空槽下标），避免 filter(Boolean) 后下标与 referenceImageLabels 错位
+    const seedanceRefs = (data.referenceImages || []);
+    const mainForDedupe = panelReferenceLabelImagePreview(data) ?? data.imagePreview;
+    const base = buildPanelReferenceDisplayEntries(seedanceRefs, {
+      imagePreview: mainForDedupe,
       dedupeAgainstMain: shouldDedupePanelRefsAgainstMainPreview(data),
       referenceImageLabels: data.referenceImageLabels,
       projectAssets: projectAssetLabelRows,
     });
-    let entries = appendPromptReferencedAssetDisplayEntries(
+    let entries = dedupePanelReferenceDisplayEntries(
       base,
-      prompt,
-      projectAssetLabelRows,
-      data.referenceImageLabels
-    );
-    entries = dedupePanelReferenceDisplayEntries(
-      entries,
       data.referenceImageLabels,
       projectAssetLabelRows
     );
     if (shouldShowPanelMainImageSlot(data)) {
       entries = filterPanelReferenceDisplayEntriesExcludingMainPreview(
         entries,
-        data.imagePreview,
+        mainForDedupe,
         data.imageName,
         data.referenceImageLabels,
-        projectAssetLabelRows
+        projectAssetLabelRows,
+        data
       );
     }
     // 主图格已在参考区展示时勿再补一条（Input 仅 imagePreview 会主图+参考各一张）
@@ -1432,7 +1658,7 @@ function NodeInspector({
     isSeedance20,
     seedanceMode,
     data,
-    data.referenceImages,
+    effectivePanelReferenceImages,
     data.referenceImageLabels,
     data.imagePreview,
     data.panelMainSlotVisible,
@@ -1441,11 +1667,14 @@ function NodeInspector({
 
   const seedanceShowMainInRefGrid = useMemo(() => {
     if (!isSeedance20 || seedanceMode !== 'reference') return false;
-    const p = data.imagePreview?.trim();
-    if (!p || isLikelyMainVideoUrl(p) || !shouldShowPanelMainImageSlot(data)) return false;
+    if (!shouldShowPanelMainImageSlot(data)) return false;
+    const p = resolvePanelMainSlotPreviewUrl(data);
+    if (!p || isLikelyMainVideoUrl(p)) {
+      return Boolean(String(data.imageLocalRef || '').trim());
+    }
     const mainKey = panelRefDisplayDedupeKey(p, data.imageName, projectAssetLabelRows);
     if (!mainKey) return true;
-    const refs = data.referenceImages || [];
+    const refs = effectivePanelReferenceImages || [];
     const dupInRefs = refs.some((raw, i) => {
       const u = String(raw || '').trim();
       if (!u) return false;
@@ -1457,6 +1686,9 @@ function NodeInspector({
       );
       return k === mainKey;
     });
+    if (dupInRefs && String(data.imageLocalRef || '').trim() && data.panelMainSlotVisible === false) {
+      return true;
+    }
     return !dupInRefs;
   }, [
     isSeedance20,
@@ -1464,33 +1696,26 @@ function NodeInspector({
     data.imagePreview,
     data.imageName,
     data.panelMainSlotVisible,
-    data.referenceImages,
+    data.panelMainImageUrl,
+    data.imageLocalRef,
+    effectivePanelReferenceImages,
     data.referenceImageLabels,
     projectAssetLabelRows,
   ]);
 
   const image2RefEntries = useMemo(() => {
     if (!isImage2) return [] as { url: string; slotIndex: number }[];
-    const base = buildPanelReferenceDisplayEntries(data.referenceImages, {
-      imagePreview: data.imagePreview,
-      dedupeAgainstMain: shouldDedupePanelRefsAgainstMainPreview(data),
-      referenceImageLabels: data.referenceImageLabels,
-      projectAssets: projectAssetLabelRows,
-    });
-    return dedupePanelReferenceDisplayEntries(
-      appendPromptReferencedAssetDisplayEntries(
-        base,
-        getNodeInspectorPromptText(data),
-        projectAssetLabelRows,
-        data.referenceImageLabels
-      ),
-      data.referenceImageLabels,
+    return buildImage2PanelDisplayEntries(
+      {
+        ...data,
+        referenceImages: effectivePanelReferenceImages,
+      },
       projectAssetLabelRows
     );
   }, [
     isImage2,
     data,
-    data.referenceImages,
+    effectivePanelReferenceImages,
     data.referenceImageLabels,
     data.imagePreview,
     data.panelMainSlotVisible,
@@ -1504,27 +1729,35 @@ function NodeInspector({
 
   const image2ShowMainInRefGrid = useMemo(() => {
     if (!isImage2) return false;
-    const p = data.imagePreview?.trim();
-    return Boolean(p && !isLikelyMainVideoUrl(p)) && shouldShowPanelMainImageSlot(data);
-  }, [isImage2, data.imagePreview, data.panelMainSlotVisible]);
+    if (!shouldShowPanelMainImageSlot(data)) return false;
+    const p = resolvePanelMainSlotPreviewUrl(data);
+    if (p && !isLikelyMainVideoUrl(p)) return true;
+    return Boolean(String(data.imageLocalRef || '').trim());
+  }, [isImage2, data.imagePreview, data.panelMainImageUrl, data.panelMainSlotVisible, data.imageLocalRef]);
 
   const image2RefSlotFilledCount = image2ShowMainInRefGrid
     ? 1 + image2ExtraRefImages.length
     : image2ExtraRefImages.length;
 
-  /** 修正历史数据：referenceImages 条数多于面板格，删除后不应「冒出」旧图 */
+  /** 修正历史数据：referenceImages 条数多于面板格，删除后不应「冒出」旧图。
+   *  参考 Banana2 方案：运行中/运行完成后不压紧，避免运行后面板 @参考图 signed URL 被误判为主图重复而 shift 丢失 */
   useEffect(() => {
     if (!isImage2) return;
+    if (data.status === 'running' || data.status === 'completed') return;
+    if (anyPanelRefsPendingLocalHydrate(data)) return;
+    // OUTPUT/MOV 不再强制清空参考图（用户可手动拖入），直接用 data 压紧
     const patch = image2PanelRefsPatchIfChanged(data);
     if (patch) onUpdate(patch);
     // eslint-disable-next-line react-hooks/exhaustive-deps -- 仅 image2 参考槽与主图变化时压紧
   }, [
     isImage2,
+    nodeType,
     nodeId,
     data.referenceImages,
     data.referenceImageLabels,
     data.imagePreview,
     data.panelMainSlotVisible,
+    data.status,
   ]);
 
   const hasInspectorNegative = Boolean(isKeling || isJimeng || isVidu || isSeedance);
@@ -1645,14 +1878,14 @@ function NodeInspector({
   );
 
   const mainImageSlotCaption = useMemo(() => {
-    const p = data.imagePreview?.trim();
+    const p = resolvePanelMainSlotPreviewUrl(data);
     if (!p) return '主图';
     return resolveMainImagePanelDisplayLabel(p, {
       imageName: data.imageName,
       projectAssets: projectAssetLabelRows,
       video: isLikelyMainVideoUrl(p),
     });
-  }, [data.imagePreview, data.imageName, projectAssetLabelRows]);
+  }, [data.imagePreview, data.panelMainImageUrl, data.panelMainSlotVisible, data.imageName, projectAssetLabelRows]);
 
   const projectAssetScanRows = useMemo(
     () =>
@@ -1669,21 +1902,38 @@ function NodeInspector({
   /** 与 syncMentionFromPrompt 同步，避免重渲染/失焦时 textarea.selectionStart 滞后导致下拉过滤错或为空 */
   const [mentionCtx, setMentionCtx] = useState<{ atIndex: number; query: string } | null>(null);
   const [mentionHighlight, setMentionHighlight] = useState(0);
+  const [promptPlainCopyMenu, setPromptPlainCopyMenu] = useState<{ x: number; y: number } | null>(null);
+  const mentionOpenRef = useRef(false);
+  useEffect(() => {
+    mentionOpenRef.current = mentionOpen;
+  }, [mentionOpen]);
   /** 与 state 同步比较，避免同一次 @ 上下文重复 setState / 重置高亮 */
   const lastMentionSyncRef = useRef<{ atIndex: number; query: string } | null>(null);
 
   const applyInspectorReferenceFromUrlStringRef = useRef<
-    (url: string, opts?: { kind?: 'image' | 'video'; assetName?: string }) => Promise<void>
+    (
+      url: string,
+      opts?: {
+        kind?: 'image' | 'video';
+        assetName?: string;
+        fromCanvasNode?: boolean;
+        canvasSourceNodeId?: string;
+      }
+    ) => Promise<void>
   >(async () => {});
   const seedanceReferenceFromUrlRef = useRef<
-    (url: string, kind?: 'image' | 'video', meta?: { assetName?: string }) => void
-  >(() => {});
+    (
+      url: string,
+      kind?: 'image' | 'video',
+      meta?: { assetName?: string; fromCanvasNode?: boolean; canvasSourceNodeId?: string }
+    ) => Promise<void>
+  >(async () => {});
   const firstFrameFromUrlRef = useRef<
-    (url: string, kind?: 'image' | 'video', meta?: { assetName?: string }) => void
-  >(() => {});
+    (url: string, kind?: 'image' | 'video', meta?: { assetName?: string; fromCanvasNode?: boolean }) => Promise<void>
+  >(async () => {});
   const lastFrameFromUrlRef = useRef<
-    (url: string, kind?: 'image' | 'video', meta?: { assetName?: string }) => void
-  >(() => {});
+    (url: string, kind?: 'image' | 'video', meta?: { assetName?: string; fromCanvasNode?: boolean }) => Promise<void>
+  >(async () => {});
 
   const flMediaCaptions = useMemo(
     () => ({
@@ -1716,30 +1966,72 @@ function NodeInspector({
   useEffect(() => {
     const onWin = (ev: Event) => {
       const d = (ev as CustomEvent<FlowgenMediaUrlDropDetail>).detail;
-      if (!d?.targetNodeId || d.targetNodeId !== nodeId) return;
+      if (!d?.targetNodeId) return;
+      if (d.targetNodeId !== nodeId) return;
+      const fromCanvasNode = isCanvasNodeMediaDragSource(d.sourceNodeId);
       if (d.dropZone === 'reference') {
         const items =
           d.assets && d.assets.length > 0
             ? d.assets.map((a) => ({
                 url: a.url,
                 kind: a.mime.startsWith('video/') ? ('video' as const) : ('image' as const),
-                assetName: a.assetName,
+                assetName: fromCanvasNode ? undefined : a.assetName,
+                canvasSourceNodeId: fromCanvasNode ? a.assetId : undefined,
               }))
-            : [{ url: d.url, kind: d.kind, assetName: d.assetName }];
-        for (const item of items) {
-          void applyInspectorReferenceFromUrlStringRef.current(item.url, {
-            kind: item.kind,
-            assetName: item.assetName,
-          });
-        }
+            : [
+                {
+                  url: d.url,
+                  kind: d.kind,
+                  assetName: fromCanvasNode ? undefined : d.assetName,
+                  canvasSourceNodeId: fromCanvasNode ? d.assetId : undefined,
+                },
+              ];
+        void (async () => {
+          for (const item of items) {
+            await applyInspectorReferenceFromUrlStringRef.current(item.url, {
+              kind: item.kind,
+              assetName: item.assetName,
+              fromCanvasNode,
+              canvasSourceNodeId: item.canvasSourceNodeId,
+            });
+          }
+        })();
       } else if (d.dropZone === 'seedance-reference') {
-        seedanceReferenceFromUrlRef.current(d.url, d.kind, {
-          assetName: d.assetName,
-        });
+        const items =
+          d.assets && d.assets.length > 0
+            ? d.assets.map((a) => ({
+                url: a.url,
+                kind: (a.mime.startsWith('video/') ? 'video' : 'image') as 'image' | 'video',
+                assetName: fromCanvasNode ? undefined : a.assetName,
+                canvasSourceNodeId: fromCanvasNode ? a.assetId : undefined,
+              }))
+            : [
+                {
+                  url: d.url,
+                  kind: d.kind,
+                  assetName: fromCanvasNode ? undefined : d.assetName,
+                  canvasSourceNodeId: fromCanvasNode ? d.assetId : undefined,
+                },
+              ];
+        void (async () => {
+          for (const item of items) {
+            await seedanceReferenceFromUrlRef.current(item.url, item.kind, {
+              assetName: item.assetName,
+              fromCanvasNode,
+              canvasSourceNodeId: item.canvasSourceNodeId,
+            });
+          }
+        })();
       } else if (d.dropZone === 'first-frame') {
-        firstFrameFromUrlRef.current(d.url, d.kind, { assetName: d.assetName });
+        void firstFrameFromUrlRef.current(d.url, d.kind, {
+          assetName: fromCanvasNode ? undefined : d.assetName,
+          fromCanvasNode,
+        });
       } else if (d.dropZone === 'last-frame') {
-        lastFrameFromUrlRef.current(d.url, d.kind, { assetName: d.assetName });
+        void lastFrameFromUrlRef.current(d.url, d.kind, {
+          assetName: fromCanvasNode ? undefined : d.assetName,
+          fromCanvasNode,
+        });
       }
     };
     window.addEventListener(FLOWGEN_MEDIA_URL_DROP, onWin);
@@ -1774,18 +2066,25 @@ function NodeInspector({
 
   // Kling 3.0 Omni：参考图片按 tab 分隔存储，避免相互污染显示/生成输入
   const getKlingOmniRefImages = (tab: 'multi' | 'instruction' | 'video'): string[] => {
-    if (tab === 'multi') return data.klingOmniMultiReferenceImages || [];
-    if (tab === 'instruction') return data.klingOmniInstructionReferenceImages || [];
-    return data.klingOmniVideoReferenceImages || [];
+    const d = nodeDataRef.current;
+    if (tab === 'multi') return d.klingOmniMultiReferenceImages || [];
+    if (tab === 'instruction') return d.klingOmniInstructionReferenceImages || [];
+    return d.klingOmniVideoReferenceImages || [];
   };
 
   const getKlingOmniRefElementIds = (tab: 'multi' | 'instruction' | 'video'): (string | undefined)[] => {
+    const d = nodeDataRef.current;
     const raw =
       tab === 'multi'
-        ? data.klingOmniMultiReferenceElementIds
+        ? d.klingOmniMultiReferenceElementIds
         : tab === 'instruction'
-          ? data.klingOmniInstructionReferenceElementIds
-          : data.klingOmniVideoReferenceElementIds;
+          ? d.klingOmniInstructionReferenceElementIds
+          : d.klingOmniVideoReferenceElementIds;
+    return raw ? [...raw] : [];
+  };
+
+  const getStandardRefElementIds = (): (string | undefined)[] => {
+    const raw = nodeDataRef.current.referenceElementIds;
     return raw ? [...raw] : [];
   };
 
@@ -1805,14 +2104,26 @@ function NodeInspector({
       );
     }
     if (tab === 'multi') {
-      onUpdate({ klingOmniMultiReferenceImages: next, klingOmniMultiReferenceElementIds: nextElementIds });
+      const patch = {
+        klingOmniMultiReferenceImages: next,
+        klingOmniMultiReferenceElementIds: nextElementIds,
+      };
+      mergeNodeDataRef(patch);
+      onUpdate(patch);
     } else if (tab === 'instruction') {
-      onUpdate({
+      const patch = {
         klingOmniInstructionReferenceImages: next,
         klingOmniInstructionReferenceElementIds: nextElementIds,
-      });
+      };
+      mergeNodeDataRef(patch);
+      onUpdate(patch);
     } else {
-      onUpdate({ klingOmniVideoReferenceImages: next, klingOmniVideoReferenceElementIds: nextElementIds });
+      const patch = {
+        klingOmniVideoReferenceImages: next,
+        klingOmniVideoReferenceElementIds: nextElementIds,
+      };
+      mergeNodeDataRef(patch);
+      onUpdate(patch);
     }
   };
 
@@ -1906,32 +2217,6 @@ function NodeInspector({
   const getInspectorPromptValue = (): string => getNodeInspectorPromptText(data);
   const inspectorPromptValue = getInspectorPromptValue();
 
-  /** 参考槽/资产库变化时规范 @（勿监听 prompt，避免输入过程中被改写） */
-  useLayoutEffect(() => {
-    const patch = buildCanonicalInspectorPromptPatch(data, projectAssetLabelRows);
-    if (!patch) return;
-    onUpdate(patch);
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- 仅参考槽与资产库变化时规范 @
-  }, [
-    nodeId,
-    data.selectedModel,
-    data.seedanceGenerationMode,
-    data.referenceImages,
-    data.referenceImageLabels,
-    data.imagePreview,
-    data.imageName,
-    data.firstFrameImage,
-    data.firstFrameImageUrl,
-    data.lastFrameImage,
-    data.lastFrameImageUrl,
-    data.firstFrameImageLabel,
-    data.lastFrameImageLabel,
-    data.klingOmniTab,
-    data.klingOmniMultiReferenceImages,
-    data.klingOmniInstructionReferenceImages,
-    data.klingOmniVideoReferenceImages,
-    projectAssetLabelRows,
-  ]);
   const promptRefHighlights = useMemo(
     () => extractPromptRefHighlights(inspectorPromptValue),
     [inspectorPromptValue]
@@ -1951,12 +2236,61 @@ function NodeInspector({
       const tabs = { ...(data.seedanceTabConfigs || {}) } as any;
       const cur = { ...(tabs[seedanceMode] || {}) };
       cur.prompt = prompt;
+      if (seedanceMode === 'reference') {
+        cur.referenceImages = data.referenceImages ? [...data.referenceImages] : cur.referenceImages || [];
+        cur.referenceImageLabels = data.referenceImageLabels
+          ? [...data.referenceImageLabels]
+          : cur.referenceImageLabels || [];
+        cur.referenceMovs = data.referenceMovs ? [...data.referenceMovs] : cur.referenceMovs || [];
+        cur.referenceAudios = data.referenceAudios ? [...data.referenceAudios] : cur.referenceAudios || [];
+      }
       tabs[seedanceMode] = cur;
       onUpdate({ prompt, seedanceTabConfigs: tabs });
       return;
     }
     onUpdate({ prompt });
   };
+
+  const copyPlainPromptDescription = useCallback(async () => {
+    const plain = stripPromptMediaTokensForPlainCopy(inspectorPromptValue, projectAssetLabelRows);
+    if (!plain.trim()) {
+      alert('暂无描述内容');
+      setPromptPlainCopyMenu(null);
+      return;
+    }
+    try {
+      const clipboard = typeof navigator !== 'undefined' ? navigator.clipboard : undefined;
+      if (clipboard?.writeText) {
+        await clipboard.writeText(plain);
+      } else {
+        const ta = document.createElement('textarea');
+        ta.value = plain;
+        ta.setAttribute('readonly', 'true');
+        ta.style.position = 'fixed';
+        ta.style.left = '-9999px';
+        document.body.appendChild(ta);
+        ta.select();
+        const ok = document.execCommand('copy');
+        document.body.removeChild(ta);
+        if (!ok) throw new Error('copy failed');
+      }
+    } catch {
+      alert('复制失败，请手动选中描述文本后复制');
+    } finally {
+      setPromptPlainCopyMenu(null);
+    }
+  }, [inspectorPromptValue, projectAssetLabelRows]);
+
+  useEffect(() => {
+    if (!promptPlainCopyMenu) return;
+    const onDown = (e: MouseEvent) => {
+      const t = e.target as HTMLElement;
+      if (t.closest('[data-prompt-plain-copy-menu]')) return;
+      setPromptPlainCopyMenu(null);
+    };
+    window.addEventListener('mousedown', onDown);
+    return () => window.removeEventListener('mousedown', onDown);
+  }, [promptPlainCopyMenu]);
 
   const setNegativePromptByContext = (negativePrompt: string) => {
     if (isKelingOmni) {
@@ -1979,30 +2313,37 @@ function NodeInspector({
     onUpdate({ negativePrompt });
   };
 
-  const syncMentionFromPrompt = (text: string, cursor: number) => {
+  const syncMentionFromPrompt = (
+    text: string,
+    cursor: number,
+    opts?: { force?: boolean }
+  ) => {
     if (promptMentionItems.length === 0) {
       setMentionOpen(false);
       setMentionCtx(null);
       lastMentionSyncRef.current = null;
       return;
     }
-    const m = getActiveAtMention(text, cursor);
+    const m = getActiveAtMention(text, cursor, projectAssetLabelRows);
     if (!m) {
       setMentionOpen(false);
       setMentionCtx(null);
       lastMentionSyncRef.current = null;
       return;
     }
-    // 只在“刚输入 @”或下拉已开启的连续输入中展示建议，避免点击已有 @图片1/@视频1 时自动弹窗
     const justTypedAt = cursor > 0 && text[cursor - 1] === '@';
-    if (!mentionOpen && !justTypedAt) {
+    const continuingMention = mentionOpenRef.current;
+    if (!opts?.force && !continuingMention && !justTypedAt) {
       setMentionOpen(false);
       setMentionCtx(null);
       lastMentionSyncRef.current = null;
       return;
     }
     const next = { atIndex: m.atIndex, query: m.query };
-    const filtered = filterMediaRefs(promptMentionItems, m.query);
+    let filtered = filterMediaRefs(promptMentionItems, m.query);
+    if (filtered.length === 0 && (justTypedAt || opts?.force) && !m.query.trim()) {
+      filtered = promptMentionItems;
+    }
     if (filtered.length === 0) {
       setMentionOpen(false);
       setMentionCtx(null);
@@ -2017,11 +2358,17 @@ function NodeInspector({
     if (ctxChanged) setMentionHighlight(0);
   };
 
+  const syncMentionFromPromptTextarea = (ta: HTMLTextAreaElement, opts?: { force?: boolean }) => {
+    const text = ta.value;
+    const cursor = ta.selectionStart ?? text.length;
+    syncMentionFromPrompt(text, cursor, opts);
+  };
+
   const applyPromptMentionPick = (item: PromptMediaRefItem) => {
     const ta = promptTextareaRef.current;
     const text = getInspectorPromptValue();
     const cursor = ta ? ta.selectionStart ?? text.length : text.length;
-    const mLive = getActiveAtMention(text, cursor);
+    const mLive = getActiveAtMention(text, cursor, projectAssetLabelRows);
     const atIndex = mentionCtx?.atIndex ?? mLive?.atIndex;
     if (atIndex == null) return;
     const before = text.slice(0, atIndex);
@@ -2039,6 +2386,20 @@ function NodeInspector({
   const handlePromptChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
     const el = e.target;
     const v = el.value;
+    if (pendingPastePromptRef.current !== null) {
+      if (v === pendingPastePromptRef.current) {
+        pendingPastePromptRef.current = null;
+        skipNextPromptChangeRef.current = false;
+        return;
+      }
+      // 扫描/删除等后续编辑：解除粘贴守卫，勿再拦截 onChange
+      pendingPastePromptRef.current = null;
+      skipNextPromptChangeRef.current = false;
+    }
+    if (skipNextPromptChangeRef.current) {
+      skipNextPromptChangeRef.current = false;
+      return;
+    }
     const cursor = el.selectionStart ?? v.length;
     const selEnd = el.selectionEnd ?? cursor;
     pendingPromptSelectionRef.current = { start: cursor, end: selEnd };
@@ -2050,32 +2411,36 @@ function NodeInspector({
   const runScanProjectAssetsOnPrompt = useCallback(() => {
     const ta = promptTextareaRef.current;
     const text = ta?.value ?? getInspectorPromptValue();
-    const next = scanPromptAppendMediaTokensForNode(
+    const patch = buildScanPromptAndPanelPatch(
       data,
       projectAssetRefItems,
       text,
       projectAssetLabelRows
     );
-    if (next !== text) setPromptByContext(next);
-  }, [data, projectAssetRefItems, projectAssetLabelRows, getInspectorPromptValue]);
+    if (!patch) return;
+    pendingPastePromptRef.current = null;
+    skipNextPromptChangeRef.current = false;
+    const nextText = getNodeInspectorPromptText({ ...data, ...patch });
+    if (nextText !== text) setPromptByContext(nextText);
+    onUpdate(patch);
+  }, [data, projectAssetRefItems, projectAssetLabelRows, getInspectorPromptValue, onUpdate]);
 
-  /** 粘贴为纯文本（如从 AI 对话 Ctrl+C 复制），不触发自动 @ 扫描 */
+  /** 粘贴为纯文本（如从 AI 对话 Ctrl+C 复制），不触发自动 @ 扫描或规范改写 */
   const handlePromptPaste = (e: React.ClipboardEvent<HTMLTextAreaElement>) => {
+    e.preventDefault();
     const plain = e.clipboardData.getData('text/plain');
     if (typeof plain !== 'string' || plain.length === 0) return;
-    e.preventDefault();
     const ta = e.currentTarget;
     const start = ta.selectionStart ?? 0;
     const end = ta.selectionEnd ?? 0;
-    const text = getInspectorPromptValue();
+    const text = ta.value;
     const newText = text.slice(0, start) + plain + text.slice(end);
+    pendingPastePromptRef.current = newText;
+    skipNextPromptChangeRef.current = true;
     setPromptByContext(newText);
     const pos = start + plain.length;
     pendingPromptSelectionRef.current = { start: pos, end: pos };
-    requestAnimationFrame(() => {
-      ta.focus();
-      syncMentionFromPrompt(newText, pos);
-    });
+    requestAnimationFrame(() => ta.focus());
   };
   const syncPromptHighlightScroll = useCallback((el: HTMLTextAreaElement) => {
     const hl = promptHighlightRef.current;
@@ -2119,7 +2484,10 @@ function NodeInspector({
     const ta = e.currentTarget;
     const text = ta.value;
     const cursor = ta.selectionStart ?? 0;
-    const m = getActiveAtMention(text, cursor);
+    const m = getActiveAtMention(text, cursor, projectAssetLabelRows);
+    if (e.key === '@' || (e.key === '2' && e.shiftKey)) {
+      requestAnimationFrame(() => syncMentionFromPromptTextarea(ta, { force: true }));
+    }
     if (e.key === 'Escape') {
       setMentionOpen(false);
       setMentionCtx(null);
@@ -2148,31 +2516,9 @@ function NodeInspector({
   };
 
   const switchSeedance20Tab = (target: 'text' | 'image' | 'reference') => {
-    const tabs = { ...(data.seedanceTabConfigs || {}) } as any;
-    const current = seedanceMode;
-    const currentSnapshot: any = {
-      prompt: getInspectorPromptValue(),
-      negativePrompt: data.negativePrompt || '',
-    };
-    if (current === 'image') {
-      currentSnapshot.firstFrameImage = data.firstFrameImage;
-      currentSnapshot.lastFrameImage = data.lastFrameImage;
-      currentSnapshot.firstFrameImageUrl = data.firstFrameImageUrl;
-      currentSnapshot.lastFrameImageUrl = data.lastFrameImageUrl;
-      currentSnapshot.firstFrameLocalRef = data.firstFrameLocalRef;
-      currentSnapshot.lastFrameLocalRef = data.lastFrameLocalRef;
-    }
-    if (current === 'reference') {
-      currentSnapshot.referenceImages = data.referenceImages ? [...data.referenceImages] : [];
-      currentSnapshot.referenceImageLabels = data.referenceImageLabels
-        ? [...data.referenceImageLabels]
-        : [];
-      currentSnapshot.referenceMovs = data.referenceMovs ? [...data.referenceMovs] : [];
-      currentSnapshot.referenceAudios = data.referenceAudios ? [...data.referenceAudios] : [];
-    }
-    tabs[current] = currentSnapshot;
-
-    const next = tabs[target] || {};
+    const tabs = snapshotSeedanceTabConfigsWithLivePanel(data, getInspectorPromptValue());
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const next = (tabs[target] || {}) as any;
     const patch: any = {
       seedanceGenerationMode: target,
       seedanceTabConfigs: tabs,
@@ -2189,6 +2535,7 @@ function NodeInspector({
       patch.referenceImages = [];
       patch.referenceMovs = [];
       patch.referenceAudios = [];
+      patch.referenceElementIds = [];
       if (shouldMigrateSeedance20AspectToDefault(data.seedanceAspectRatio)) {
         patch.seedanceAspectRatio = getSeedanceDefaultAspectRatio(data.selectedModel);
       }
@@ -2208,6 +2555,7 @@ function NodeInspector({
       patch.referenceImages = refPatch?.referenceImages ?? (next.referenceImages || []);
       patch.referenceImageLabels =
         refPatch?.referenceImageLabels ?? (next.referenceImageLabels || []);
+      patch.referenceElementIds = next.referenceElementIds || [];
       patch.referenceMovs = next.referenceMovs || [];
       patch.referenceAudios = next.referenceAudios || [];
       if (refPatch) {
@@ -2234,11 +2582,50 @@ function NodeInspector({
       patch.referenceImages = [];
       patch.referenceMovs = [];
       patch.referenceAudios = [];
+      patch.referenceElementIds = [];
       if (shouldMigrateSeedance20AspectToDefault(data.seedanceAspectRatio)) {
         patch.seedanceAspectRatio = getSeedanceDefaultAspectRatio(data.selectedModel);
       }
     }
     onUpdate(patch);
+  };
+
+  const switchKlingOmniTab = (target: KlingOmniPanelTab) => {
+    const fromTab = (klingOmniTab || data.klingOmniTab || 'multi') as KlingOmniPanelTab;
+    const tabPatch = buildKlingOmniTabSwitchPatch(data, fromTab, target);
+    const mainPrev = String(tabPatch.imagePreview || '').trim();
+    if (
+      mainPrev &&
+      !isLikelyMainVideoUrl(mainPrev) &&
+      (target === 'instruction' || target === 'video')
+    ) {
+      const stripDup = (list?: string[]) => {
+        if (!list?.length) return undefined;
+        const next = list.filter(
+          (u) =>
+            !isPanelRefDuplicateOfMainImageSlot(
+              u,
+              { ...data, ...tabPatch, klingOmniTab: target },
+              projectAssetLabelRows
+            )
+        );
+        return next.length === list.length ? undefined : next;
+      };
+      const inst = stripDup(data.klingOmniInstructionReferenceImages);
+      const vid = stripDup(data.klingOmniVideoReferenceImages);
+      if (inst) tabPatch.klingOmniInstructionReferenceImages = inst;
+      if (vid) tabPatch.klingOmniVideoReferenceImages = vid;
+    }
+    setKlingOmniTab(target);
+    onUpdate(tabPatch);
+    const tabText = getKlingOmniTabText(target);
+    requestAnimationFrame(() => {
+      const el = promptTextareaRef.current;
+      if (!el) return;
+      const len = tabText.prompt.length;
+      el.focus();
+      el.setSelectionRange(len, len);
+    });
   };
 
   // 切换节点或 data.klingOmniTab 变化时与节点数据对齐，避免素材引用 @ 列表仍用上一节点的 tab
@@ -2262,50 +2649,35 @@ function NodeInspector({
    * 仅在目标槽位为空时补齐，不覆盖用户手动设置。
    */
   useEffect(() => {
+    if (isCurrentNodeRunning) return;
     const main = (data.imagePreview || '').trim();
-    if (!main) return;
-    const mainIsVideo = isLikelyMainVideoUrl(main);
     const patch: Partial<NodeData> = {};
 
+    const mainIsVideo = isLikelyMainVideoUrl(main);
     const hasRefImage = (list?: string[]) => Boolean(list && list.length > 0);
     const hasRefMov = Boolean((data.referenceMovs || []).length > 0);
-    const hasFirstFrame = Boolean(
-      data.firstFrameImage || data.firstFrameImageUrl || data.firstFrameLocalRef
-    );
 
-    // 首帧类模型：主图默认进首帧
-    if (
-      !mainIsVideo &&
-      !hasFirstFrame &&
-      (
-        data.selectedModel === '可灵 2.5 Turbo' ||
-        data.selectedModel === 'vidu 2.0' ||
-        data.selectedModel === 'seedance1.5-pro' ||
-        (isSeedance20 && seedanceMode === 'image') ||
-        isJimeng ||
-        (isKelingOmni && klingOmniTab === 'frames')
-      )
-    ) {
-      const frameMain =
-        isFlowgenAssetThumbUrl(main) ? flowgenAssetFileUrlFromMediaUrl(main) : main;
-      // 主图 blob 与首帧勿共用同一 object URL（运行/刷新时 revoke 主图会连带首帧裂图）
-      if (isSeedance20 && seedanceMode === 'image' && data.imageLocalRef) {
-        patch.firstFrameLocalRef = data.imageLocalRef;
-      } else {
-        patch.firstFrameImage = frameMain;
-      patch.firstFrameImageUrl = undefined;
-    }
-      const frameLabel =
-        projectAssetDisplayNameFromUrl(frameMain, projectAssetLabelRows) ||
-        projectAssetDisplayNameFromUrl(main, projectAssetLabelRows) ||
-        '';
-      if (frameLabel) patch.firstFrameImageLabel = frameLabel;
-    }
+    const skipFirstFrameDefaultFill =
+      nodeType === NodeType.MOV ||
+      (nodeType === NodeType.OUTPUT && mainIsVideo) ||
+      (nodeType === NodeType.OUTPUT &&
+        needsFirstFramePanelModel(data, { seedanceMode, klingOmniTab }));
+    const firstFramePatch = skipFirstFrameDefaultFill
+      ? null
+      : buildFirstFrameDefaultFillPatch(data, {
+          seedanceMode,
+          klingOmniTab,
+          projectAssets: projectAssetLabelRows,
+        });
+    if (firstFramePatch) Object.assign(patch, firstFramePatch);
 
     // Seedance2.0 参考生视频：主图仅走 imagePreview + @主图；referenceImages 仅 @图片1/@图片2…
     if (isSeedance20 && seedanceMode === 'reference' && mainIsVideo && !hasRefMov) {
         patch.referenceMovs = [{ url: main }];
     }
+
+    // OUTPUT/MOV：继承的参考/首尾帧已在 spawn 与加载时清空；运行时不再每帧 sanitize，
+    // 否则用户手动拖入的参考图/尾帧会被立即清掉（与 §16.12 参考图修复一致）。
 
     // Omni：按当前 tab 装载默认素材
     if (isKelingOmni) {
@@ -2346,7 +2718,9 @@ function NodeInspector({
       const mainPrev = main;
       const stripDup = (list?: string[]) => {
         if (!list?.length) return undefined;
-        const next = list.filter((u) => !isDuplicateOfMainImagePreview(u, mainPrev));
+        const next = list.filter(
+          (u) => !isPanelRefDuplicateOfMainImageSlot(u, data, projectAssetLabelRows)
+        );
         return next.length === list.length ? undefined : next;
       };
       if (klingOmniTab === 'instruction') {
@@ -2378,9 +2752,20 @@ function NodeInspector({
           /* ignore */
         }
       }
+      if (isSeedance20 && seedanceMode === 'image' && firstFramePatch) {
+        Object.assign(
+          patch,
+          withSeedanceImageTabFramePatch(data, {
+            firstFrameImage: firstFramePatch.firstFrameImage,
+            firstFrameImageUrl: firstFramePatch.firstFrameImageUrl,
+            firstFrameLocalRef: firstFramePatch.firstFrameLocalRef,
+          })
+        );
+      }
       onUpdate(patch);
     }
   }, [
+    nodeId,
     data.selectedModel,
     data.imagePreview,
     data.imageLocalRef,
@@ -2407,6 +2792,7 @@ function NodeInspector({
     seedanceMode,
     klingOmniTab,
     omniInspectorShowMainImageSlot,
+    isCurrentNodeRunning,
     onUpdate,
   ]);
 
@@ -2457,6 +2843,18 @@ function NodeInspector({
           aspectRatio: data.aspectRatio,
           numberOfImages: data.numberOfImages,
           referenceImages: data.referenceImages ? [...data.referenceImages] : undefined,
+          referenceImageLabels: data.referenceImageLabels?.length
+            ? [...data.referenceImageLabels]
+            : undefined,
+          referenceImageLocalRefs: data.referenceImageLocalRefs?.some(Boolean)
+            ? [...data.referenceImageLocalRefs]
+            : undefined,
+          imagePreview: data.imagePreview,
+          imageName: data.imageName,
+          imageLocalRef: data.imageLocalRef,
+          panelMainImageUrl:
+            data.panelMainSlotVisible === false ? data.panelMainImageUrl : undefined,
+          panelMainSlotVisible: data.panelMainSlotVisible,
         };
       } else if (isImage2Model(oldModel)) {
         const img2Compact = compactImage2PanelReferences(data);
@@ -2470,11 +2868,20 @@ function NodeInspector({
           referenceImageLabels: img2Compact.referenceImageLabels.length
             ? [...img2Compact.referenceImageLabels]
             : undefined,
+          referenceImageLocalRefs: data.referenceImageLocalRefs?.some(Boolean)
+            ? [...data.referenceImageLocalRefs]
+            : undefined,
           imagePreview: data.imagePreview,
           imageName: data.imageName,
+          imageLocalRef: data.imageLocalRef,
+          panelMainImageUrl:
+            data.panelMainSlotVisible === false ? data.panelMainImageUrl : undefined,
+          panelMainSlotVisible: data.panelMainSlotVisible,
           image2Style: data.image2Style,
           image2AspectRatio: data.image2AspectRatio,
           image2ImageSize: data.image2ImageSize,
+          image2Quality: data.image2Quality,
+          image2QualityLevel: data.image2QualityLevel,
         };
       } else if (oldModel === '可灵 2.5 Turbo') {
         // 保存可灵的配置
@@ -2485,6 +2892,10 @@ function NodeInspector({
           lastFrameImage: data.lastFrameImage,
           firstFrameImageUrl: data.firstFrameImageUrl,
           lastFrameImageUrl: data.lastFrameImageUrl,
+          firstFrameLocalRef: data.firstFrameLocalRef,
+          lastFrameLocalRef: data.lastFrameLocalRef,
+          firstFrameImageLabel: data.firstFrameImageLabel,
+          lastFrameImageLabel: data.lastFrameImageLabel,
           quality: data.quality,
           duration: data.duration,
           creativityLevel: data.creativityLevel,
@@ -2492,6 +2903,7 @@ function NodeInspector({
           aspectRatio: data.aspectRatio,
         };
       } else if (oldModel === '可灵3.0 Omni') {
+        const omniTab = (data.klingOmniTab || 'multi') as KlingOmniPanelTab;
         currentModelConfigs['可灵3.0 Omni'] = {
           prompt: data.prompt,
           negativePrompt: data.negativePrompt,
@@ -2499,6 +2911,10 @@ function NodeInspector({
           lastFrameImage: data.lastFrameImage,
           firstFrameImageUrl: data.firstFrameImageUrl,
           lastFrameImageUrl: data.lastFrameImageUrl,
+          firstFrameLocalRef: data.firstFrameLocalRef,
+          lastFrameLocalRef: data.lastFrameLocalRef,
+          firstFrameImageLabel: data.firstFrameImageLabel,
+          lastFrameImageLabel: data.lastFrameImageLabel,
           quality: data.quality,
           duration: data.duration,
           numberOfImages: data.numberOfImages,
@@ -2526,10 +2942,25 @@ function NodeInspector({
           klingOmniFramesPrompt: data.klingOmniFramesPrompt,
           klingOmniFramesNegativePrompt: data.klingOmniFramesNegativePrompt,
           klingOmniTab: data.klingOmniTab,
+          klingOmniTabConfigs: snapshotKlingOmniTabConfigsWithLivePanel(data, omniTab),
           klingOmniVideoPreviewUrl: data.klingOmniVideoPreviewUrl,
           klingOmniVideoUrl: data.klingOmniVideoUrl,
           klingOmniInstructionVideoPreviewUrl: data.klingOmniInstructionVideoPreviewUrl,
           klingOmniInstructionVideoUrl: data.klingOmniInstructionVideoUrl,
+          referenceImageLocalRefs: data.referenceImageLocalRefs?.some(Boolean)
+            ? [...data.referenceImageLocalRefs]
+            : undefined,
+          klingOmniMultiReferenceLocalRefs: data.klingOmniMultiReferenceLocalRefs?.some(Boolean)
+            ? [...data.klingOmniMultiReferenceLocalRefs]
+            : undefined,
+          klingOmniInstructionReferenceLocalRefs: data.klingOmniInstructionReferenceLocalRefs?.some(
+            Boolean
+          )
+            ? [...data.klingOmniInstructionReferenceLocalRefs]
+            : undefined,
+          klingOmniVideoReferenceLocalRefs: data.klingOmniVideoReferenceLocalRefs?.some(Boolean)
+            ? [...data.klingOmniVideoReferenceLocalRefs]
+            : undefined,
         };
       } else if (oldModel === '即梦3.0 Pro') {
         currentModelConfigs['即梦3.0 Pro'] = {
@@ -2543,6 +2974,8 @@ function NodeInspector({
           numberOfImages: data.numberOfImages,
           firstFrameImage: data.firstFrameImage,
           firstFrameImageUrl: data.firstFrameImageUrl,
+          firstFrameLocalRef: data.firstFrameLocalRef,
+          firstFrameImageLabel: data.firstFrameImageLabel,
           jimengImages: data.jimengImages ? [...data.jimengImages] : undefined,
         };
       } else if (oldModel === 'vidu 2.0') {
@@ -2553,13 +2986,23 @@ function NodeInspector({
           lastFrameImage: data.lastFrameImage,
           firstFrameImageUrl: data.firstFrameImageUrl,
           lastFrameImageUrl: data.lastFrameImageUrl,
+          firstFrameLocalRef: data.firstFrameLocalRef,
+          lastFrameLocalRef: data.lastFrameLocalRef,
+          firstFrameImageLabel: data.firstFrameImageLabel,
+          lastFrameImageLabel: data.lastFrameImageLabel,
           viduDuration: data.viduDuration,
           viduClarity: data.viduClarity,
           viduMotionRange: data.viduMotionRange,
           aspectRatio: data.aspectRatio,
           numberOfImages: data.numberOfImages,
         };
-      } else if (['seedance1.5-pro', 'seedance2.0 (高质量版)', 'seedance2.0 (急速版)'].includes(oldModel || '')) {
+      } else if (isSeedance20VariantModel(oldModel || '')) {
+        (currentModelConfigs as any)[oldModel as string] = buildSeedanceModelConfigSnapshot(
+          data,
+          oldModel as 'seedance2.0 (高质量版)' | 'seedance2.0 (急速版)',
+          getInspectorPromptValue()
+        );
+      } else if (oldModel === 'seedance1.5-pro') {
         (currentModelConfigs as any)[oldModel as string] = {
           prompt: data.prompt,
           negativePrompt: data.negativePrompt,
@@ -2567,12 +3010,12 @@ function NodeInspector({
           lastFrameImage: data.lastFrameImage,
           firstFrameImageUrl: data.firstFrameImageUrl,
           lastFrameImageUrl: data.lastFrameImageUrl,
+          firstFrameLocalRef: data.firstFrameLocalRef,
+          lastFrameLocalRef: data.lastFrameLocalRef,
+          firstFrameImageLabel: data.firstFrameImageLabel,
+          lastFrameImageLabel: data.lastFrameImageLabel,
           numberOfImages: data.numberOfImages,
-          seedanceResolution:
-            (oldModel === 'seedance2.0 (急速版)' || oldModel === 'seedance1.5-pro') &&
-            data.seedanceResolution === '1080p'
-              ? '720p'
-              : data.seedanceResolution,
+          seedanceResolution: data.seedanceResolution,
           seedanceAspectRatio: data.seedanceAspectRatio,
           seedanceDuration: data.seedanceDuration,
           seedanceGenerateAudio: data.seedanceGenerateAudio,
@@ -2582,6 +3025,9 @@ function NodeInspector({
           seedanceReferenceWebSearch: data.seedanceReferenceWebSearch,
           seedanceTabConfigs: data.seedanceTabConfigs,
           referenceImages: data.referenceImages ? [...data.referenceImages] : undefined,
+          referenceImageLabels: data.referenceImageLabels?.length
+            ? [...data.referenceImageLabels]
+            : undefined,
           referenceMovs: data.referenceMovs ? [...data.referenceMovs] : undefined,
           referenceAudios: data.referenceAudios ? [...data.referenceAudios] : undefined,
         };
@@ -2596,6 +3042,8 @@ function NodeInspector({
         updateData.image2Style = undefined;
         updateData.image2AspectRatio = undefined;
         updateData.image2ImageSize = undefined;
+        updateData.image2Quality = undefined;
+        updateData.image2QualityLevel = undefined;
       }
 
       // 根据新模型类型，设置相应的属性
@@ -2610,12 +3058,37 @@ function NodeInspector({
         updateData.negativePrompt = nanoConfig.negativePrompt || '';
         updateData.aspectRatio = nanoConfig.aspectRatio || '1:1';
         updateData.numberOfImages = nanoConfig.numberOfImages || '1张';
-        updateData.referenceImages = nanoConfig.referenceImages || [];
+        const bananaAligned = alignPanelReferenceSlotsFromLocalRefs(
+          nanoConfig.referenceImages,
+          nanoConfig.referenceImageLocalRefs
+        );
+        // 剥离 data: URL（压缩后过大/可能失效），保留 blob:（当前会话有效）和 https/flowgen-api
+        // 空槽由 NodeInspector hydrate effect 从 IndexedDB 恢复
+        updateData.referenceImages = bananaAligned.images.map((u) => {
+          const s = String(u || '').trim();
+          if (!s) return '';
+          if (s.startsWith('data:')) return '';
+          return s;
+        });
+        updateData.referenceImageLocalRefs = bananaAligned.localRefs;
+        updateData.referenceImageLabels =
+          nanoConfig.referenceImageLabels != null ? [...nanoConfig.referenceImageLabels] : undefined;
+        // 主图预览同样剥离 data: URL，保留 blob:（当前会话有效）
+        const nanoMainPatch = nanoBananaMainPatchOnModelSwitch(nanoConfig, data);
+        const nanoMainUrl = String(nanoMainPatch.imagePreview || '').trim();
+        if (nanoMainUrl && nanoMainUrl.startsWith('data:')) {
+          nanoMainPatch.imagePreview = undefined;
+        }
+        Object.assign(updateData, nanoMainPatch);
+        const staleMain = buildStalePanelMainBackupClearPatch({ ...data, ...updateData });
+        if (staleMain) Object.assign(updateData, staleMain);
         // 清空可灵特有的属性
         updateData.firstFrameImage = undefined;
         updateData.lastFrameImage = undefined;
         updateData.firstFrameImageUrl = undefined;
         updateData.lastFrameImageUrl = undefined;
+        updateData.firstFrameLocalRef = undefined;
+        updateData.lastFrameLocalRef = undefined;
         updateData.quality = undefined;
         updateData.duration = undefined;
         updateData.creativityLevel = undefined;
@@ -2624,13 +3097,33 @@ function NodeInspector({
         updateData.prompt = img2.prompt ?? '';
         updateData.negativePrompt = img2.negativePrompt ?? '';
         updateData.numberOfImages = img2.numberOfImages || '1张';
-        updateData.referenceImages = img2.referenceImages != null ? [...img2.referenceImages] : [];
+        const img2Aligned = alignPanelReferenceSlotsFromLocalRefs(
+          img2.referenceImages,
+          img2.referenceImageLocalRefs
+        );
+        updateData.referenceImages = img2Aligned.images.map((u) => {
+          const s = String(u || '').trim();
+          if (!s) return '';
+          if (s.startsWith('data:')) return '';
+          return s;
+        });
+        updateData.referenceImageLocalRefs = img2Aligned.localRefs;
         updateData.referenceImageLabels =
           img2.referenceImageLabels != null ? [...img2.referenceImageLabels] : undefined;
-        Object.assign(updateData, image2MainPatchOnModelSwitch(currentModelConfigs.image2, data));
-        const ar = img2.image2AspectRatio || '1:1';
+        const img2MainPatch = image2MainPatchOnModelSwitch(currentModelConfigs.image2, data);
+        const img2MainUrl = String(img2MainPatch.imagePreview || '').trim();
+        if (img2MainUrl && img2MainUrl.startsWith('data:')) {
+          img2MainPatch.imagePreview = undefined;
+        }
+        Object.assign(updateData, img2MainPatch);
+        const staleMain = buildStalePanelMainBackupClearPatch({ ...data, ...updateData });
+        if (staleMain) Object.assign(updateData, staleMain);
+        const ar = image2NormalizeAspectRatio(img2.image2AspectRatio);
+        const q = image2ResolveQuality(img2.image2Quality, img2.image2ImageSize);
         updateData.image2AspectRatio = ar;
-        updateData.image2ImageSize = image2CoerceSizeForAspect(ar, img2.image2ImageSize);
+        updateData.image2Quality = q;
+        updateData.image2ImageSize = image2CoerceSizeForAspect(ar, img2.image2ImageSize, q);
+        updateData.image2QualityLevel = image2NormalizeQualityLevel(img2.image2QualityLevel);
         updateData.image2Style = img2.image2Style === 'natural' ? 'natural' : 'vivid';
         updateData.firstFrameImage = undefined;
         updateData.lastFrameImage = undefined;
@@ -2641,7 +3134,8 @@ function NodeInspector({
         updateData.creativityLevel = undefined;
         const img2Compact = compactImage2PanelReferences({
           imagePreview: updateData.imagePreview,
-          panelMainSlotVisible: data.panelMainSlotVisible,
+          panelMainImageUrl: updateData.panelMainImageUrl,
+          panelMainSlotVisible: updateData.panelMainSlotVisible,
           referenceImages: updateData.referenceImages || [],
           referenceImageLabels: updateData.referenceImageLabels,
         });
@@ -2657,6 +3151,10 @@ function NodeInspector({
         updateData.lastFrameImage = kelingConfig.lastFrameImage;
         updateData.firstFrameImageUrl = kelingConfig.firstFrameImageUrl;
         updateData.lastFrameImageUrl = kelingConfig.lastFrameImageUrl;
+        updateData.firstFrameLocalRef = kelingConfig.firstFrameLocalRef;
+        updateData.lastFrameLocalRef = kelingConfig.lastFrameLocalRef;
+        updateData.firstFrameImageLabel = kelingConfig.firstFrameImageLabel;
+        updateData.lastFrameImageLabel = kelingConfig.lastFrameImageLabel;
         updateData.quality = kelingConfig.quality || '高质量';
         updateData.duration = kelingConfig.duration || '5s';
         updateData.creativityLevel = kelingConfig.creativityLevel ?? 50;
@@ -2691,6 +3189,10 @@ function NodeInspector({
         updateData.lastFrameImage = omniConfig.lastFrameImage;
         updateData.firstFrameImageUrl = omniConfig.firstFrameImageUrl;
         updateData.lastFrameImageUrl = omniConfig.lastFrameImageUrl;
+        updateData.firstFrameLocalRef = omniConfig.firstFrameLocalRef;
+        updateData.lastFrameLocalRef = omniConfig.lastFrameLocalRef;
+        updateData.firstFrameImageLabel = omniConfig.firstFrameImageLabel;
+        updateData.lastFrameImageLabel = omniConfig.lastFrameImageLabel;
         updateData.quality = omniConfig.quality || '高质量';
         updateData.duration = omniConfig.duration || '5s';
         updateData.numberOfImages = omniConfig.numberOfImages || '1条';
@@ -2717,6 +3219,23 @@ function NodeInspector({
         updateData.klingOmniInstructionReferenceElementIds = omniConfig.klingOmniInstructionReferenceElementIds;
         updateData.klingOmniVideoReferenceElementIds = omniConfig.klingOmniVideoReferenceElementIds;
         Object.assign(updateData, clearInheritedPanelRefsOnFrameModelSwitch());
+        updateData.referenceImageLocalRefs =
+          omniConfig.referenceImageLocalRefs != null
+            ? [...omniConfig.referenceImageLocalRefs]
+            : [];
+        updateData.klingOmniMultiReferenceLocalRefs =
+          omniConfig.klingOmniMultiReferenceLocalRefs != null
+            ? [...omniConfig.klingOmniMultiReferenceLocalRefs]
+            : [];
+        updateData.klingOmniInstructionReferenceLocalRefs =
+          omniConfig.klingOmniInstructionReferenceLocalRefs != null
+            ? [...omniConfig.klingOmniInstructionReferenceLocalRefs]
+            : [];
+        updateData.klingOmniVideoReferenceLocalRefs =
+          omniConfig.klingOmniVideoReferenceLocalRefs != null
+            ? [...omniConfig.klingOmniVideoReferenceLocalRefs]
+            : [];
+        applyKlingOmniActiveTabLivePanel(updateData, omniConfig, data);
       } else if (model === '即梦3.0 Pro') {
         const jimengConfig = currentModelConfigs['即梦3.0 Pro'] || {};
         updateData.prompt = jimengConfig.prompt || '';
@@ -2729,6 +3248,8 @@ function NodeInspector({
         updateData.numberOfImages = jimengConfig.numberOfImages || '1条';
         updateData.firstFrameImage = jimengConfig.firstFrameImage;
         updateData.firstFrameImageUrl = jimengConfig.firstFrameImageUrl;
+        updateData.firstFrameLocalRef = jimengConfig.firstFrameLocalRef;
+        updateData.firstFrameImageLabel = jimengConfig.firstFrameImageLabel;
          updateData.jimengImages = [];
         Object.assign(updateData, clearInheritedPanelRefsOnFrameModelSwitch());
         updateData.lastFrameImage = undefined;
@@ -2744,6 +3265,10 @@ function NodeInspector({
         updateData.lastFrameImage = viduConfig.lastFrameImage;
         updateData.firstFrameImageUrl = viduConfig.firstFrameImageUrl;
         updateData.lastFrameImageUrl = viduConfig.lastFrameImageUrl;
+        updateData.firstFrameLocalRef = viduConfig.firstFrameLocalRef;
+        updateData.lastFrameLocalRef = viduConfig.lastFrameLocalRef;
+        updateData.firstFrameImageLabel = viduConfig.firstFrameImageLabel;
+        updateData.lastFrameImageLabel = viduConfig.lastFrameImageLabel;
         updateData.viduDuration = viduConfig.viduDuration || '4s';
         updateData.viduClarity = viduConfig.viduClarity || '1080p';
         updateData.viduMotionRange = viduConfig.viduMotionRange || '自动';
@@ -2756,7 +3281,18 @@ function NodeInspector({
         updateData.jimengResolution = undefined;
         updateData.jimengVideoRatio = undefined;
       } else if (['seedance1.5-pro', 'seedance2.0 (高质量版)', 'seedance2.0 (急速版)'].includes(model)) {
-        const seedanceConfig = (currentModelConfigs as any)[model] || {};
+        const savedTarget = ((currentModelConfigs as any)[model] || {}) as Partial<SeedanceModelConfigSnapshot>;
+        const seedanceConfig = resolveSeedanceConfigForModelSwitch({
+          data,
+          fromModel: oldModel,
+          toModel: model,
+          savedTargetConfig: savedTarget,
+          promptText: getInspectorPromptValue(),
+        });
+        if (isSeedance20VariantSwitch(oldModel, model)) {
+          (currentModelConfigs as any)[model] = { ...seedanceConfig };
+          updateData.modelConfigs = currentModelConfigs;
+        }
         const defaultSeedanceGenerateAudio = false;
         updateData.prompt = seedanceConfig.prompt || '';
         updateData.negativePrompt = seedanceConfig.negativePrompt || '';
@@ -2764,6 +3300,10 @@ function NodeInspector({
         updateData.lastFrameImage = seedanceConfig.lastFrameImage;
         updateData.firstFrameImageUrl = seedanceConfig.firstFrameImageUrl;
         updateData.lastFrameImageUrl = seedanceConfig.lastFrameImageUrl;
+        updateData.firstFrameLocalRef = (savedTarget as any).firstFrameLocalRef;
+        updateData.lastFrameLocalRef = (savedTarget as any).lastFrameLocalRef;
+        updateData.firstFrameImageLabel = (savedTarget as any).firstFrameImageLabel;
+        updateData.lastFrameImageLabel = (savedTarget as any).lastFrameImageLabel;
         updateData.numberOfImages = seedanceConfig.numberOfImages || '1条';
         updateData.seedanceResolution =
           seedanceConfig.seedanceResolution || getSeedanceDefaultResolution(model);
@@ -2791,10 +3331,11 @@ function NodeInspector({
           seedanceConfig.seedanceReferenceWebSearch ??
           (seedanceConfig as { seedanceImageWebSearch?: boolean }).seedanceImageWebSearch ??
           false;
+        const hasMainImage = !!data.imagePreview;
         updateData.seedanceGenerationMode =
           model === 'seedance1.5-pro'
             ? 'image'
-            : (seedanceConfig.seedanceGenerationMode || 'text');
+            : (seedanceConfig.seedanceGenerationMode || (hasMainImage ? 'reference' : 'text'));
         updateData.seedanceTabConfigs = seedanceConfig.seedanceTabConfigs || {};
         /** 仅「参考生视频」tab 使用顶层 reference*；图/文 tab 与 switchSeedance20Tab 一致，避免脏参考图在图生视频下出现「图片1」 */
         if (updateData.seedanceGenerationMode === 'reference') {
@@ -2804,11 +3345,23 @@ function NodeInspector({
           updateData.referenceImageLabels = seedanceConfig.referenceImageLabels
             ? [...seedanceConfig.referenceImageLabels]
             : undefined;
+          updateData.referenceElementIds = seedanceConfig.referenceElementIds
+            ? [...seedanceConfig.referenceElementIds]
+            : undefined;
+          updateData.referenceImageLocalRefs =
+            seedanceConfig.referenceImageLocalRefs != null
+              ? [...seedanceConfig.referenceImageLocalRefs]
+              : [];
         } else {
           updateData.referenceImages = [];
           updateData.referenceMovs = [];
           updateData.referenceAudios = [];
           updateData.referenceImageLabels = undefined;
+          updateData.referenceElementIds = undefined;
+          updateData.referenceImageLocalRefs =
+            seedanceConfig.referenceImageLocalRefs != null
+              ? [...seedanceConfig.referenceImageLocalRefs]
+              : [];
         }
         updateData.quality = undefined;
         updateData.klingAudioSync = undefined;
@@ -2820,6 +3373,9 @@ function NodeInspector({
         updateData.aspectRatio = undefined;
       }
       
+      // 切模型恢复：有 localRef 的槽剥离可能已 revoke 的 blob，强制 IDB 重 hydrate
+      Object.assign(updateData, stripRestoredNodeMediaForLocalRefHydrate(updateData));
+
       // 更新节点数据
       onUpdate(updateData);
     } else {
@@ -2856,11 +3412,12 @@ function NodeInspector({
           seedanceFixedCamera: false,
           seedanceReferenceRatioMode: 'force',
           seedanceReferenceWebSearch: false,
-          seedanceGenerationMode: model === 'seedance1.5-pro' ? 'image' : 'text',
+          seedanceGenerationMode: model === 'seedance1.5-pro' ? 'image' : 'reference',
           seedanceTabConfigs: {},
           referenceImages: [],
           referenceMovs: [],
           referenceAudios: [],
+          referenceElementIds: [],
         });
       } else if (model === '可灵3.0 Omni') {
         setKlingOmniTab('multi');
@@ -2894,8 +3451,11 @@ function NodeInspector({
           negativePrompt: '',
           numberOfImages: '1张',
           referenceImages: [],
+          referenceElementIds: [],
           image2AspectRatio: '1:1',
           image2ImageSize: '1024x1024',
+          image2Quality: '1K',
+          image2QualityLevel: 'medium',
           image2Style: 'vivid',
         });
       } else {
@@ -2915,7 +3475,25 @@ function NodeInspector({
 
   const applyInspectorReferenceFromUrlString = async (
     internalCandidate: string,
-    opts?: { kind?: 'image' | 'video'; assetName?: string }
+    opts?: {
+      kind?: 'image' | 'video';
+      assetName?: string;
+      fromCanvasNode?: boolean;
+      canvasSourceNodeId?: string;
+    }
+  ) =>
+    enqueueInspectorReferenceDrop(() =>
+      applyInspectorReferenceFromUrlStringImpl(internalCandidate, opts)
+    );
+
+  const applyInspectorReferenceFromUrlStringImpl = async (
+    internalCandidate: string,
+    opts?: {
+      kind?: 'image' | 'video';
+      assetName?: string;
+      fromCanvasNode?: boolean;
+      canvasSourceNodeId?: string;
+    }
   ) => {
     if (!internalCandidate) return;
     const d = nodeDataRef.current;
@@ -2967,6 +3545,12 @@ function NodeInspector({
     if ((isNano || isImage2) && incomingIsVideo) {
       return;
     }
+    if (
+      !incomingIsVideo &&
+      isPanelRefDuplicateOfMainImageSlot(internalCandidate, d, projectAssetLabelRows)
+    ) {
+      return;
+    }
 
     if (isJimeng) {
       if (incomingIsVideo) return;
@@ -2992,6 +3576,7 @@ function NodeInspector({
           onUpdate({
             imagePreview: img,
             panelMainSlotVisible: undefined,
+            panelMainImageUrl: undefined,
             ...(name ? { imageName: name } : {}),
           });
         };
@@ -3007,6 +3592,29 @@ function NodeInspector({
           ? (d.klingOmniInstructionReferenceImages || [])
           : (d.klingOmniVideoReferenceImages || [])
       : (d.referenceImages || []);
+    /** 同源元素去重：原 URL 与压缩后 URL 均须检查（画布节点二次拖入 blob→data 场景） */
+    const curLabels = alignReferenceImageLabels(currentRefs, d.referenceImageLabels);
+    const refElementIds = isKelingOmni
+      ? getKlingOmniRefElementIds(klingOmniTab as 'multi' | 'instruction' | 'video')
+      : getStandardRefElementIds();
+    const incomingDedupeOpts = {
+      incomingLabel: opts?.assetName,
+      projectAssets: projectAssetLabelRows,
+      imagePreview: d.imagePreview,
+      dedupeAgainstMain: true,
+      elementIds: refElementIds,
+      canvasSourceNodeId: opts?.canvasSourceNodeId,
+    };
+    if (
+      panelReferencesAlreadyContainIncoming(
+        currentRefs,
+        curLabels,
+        internalCandidate,
+        incomingDedupeOpts
+      )
+    ) {
+      return;
+    }
     if (isKelingOmni) {
       const maxRefImages = klingOmniTab === 'multi' ? 7 : (effectiveHasOmniVideo ? 4 : 7);
       if (currentRefs.length >= maxRefImages) return;
@@ -3015,13 +3623,18 @@ function NodeInspector({
     }
 
     window.dispatchEvent(new CustomEvent('flowgen:register-original-image', { detail: { nodeId, referenceAppend: [null] } }));
-    const addOne = (img: string) => {
+    const addOne = async (img: string, sourceUrl: string) => {
       const latest = nodeDataRef.current;
-      const resolveDisplayName = () => {
-        const fromMeta = opts?.assetName?.trim();
-        if (fromMeta) return fromMeta;
-        return projectAssetDisplayNameFromUrl(img, projectAssetLabelRows) || '';
-      };
+      const resolveDisplayName = (slotIndex: number, refsAfter: string[]) =>
+        resolvePanelRefLabelForInspectorDrop({
+          url: img,
+          incomingLabel: opts?.assetName,
+          fromCanvasNode: opts?.fromCanvasNode,
+          slotIndex,
+          referenceImages: refsAfter,
+          imagePreview: latest.imagePreview,
+          projectAssets: projectAssetLabelRows,
+        });
       if (isKelingOmni) {
         const cur =
           klingOmniTab === 'multi'
@@ -3029,40 +3642,164 @@ function NodeInspector({
             : klingOmniTab === 'instruction'
               ? (latest.klingOmniInstructionReferenceImages || [])
               : (latest.klingOmniVideoReferenceImages || []);
+        const omniTab = klingOmniTab as 'multi' | 'instruction' | 'video';
+        const freshEids = getKlingOmniRefElementIds(omniTab);
+        if (
+          opts?.canvasSourceNodeId &&
+          panelReferencesAlreadyContainCanvasSource(freshEids, opts.canvasSourceNodeId)
+        ) {
+          return;
+        }
         const labels = alignReferenceImageLabels(cur, latest.referenceImageLabels);
-        const next = tryAppendReferenceImageWithLabel(cur, labels, img, resolveDisplayName());
+        const projectedIdx = firstEmptyPanelReferenceSlotIndex(cur);
+        const projectedRefs = [...cur];
+        while (projectedRefs.length <= projectedIdx) projectedRefs.push('');
+        projectedRefs[projectedIdx] = img;
+        const next = tryAppendReferenceImageWithLabel(
+          cur,
+          labels,
+          img,
+          resolveDisplayName(projectedIdx, projectedRefs),
+          projectAssetLabelRows
+        );
         if (!next.added) return;
         const maxRefImages = klingOmniTab === 'multi' ? 7 : (hasOmniVideoForTab ? 4 : 7);
-        updateKlingOmniRefImages(
-          klingOmniTab as 'multi' | 'instruction' | 'video',
-          next.referenceImages.slice(0, maxRefImages)
+        const omniField = omniReferenceLocalRefField();
+        const registered = await registerEphemeralPanelRefToLocalStore(
+          sourceUrl,
+          projectedIdx,
+          omniField
         );
-        onUpdate({
-          referenceImageLabels: next.referenceImageLabels.slice(0, 9),
+        const oldEids = getKlingOmniRefElementIds(omniTab);
+        const cappedRefs = next.referenceImages.slice(0, maxRefImages);
+        const cappedLabels = next.referenceImageLabels.slice(0, 9);
+        const nextEids = cappedRefs.map((url, i) => {
+          if (i < cur.length && url === cur[i] && oldEids[i]) return oldEids[i];
+          if (i === projectedIdx && opts?.canvasSourceNodeId?.trim()) {
+            return canvasOmniRefElementId(opts.canvasSourceNodeId);
+          }
+          return oldEids[i];
         });
+        const imagesKey =
+          omniTab === 'multi'
+            ? 'klingOmniMultiReferenceImages'
+            : omniTab === 'instruction'
+              ? 'klingOmniInstructionReferenceImages'
+              : 'klingOmniVideoReferenceImages';
+        const eidsKey =
+          omniTab === 'multi'
+            ? 'klingOmniMultiReferenceElementIds'
+            : omniTab === 'instruction'
+              ? 'klingOmniInstructionReferenceElementIds'
+              : 'klingOmniVideoReferenceElementIds';
+        const patch = withReferenceLocalRefsInPatch(
+          {
+            [imagesKey]: cappedRefs,
+            [eidsKey]: nextEids,
+            referenceImageLabels: cappedLabels,
+          } as Partial<NodeData>,
+          registered
+        );
+        mergeNodeDataRef(patch);
+        onUpdate(patch);
         return;
       }
       if (isImage2) {
         const maxRefs = image2MaxReferenceSlots(latest);
         const compacted = compactImage2PanelReferences(latest);
         if (compacted.referenceImages.length >= maxRefs) return;
+        if (
+          opts?.canvasSourceNodeId &&
+          panelReferencesAlreadyContainCanvasSource(getStandardRefElementIds(), opts.canvasSourceNodeId)
+        ) {
+          return;
+        }
         const refSlot = compacted.referenceImages.length;
-        const name = resolveDisplayName();
-        onUpdate(
-          patchImage2ReferenceAtRefSlot(latest, refSlot, img, name || undefined)
+        const projectedRefs = [...compacted.referenceImages, img];
+        const name = resolveDisplayName(refSlot, projectedRefs);
+        const registered = await registerEphemeralPanelRefToLocalStore(sourceUrl, refSlot);
+        const oldEids = getStandardRefElementIds();
+        const img2Patch = patchImage2ReferenceAtRefSlot(latest, refSlot, img, name || undefined);
+        const nextRefs = img2Patch.referenceImages || [];
+        const nextEids = buildPanelRefElementIdsAfterWrite(
+          compacted.referenceImages,
+          oldEids,
+          nextRefs,
+          refSlot,
+          opts?.canvasSourceNodeId
         );
+        const patch = withReferenceLocalRefsInPatch(
+          { ...img2Patch, referenceElementIds: nextEids.slice(0, nextRefs.length) },
+          registered
+        );
+        mergeNodeDataRef(patch);
+        onUpdate(patch);
         return;
       }
       const cur = latest.referenceImages || [];
       const labels = alignReferenceImageLabels(cur, latest.referenceImageLabels);
-      const next = tryAppendReferenceImageWithLabel(cur, labels, img, resolveDisplayName());
+      if (
+        opts?.canvasSourceNodeId &&
+        panelReferencesAlreadyContainCanvasSource(getStandardRefElementIds(), opts.canvasSourceNodeId)
+      ) {
+        return;
+      }
+      const projectedIdx = firstEmptyPanelReferenceSlotIndex(cur);
+      const projectedRefs = [...cur];
+      while (projectedRefs.length <= projectedIdx) projectedRefs.push('');
+      projectedRefs[projectedIdx] = img;
+      const next = tryAppendReferenceImageWithLabel(
+        cur,
+        labels,
+        img,
+        resolveDisplayName(projectedIdx, projectedRefs),
+        projectAssetLabelRows
+      );
       if (!next.added) return;
-      onUpdate({
-        referenceImages: next.referenceImages.slice(0, maxStandardRefImages),
-        referenceImageLabels: next.referenceImageLabels.slice(0, maxStandardRefImages),
-      });
+      const registered = await registerEphemeralPanelRefToLocalStore(sourceUrl, projectedIdx);
+      const oldEids = getStandardRefElementIds();
+      const cappedRefs = next.referenceImages.slice(0, maxStandardRefImages);
+      const cappedLabels = next.referenceImageLabels.slice(0, maxStandardRefImages);
+      const nextEids = buildPanelRefElementIdsAfterWrite(
+        cur,
+        oldEids,
+        cappedRefs,
+        projectedIdx,
+        opts?.canvasSourceNodeId
+      );
+      const patch = withReferenceLocalRefsInPatch(
+        {
+          referenceImages: cappedRefs,
+          referenceImageLabels: cappedLabels,
+          referenceElementIds: nextEids,
+        },
+        registered
+      );
+      mergeNodeDataRef(patch);
+      onUpdate(patch);
     };
-    void normalizeInspectorIngestImageUrl(internalCandidate).then(addOne);
+    const img = await normalizeInspectorIngestImageUrl(internalCandidate);
+    const latestBeforeAdd = nodeDataRef.current;
+    const liveRefs = isKelingOmni
+      ? klingOmniTab === 'multi'
+        ? (latestBeforeAdd.klingOmniMultiReferenceImages || [])
+        : klingOmniTab === 'instruction'
+          ? (latestBeforeAdd.klingOmniInstructionReferenceImages || [])
+          : (latestBeforeAdd.klingOmniVideoReferenceImages || [])
+      : (latestBeforeAdd.referenceImages || []);
+    const liveLabels = alignReferenceImageLabels(liveRefs, latestBeforeAdd.referenceImageLabels);
+    const liveRefElementIds = isKelingOmni
+      ? getKlingOmniRefElementIds(klingOmniTab as 'multi' | 'instruction' | 'video')
+      : getStandardRefElementIds();
+    if (
+      panelReferencesAlreadyContainIncoming(liveRefs, liveLabels, img, {
+        ...incomingDedupeOpts,
+        elementIds: liveRefElementIds,
+      })
+    ) {
+      return;
+    }
+    await addOne(img, internalCandidate);
   };
   applyInspectorReferenceFromUrlStringRef.current = applyInspectorReferenceFromUrlString;
 
@@ -3089,7 +3826,95 @@ function NodeInspector({
     }
   };
 
-  const ingestInspectorReferenceLocalFiles = async (files: File[]) => {
+  const omniReferenceLocalRefField = (): PanelReferenceLocalRefField => {
+    if (klingOmniTab === 'instruction') return 'klingOmniInstructionReferenceLocalRefs';
+    if (klingOmniTab === 'video') return 'klingOmniVideoReferenceLocalRefs';
+    return 'klingOmniMultiReferenceLocalRefs';
+  };
+
+  type ReferenceAppendRegistration = {
+    localRefField: PanelReferenceLocalRefField;
+    localRefs?: string[];
+  };
+
+  const withReferenceLocalRefsInPatch = (
+    patch: Partial<NodeData>,
+    registered?: ReferenceAppendRegistration
+  ): Partial<NodeData> => {
+    if (!registered?.localRefs?.length) return patch;
+    return { ...patch, [registered.localRefField]: registered.localRefs };
+  };
+
+  const dispatchReferenceAppendFiles = async (
+    files: File[],
+    startIndex: number,
+    localRefField: PanelReferenceLocalRefField = 'referenceImageLocalRefs'
+  ): Promise<ReferenceAppendRegistration> => {
+    // 生成一个唯一的 ack ID 用于确认 IndexedDB 写入完成
+    const ackId = `${nodeId}_${Date.now()}_${Math.random().toString(36).slice(2)}`;
+    
+    // 创建一个 Promise 来等待 IndexedDB 写入完成
+    const waitForRegistration = new Promise<ReferenceAppendRegistration>((resolve) => {
+      const handler = (e: Event) => {
+        const d = (e as CustomEvent<{ ackId: string; localRefField?: PanelReferenceLocalRefField; localRefs?: string[] }>).detail;
+        if (d?.ackId === ackId) {
+          window.removeEventListener('flowgen:reference-files-registered', handler);
+          resolve({
+            localRefField: d.localRefField || localRefField,
+            localRefs: d.localRefs,
+          });
+        }
+      };
+      // 5 秒超时，防止无限等待
+      setTimeout(() => {
+        window.removeEventListener('flowgen:reference-files-registered', handler);
+        resolve({ localRefField });
+      }, 5000);
+      window.addEventListener('flowgen:reference-files-registered', handler);
+    });
+
+    window.dispatchEvent(
+      new CustomEvent('flowgen:register-original-image', {
+        detail: {
+          nodeId,
+          referenceAppend: files,
+          referenceAppendStartIndex: startIndex,
+          referenceLocalRefField: localRefField,
+          referenceAppendAckId: ackId,
+        },
+      })
+    );
+
+    // 等待 IndexedDB 写入完成
+    return waitForRegistration;
+  };
+
+  /** 画布/资产库 URL 拖入参考槽：blob/data 须备份到 IndexedDB，刷新后靠 referenceImageLocalRefs 恢复 */
+  const registerEphemeralPanelRefToLocalStore = async (
+    sourceUrl: string,
+    slotIndex: number,
+    localRefField: PanelReferenceLocalRefField = 'referenceImageLocalRefs'
+  ): Promise<ReferenceAppendRegistration | undefined> => {
+    const u = String(sourceUrl || '').trim();
+    if (!u || isPersistableMediaUrl(u)) return undefined;
+    try {
+      const res = await fetch(u);
+      const blob = await res.blob();
+      const ext = blob.type?.includes('png') ? 'png' : 'jpg';
+      const file = new File([blob], `panel-ref-${slotIndex}.${ext}`, {
+        type: blob.type || 'image/jpeg',
+      });
+      return dispatchReferenceAppendFiles([file], slotIndex, localRefField);
+    } catch (e) {
+      console.warn('[flowgen] panel reference IDB backup failed', e);
+      return undefined;
+    }
+  };
+
+  const ingestInspectorReferenceLocalFiles = async (files: File[]) =>
+    enqueueInspectorReferenceDrop(() => ingestInspectorReferenceLocalFilesImpl(files));
+
+  const ingestInspectorReferenceLocalFilesImpl = async (files: File[]) => {
     const d = nodeDataRef.current;
     const isKelingOmni = d.selectedModel === '可灵3.0 Omni';
     const omniVideoEnabled = isKelingOmni && (klingOmniTab === 'instruction' || klingOmniTab === 'video');
@@ -3179,15 +4004,12 @@ function NodeInspector({
         const patch: Partial<NodeData> = {
           imagePreview: mainUrl,
           panelMainSlotVisible: undefined,
+          panelMainImageUrl: undefined,
         };
         if (rest.length > 0) {
-          window.dispatchEvent(
-            new CustomEvent('flowgen:register-original-image', {
-              detail: { nodeId, referenceAppend: rest },
-            })
-          );
+          const registered = await dispatchReferenceAppendFiles(rest, 0);
           const refUrls = await compressImagesInBatches(rest, { batchSize: 2 });
-          onUpdate({ ...patch, referenceImages: refUrls.slice(0, 2) });
+          onUpdate(withReferenceLocalRefsInPatch({ ...patch, referenceImages: refUrls.slice(0, 2) }, registered));
         } else {
           onUpdate(patch);
         }
@@ -3199,10 +4021,9 @@ function NodeInspector({
       const available = Math.max(0, maxRefs - compacted.referenceImages.length);
       if (available === 0) return;
       const toProcess = imageFiles.slice(0, available);
-      window.dispatchEvent(
-        new CustomEvent('flowgen:register-original-image', {
-          detail: { nodeId, referenceAppend: toProcess },
-        })
+      const registered = await dispatchReferenceAppendFiles(
+        toProcess,
+        compacted.referenceImages.length
       );
       const newImages = await compressImagesInBatches(toProcess, { batchSize: 2 });
       let working: NodeData = { ...latestAfterMain };
@@ -3215,10 +4036,15 @@ function NodeInspector({
         };
       }
       const finalCompact = compactImage2PanelReferences(working);
-      onUpdate({
-        referenceImages: finalCompact.referenceImages,
-        referenceImageLabels: finalCompact.referenceImageLabels,
-      });
+      onUpdate(
+        withReferenceLocalRefsInPatch(
+          {
+            referenceImages: finalCompact.referenceImages,
+            referenceImageLabels: finalCompact.referenceImageLabels,
+          },
+          registered
+        )
+      );
       return;
     }
 
@@ -3237,42 +4063,130 @@ function NodeInspector({
       if (availableSlots === 0) return;
       const toProcess = imageFiles.slice(0, availableSlots);
 
-    window.dispatchEvent(
-      new CustomEvent('flowgen:register-original-image', { detail: { nodeId, referenceAppend: toProcess } })
+    const batchLocalRefField: PanelReferenceLocalRefField = isKelingOmni
+      ? omniReferenceLocalRefField()
+      : 'referenceImageLocalRefs';
+    const batchImagesField = panelReferenceImagesFieldForLocalRefs(batchLocalRefField);
+    const batchLocalRefsArr = [...((latest[batchLocalRefField] as string[] | undefined) || [])];
+    const batchAligned = alignPanelReferenceSlotsFromLocalRefs(
+      (latest[batchImagesField] as string[] | undefined) || [],
+      batchLocalRefsArr
+    );
+    const startIndex = firstEmptyPanelReferenceSlotIndex(batchAligned.images);
+    const registered = await dispatchReferenceAppendFiles(
+      toProcess,
+      startIndex,
+      batchLocalRefField
     );
     const newImages = await compressImagesInBatches(toProcess, { batchSize: 2 });
     const fresh = nodeDataRef.current;
-    const baseRefs = isKelingOmni
-      ? klingOmniTab === 'multi'
-        ? (fresh.klingOmniMultiReferenceImages || [])
-        : klingOmniTab === 'instruction'
-          ? (fresh.klingOmniInstructionReferenceImages || [])
-          : (fresh.klingOmniVideoReferenceImages || [])
-      : (fresh.referenceImages || []);
-    let nextRefs = [...baseRefs];
-    let nextLabels = alignReferenceImageLabels(baseRefs, fresh.referenceImageLabels);
-    for (const img of newImages) {
-      if (nextRefs.length >= maxForThisModel) break;
-      const appended = tryAppendReferenceImageWithLabel(nextRefs, nextLabels, img);
-      if (!appended.added) continue;
-      nextRefs = appended.referenceImages;
-      nextLabels = appended.referenceImageLabels;
+    const localRefField: PanelReferenceLocalRefField = batchLocalRefField;
+    const imagesField = batchImagesField;
+    const localRefsArr = [...((fresh[localRefField] as string[] | undefined) || [])];
+    const aligned = alignPanelReferenceSlotsFromLocalRefs(
+      (fresh[imagesField] as string[] | undefined) || [],
+      localRefsArr
+    );
+    let nextRefs = [...aligned.images];
+    let nextLabels = alignReferenceImageLabels(nextRefs, fresh.referenceImageLabels);
+    const refElementIdsForBatch = isKelingOmni
+      ? getKlingOmniRefElementIds(klingOmniTab as 'multi' | 'instruction' | 'video')
+      : getStandardRefElementIds();
+
+    for (let fi = 0; fi < newImages.length; fi++) {
+      const img = newImages[fi];
+      const slotIdx = startIndex + fi;
+      if (slotIdx >= maxForThisModel) break;
+      while (nextRefs.length <= slotIdx) nextRefs.push('');
+
+      if (isPanelRefDuplicateOfMainImageSlot(img, fresh, projectAssetLabelRows)) continue;
+
+      const slotOccupiedByHydrate =
+        Boolean(String(localRefsArr[slotIdx] || '').trim()) &&
+        Boolean(String(nextRefs[slotIdx] || '').trim());
+
+      if (
+        !slotOccupiedByHydrate &&
+        panelReferencesAlreadyContainIncoming(nextRefs, nextLabels, img, {
+          projectAssets: projectAssetLabelRows,
+          imagePreview: fresh.imagePreview,
+          dedupeAgainstMain: true,
+          elementIds: refElementIdsForBatch,
+          targetSlotIndex: slotIdx,
+          localRefs: localRefsArr,
+        })
+      ) {
+        continue;
+      }
+
+      nextRefs[slotIdx] = img;
+      const displayName = resolvePanelRefLabelForInspectorDrop({
+        url: img,
+        slotIndex: slotIdx,
+        referenceImages: nextRefs,
+        imagePreview: fresh.imagePreview,
+        projectAssets: projectAssetLabelRows,
+      });
+      while (nextLabels.length <= slotIdx) nextLabels.push('');
+      nextLabels[slotIdx] = displayName;
     }
+
     nextRefs = nextRefs.slice(0, maxForThisModel);
-    nextLabels = nextLabels.slice(0, maxForThisModel);
-        if (isKelingOmni) {
-      updateKlingOmniRefImages(klingOmniTab as 'multi' | 'instruction' | 'video', nextRefs);
-      onUpdate({ referenceImageLabels: nextLabels });
-        } else {
-      onUpdate({ referenceImages: nextRefs, referenceImageLabels: nextLabels });
+    nextLabels = alignReferenceImageLabels(nextRefs, nextLabels).slice(0, maxForThisModel);
+    if (isKelingOmni) {
+      const omniTab = klingOmniTab as 'multi' | 'instruction' | 'video';
+      const oldEids = getKlingOmniRefElementIds(omniTab);
+      const nextEids = nextRefs.map((url, i) =>
+        i < currentRefs.length && url === currentRefs[i] && oldEids[i] ? oldEids[i] : oldEids[i]
+      );
+      const imagesKey =
+        omniTab === 'multi'
+          ? 'klingOmniMultiReferenceImages'
+          : omniTab === 'instruction'
+            ? 'klingOmniInstructionReferenceImages'
+            : 'klingOmniVideoReferenceImages';
+      const eidsKey =
+        omniTab === 'multi'
+          ? 'klingOmniMultiReferenceElementIds'
+          : omniTab === 'instruction'
+            ? 'klingOmniInstructionReferenceElementIds'
+            : 'klingOmniVideoReferenceElementIds';
+      const patch = withReferenceLocalRefsInPatch(
+        {
+          [imagesKey]: nextRefs,
+          [eidsKey]: nextEids,
+          referenceImageLabels: nextLabels,
+        } as Partial<NodeData>,
+        registered
+      );
+      mergeNodeDataRef(patch);
+      onUpdate(patch);
+    } else {
+      const oldEids = getStandardRefElementIds();
+      const nextEids = buildPanelRefElementIdsAfterWrite(
+        currentRefs,
+        oldEids,
+        nextRefs,
+        -1
+      );
+      const patch = withReferenceLocalRefsInPatch(
+        {
+          referenceImages: nextRefs,
+          referenceImageLabels: nextLabels,
+          referenceElementIds: nextEids,
+        },
+        registered
+      );
+      mergeNodeDataRef(patch);
+      onUpdate(patch);
     }
   };
 
-  const handleRefUploadInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+  const handleRefUploadInputChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const files = Array.from(e.target.files || []);
     if (refUploadInputRef.current) refUploadInputRef.current.value = '';
     if (files.length === 0) return;
-    void ingestInspectorReferenceLocalFiles(files);
+    await ingestInspectorReferenceLocalFiles(files);
   };
 
   const openRefFilePicker = (accept: string) => {
@@ -3300,6 +4214,12 @@ function NodeInspector({
     window.dispatchEvent(new CustomEvent('flowgen:register-original-image', { detail: { nodeId, referenceRemoveIndex: index } }));
     if (isKelingOmni) {
       const tab = klingOmniTab === 'frames' ? 'multi' : klingOmniTab;
+      const localRefField =
+        tab === 'instruction'
+          ? 'klingOmniInstructionReferenceLocalRefs'
+          : tab === 'video'
+            ? 'klingOmniVideoReferenceLocalRefs'
+            : 'klingOmniMultiReferenceLocalRefs';
       const current =
         tab === 'multi'
           ? (data.klingOmniMultiReferenceImages || [])
@@ -3312,7 +4232,13 @@ function NodeInspector({
       const padded = current.map((_, i) => eids[i]);
       const newEids = [...padded];
       newEids.splice(index, 1);
+      const { localRefs, removedRef } = removeReferenceImageLocalRefAtIndex(
+        data[localRefField],
+        index
+      );
+      if (removedRef) void deleteLocalMediaRef(removedRef);
       updateKlingOmniRefImages(tab, newRefs, { elementIds: newEids });
+      onUpdate({ [localRefField]: localRefs } as Partial<NodeData>);
       return;
     }
     const removed = removeReferenceImageAt(
@@ -3320,23 +4246,73 @@ function NodeInspector({
       data.referenceImageLabels,
       index
     );
-    onUpdate(removed);
+    const { localRefs, removedRef } = removeReferenceImageLocalRefAtIndex(
+      data.referenceImageLocalRefs,
+      index
+    );
+    if (removedRef) void deleteLocalMediaRef(removedRef);
+    const eids = getStandardRefElementIds();
+    const paddedEids = [...eids];
+    while (paddedEids.length < (data.referenceImages || []).length) paddedEids.push(undefined);
+    paddedEids.splice(index, 1);
+    const syncedLabels = syncGenericReferenceImageLabelsToSlotOrdinals(
+      removed.referenceImages,
+      removed.referenceImageLabels,
+      data.imagePreview,
+      getNodeInspectorPromptText(data)
+    );
+    const merged = {
+      ...data,
+      referenceImages: removed.referenceImages,
+      referenceImageLabels: syncedLabels,
+    };
+    const promptPatch = buildPromptPictureOrdinalRepairPatch(merged, projectAssetLabelRows);
+    onUpdate({
+      referenceImages: removed.referenceImages,
+      referenceImageLabels: syncedLabels,
+      referenceImageLocalRefs: localRefs,
+      referenceElementIds: paddedEids,
+      ...promptPatch,
+    });
   };
 
   const removeImage2RefSlot = (slotIdx: number) => {
     if (image2ShowMainInRefGrid && slotIdx === 0) {
       return;
     }
-    const refIndex = image2ShowMainInRefGrid ? slotIdx - 1 : slotIdx;
-    const compacted = compactImage2PanelReferences(data);
-    const refs = [...compacted.referenceImages];
-    const labels = [...compacted.referenceImageLabels];
-    if (refIndex < 0 || refIndex >= refs.length) return;
-    refs.splice(refIndex, 1);
-    labels.splice(refIndex, 1);
+    const refOffset = image2ShowMainInRefGrid ? 1 : 0;
+    const displayRefIdx = slotIdx - refOffset;
+    const result = removeImage2PanelReferenceAtDisplaySlot(
+      {
+        ...data,
+        referenceImages: effectivePanelReferenceImages,
+      },
+      displayRefIdx,
+      projectAssetLabelRows
+    );
+    if (!result) return;
+    window.dispatchEvent(
+      new CustomEvent('flowgen:register-original-image', {
+        detail: { nodeId, referenceRemoveIndex: result.removedSlotIndex },
+      })
+    );
+    if (result.removedLocalRef) void deleteLocalMediaRef(result.removedLocalRef);
+    const eids = getStandardRefElementIds();
+    const paddedEids = [...eids];
+    while (paddedEids.length < (data.referenceImages || []).length) paddedEids.push(undefined);
+    paddedEids.splice(result.removedSlotIndex, 1);
+    const merged = {
+      ...data,
+      referenceImages: result.referenceImages,
+      referenceImageLabels: result.referenceImageLabels,
+    };
+    const promptPatch = buildPromptPictureOrdinalRepairPatch(merged, projectAssetLabelRows);
     onUpdate({
-      referenceImages: refs,
-      referenceImageLabels: labels,
+      referenceImages: result.referenceImages,
+      referenceImageLabels: result.referenceImageLabels,
+      referenceImageLocalRefs: result.referenceImageLocalRefs,
+      referenceElementIds: paddedEids.slice(0, result.referenceImages.length),
+      ...promptPatch,
     });
   };
 
@@ -3356,10 +4332,19 @@ function NodeInspector({
     onUpdate({ referenceMovs: [...current, { url: videoUrl }] });
   };
 
-  seedanceReferenceFromUrlRef.current = (
+  seedanceReferenceFromUrlRef.current = async (
     url: string,
     kind?: 'image' | 'video',
-    meta?: { assetName?: string }
+    meta?: { assetName?: string; fromCanvasNode?: boolean; canvasSourceNodeId?: string }
+  ) =>
+    enqueueInspectorReferenceDrop(() =>
+      seedanceReferenceFromUrlImpl(url, kind, meta)
+    );
+
+  const seedanceReferenceFromUrlImpl = async (
+    url: string,
+    kind?: 'image' | 'video',
+    meta?: { assetName?: string; fromCanvasNode?: boolean; canvasSourceNodeId?: string }
   ) => {
     if (!url) return;
     if (isInspectorIncomingVideoUrl(url, kind)) {
@@ -3367,24 +4352,41 @@ function NodeInspector({
       return;
     }
     const d = nodeDataRef.current;
+    if (isPanelRefDuplicateOfMainImageSlot(url, d, projectAssetLabelRows)) return;
     const cur = [...(d.referenceImages || [])];
     if (cur.length >= 9) return;
-    const curLabels = d.referenceImageLabels;
-    if (
-      panelReferencesAlreadyContainAsset(cur, curLabels, url, meta?.assetName, projectAssetLabelRows) ||
-      panelReferencesAlreadyContainUrl(cur, url)
-    ) {
-      return;
-    }
+    const curLabels = alignReferenceImageLabels(cur, d.referenceImageLabels);
+    const dedupeOpts = {
+      incomingLabel: meta?.assetName,
+      projectAssets: projectAssetLabelRows,
+      imagePreview: d.imagePreview,
+      dedupeAgainstMain: true,
+      elementIds: getStandardRefElementIds(),
+      canvasSourceNodeId: meta?.canvasSourceNodeId,
+    };
+    if (panelReferencesAlreadyContainIncoming(cur, curLabels, url, dedupeOpts)) return;
     window.dispatchEvent(new CustomEvent('flowgen:register-original-image', { detail: { nodeId, referenceAppend: [null] } }));
-    const add = (img: string) => {
+    const add = async (img: string) => {
       const latest = nodeDataRef.current;
+      if (
+        meta?.canvasSourceNodeId &&
+        panelReferencesAlreadyContainCanvasSource(getStandardRefElementIds(), meta.canvasSourceNodeId)
+      ) {
+        return;
+      }
       const refs = [...(latest.referenceImages || [])];
       const labels = [...(latest.referenceImageLabels || [])];
-      let displayName = meta?.assetName?.trim();
-      if (!displayName) {
-        displayName = projectAssetDisplayNameFromUrl(img, projectAssetLabelRows) || '';
-      }
+      const projectedIdx = refs.length;
+      const projectedRefs = [...refs, img];
+      const displayName = resolvePanelRefLabelForInspectorDrop({
+        url: img,
+        incomingLabel: meta?.assetName,
+        fromCanvasNode: meta?.fromCanvasNode,
+        slotIndex: projectedIdx,
+        referenceImages: projectedRefs,
+        imagePreview: latest.imagePreview,
+        projectAssets: projectAssetLabelRows,
+      });
       const next = tryAppendReferenceImageWithLabel(
         refs,
         labels,
@@ -3393,26 +4395,44 @@ function NodeInspector({
         projectAssetLabelRows
       );
       if (!next.added) return;
+      const registered = await registerEphemeralPanelRefToLocalStore(url, projectedIdx);
+      const oldEids = getStandardRefElementIds();
       const cappedRefs = next.referenceImages.slice(0, 9);
       const cappedLabels = alignReferenceImageLabels(
         cappedRefs,
         next.referenceImageLabels
       ).slice(0, 9);
-      const newIdx = cappedRefs.length - 1;
-      if (!String(cappedLabels[newIdx] || '').trim() && !displayName) {
-        const ord = refImageOrdinalForSlot(
-          newIdx,
-          cappedRefs,
-          latest.imagePreview
-        );
-        if (ord >= 1) cappedLabels[newIdx] = `图片${ord}`;
-      }
-      onUpdate({
-        referenceImages: cappedRefs,
-        referenceImageLabels: cappedLabels,
-      });
+      const nextEids = buildPanelRefElementIdsAfterWrite(
+        refs,
+        oldEids,
+        cappedRefs,
+        projectedIdx,
+        meta?.canvasSourceNodeId
+      );
+      const patch = withReferenceLocalRefsInPatch(
+        {
+          referenceImages: cappedRefs,
+          referenceImageLabels: cappedLabels,
+          referenceElementIds: nextEids,
+        },
+        registered
+      );
+      mergeNodeDataRef(patch);
+      onUpdate(patch);
     };
-    void normalizeInspectorIngestImageUrl(url).then(add);
+    const img = await normalizeInspectorIngestImageUrl(url);
+    const latestBeforeAdd = nodeDataRef.current;
+    const liveRefs = [...(latestBeforeAdd.referenceImages || [])];
+    const liveLabels = alignReferenceImageLabels(liveRefs, latestBeforeAdd.referenceImageLabels);
+    if (
+      panelReferencesAlreadyContainIncoming(liveRefs, liveLabels, img, {
+        ...dedupeOpts,
+        elementIds: getStandardRefElementIds(),
+      })
+    ) {
+      return;
+    }
+    await add(img);
   };
 
   const toggleVideoById = (id: string) => {
@@ -3490,9 +4510,7 @@ function NodeInspector({
     while (nextLabels.length < refs.length) nextLabels.push('');
     if (imgSlots > 0 && imageFiles.length > 0) {
       const toProcess = imageFiles.slice(0, imgSlots);
-      window.dispatchEvent(
-        new CustomEvent('flowgen:register-original-image', { detail: { nodeId, referenceAppend: toProcess } })
-      );
+      await dispatchReferenceAppendFiles(toProcess, refs.length);
       try {
         const newImages = await Promise.all(toProcess.map((f) => compressImageForPreview(f)));
         nextImages = [...refs];
@@ -3604,11 +4622,15 @@ function NodeInspector({
 
     const internalUrls = extractInspectorDragUrls(e.dataTransfer);
     if (internalUrls.length > 0) {
-      for (const url of internalUrls) seedanceReferenceFromUrlRef.current(url);
+      void (async () => {
+        for (const url of internalUrls) {
+          await seedanceReferenceFromUrlRef.current(url);
+        }
+      })();
     }
   };
 
-  const handleImage2ReferenceFile = (slotIdx: number, file: File | undefined) => {
+  const handleImage2ReferenceFile = async (slotIdx: number, file: File | undefined) => {
     if (!isImage2 || !file || !file.type.startsWith('image/')) return;
     if (file.size > 10 * 1024 * 1024) {
       alert('单张图片不超过 10MB');
@@ -3623,25 +4645,23 @@ function NodeInspector({
         })
       );
       void compressImageForPreview(file).then((mainUrl) =>
-        onUpdate({ imagePreview: mainUrl, panelMainSlotVisible: undefined })
+        onUpdate({ imagePreview: mainUrl, panelMainSlotVisible: undefined, panelMainImageUrl: undefined })
       );
       return;
     }
     const refSlot = image2ShowMainInRefGrid ? slotIdx - 1 : slotIdx;
     if (refSlot < 0) return;
     const isReplace = slotIdx < image2RefSlotFilledCount;
-    if (!isReplace && image2RefSlotFilledCount >= 3) return;
-    window.dispatchEvent(
-      new CustomEvent('flowgen:register-original-image', {
-        detail: { nodeId, referenceAppend: [file] },
-      })
+    if (!isReplace && image2RefSlotFilledCount >= IMAGE2_MAX_PANEL_SLOTS) return;
+    const registered = await dispatchReferenceAppendFiles([file], refSlot);
+    const dataUrl = await compressImageForPreview(file);
+    const latest = nodeDataRef.current;
+    onUpdate(
+      withReferenceLocalRefsInPatch(
+        patchImage2ReferenceAtRefSlot(latest, refSlot, dataUrl),
+        registered
+      )
     );
-    void compressImageForPreview(file).then((dataUrl) => {
-      const latest = nodeDataRef.current;
-      onUpdate(
-        patchImage2ReferenceAtRefSlot(latest, refSlot, dataUrl)
-      );
-    });
   };
 
   const handleRun = async () => {
@@ -3706,10 +4726,19 @@ function NodeInspector({
 
   const handleSwapFrames = () => {
       window.dispatchEvent(new CustomEvent('flowgen:register-original-image', { detail: { nodeId, type: 'swapFrames' } }));
-      const temp = data.firstFrameImage;
+      const tempImg = data.firstFrameImage;
+      const tempUrl = data.firstFrameImageUrl;
+      const tempRef = data.firstFrameLocalRef;
+      const tempLabel = data.firstFrameImageLabel;
       onUpdate({
           firstFrameImage: data.lastFrameImage,
-          lastFrameImage: temp
+          firstFrameImageUrl: data.lastFrameImageUrl,
+          firstFrameLocalRef: data.lastFrameLocalRef,
+          firstFrameImageLabel: data.lastFrameImageLabel,
+          lastFrameImage: tempImg,
+          lastFrameImageUrl: tempUrl,
+          lastFrameLocalRef: tempRef,
+          lastFrameImageLabel: tempLabel,
       });
   };
 
@@ -4078,23 +5107,49 @@ function NodeInspector({
   const librarySubjectThumbUrls = (it: LibraryItem) =>
     [...new Set([it.url, ...(it.views || [])].filter(Boolean))].slice(0, 8);
 
-  firstFrameFromUrlRef.current = (url: string, kind?: 'image' | 'video', meta?: { assetName?: string }) => {
+  firstFrameFromUrlRef.current = async (
+    url: string,
+    kind?: 'image' | 'video',
+    meta?: { assetName?: string; fromCanvasNode?: boolean }
+  ) => {
     if (!url || isInspectorIncomingVideoUrl(url, kind)) return;
-    const displayName =
-      meta?.assetName?.trim() ||
-      projectAssetDisplayNameFromUrl(url, projectAssetLabelRows) ||
-      '';
-    void normalizeInspectorIngestImageUrl(url).then((img) =>
+    const displayName = meta?.fromCanvasNode
+      ? '首帧图'
+      : meta?.assetName?.trim() ||
+        projectAssetDisplayNameFromUrl(url, projectAssetLabelRows) ||
+        '';
+    // ephemeral URL（blob:/data:）写入 IDB，刷新后可恢复
+    if (!isPersistableMediaUrl(url)) {
+      void fetch(url).then((r) => r.blob()).then((blob) => {
+        const ext = blob.type?.includes('png') ? 'png' : 'jpg';
+        const file = new File([blob], `frame-firstFrame.${ext}`, { type: blob.type || 'image/jpeg' });
+        window.dispatchEvent(new CustomEvent('flowgen:register-original-image', { detail: { nodeId, file, type: 'firstFrame' } }));
+      }).catch(() => {});
+    }
+    await normalizeInspectorIngestImageUrl(url).then((img) =>
       applyFirstFrameUpdate(img, displayName ? { displayName } : undefined)
     );
   };
-  lastFrameFromUrlRef.current = (url: string, kind?: 'image' | 'video', meta?: { assetName?: string }) => {
+  lastFrameFromUrlRef.current = async (
+    url: string,
+    kind?: 'image' | 'video',
+    meta?: { assetName?: string; fromCanvasNode?: boolean }
+  ) => {
     if (!url || isInspectorIncomingVideoUrl(url, kind)) return;
-    const displayName =
-      meta?.assetName?.trim() ||
-      projectAssetDisplayNameFromUrl(url, projectAssetLabelRows) ||
-      '';
-    void normalizeInspectorIngestImageUrl(url).then((img) =>
+    const displayName = meta?.fromCanvasNode
+      ? '尾帧图'
+      : meta?.assetName?.trim() ||
+        projectAssetDisplayNameFromUrl(url, projectAssetLabelRows) ||
+        '';
+    // ephemeral URL（blob:/data:）写入 IDB，刷新后可恢复
+    if (!isPersistableMediaUrl(url)) {
+      void fetch(url).then((r) => r.blob()).then((blob) => {
+        const ext = blob.type?.includes('png') ? 'png' : 'jpg';
+        const file = new File([blob], `frame-lastFrame.${ext}`, { type: blob.type || 'image/jpeg' });
+        window.dispatchEvent(new CustomEvent('flowgen:register-original-image', { detail: { nodeId, file, type: 'lastFrame' } }));
+      }).catch(() => {});
+    }
+    await normalizeInspectorIngestImageUrl(url).then((img) =>
       applyLastFrameUpdate(img, displayName ? { displayName } : undefined)
     );
   };
@@ -4159,15 +5214,16 @@ function NodeInspector({
                   onChange={(e) => handleModelChange(e.target.value)}
                   className="w-full bg-gray-950 border border-gray-700 hover:border-brand-500 text-gray-200 text-xs rounded-lg px-3 py-2.5 pr-8 focus:outline-none focus:ring-2 focus:ring-brand-500/50 appearance-none transition-all cursor-pointer"
                 >
-                   <option value={MODEL_NANO_BANANA_2}>{MODEL_NANO_BANANA_2}</option>
-                   <option value={MODEL_IMAGE_2}>{MODEL_IMAGE_2}</option>
-                   <option value="可灵 2.5 Turbo">可灵 2.5 Turbo</option>
-                   <option value="可灵3.0 Omni">可灵3.0 Omni</option>
-                   <option value="即梦3.0 Pro">即梦3.0 Pro</option>
-                   <option value="vidu 2.0">vidu 2.0</option>
-                   <option value="seedance1.5-pro">seedance1.5-pro</option>
-                   <option value="seedance2.0 (高质量版)">seedance2.0 (高质量版)</option>
-                   <option value="seedance2.0 (急速版)">seedance2.0 (急速版)</option>
+                   {INSPECTOR_SELECTABLE_MODELS.map((modelId) => (
+                     <option key={modelId} value={modelId}>
+                       {modelId}
+                     </option>
+                   ))}
+                   {isDeprecatedInspectorModel(data.selectedModel) && (
+                     <option value={data.selectedModel!} disabled>
+                       {data.selectedModel}（已下线，请切换模型）
+                     </option>
+                   )}
                 </select>
                 <ChevronDown className="absolute right-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-500 pointer-events-none" />
              </div>
@@ -4220,41 +5276,7 @@ function NodeInspector({
                             <button
                                 key={tab.id}
                                 type="button"
-                                onClick={() => {
-                                    setKlingOmniTab(tab.id);
-                                    const tabText = getKlingOmniTabText(tab.id);
-                                    const mainPrev = data.imagePreview?.trim();
-                                    const tabPatch: Partial<NodeData> = {
-                                      klingOmniTab: tab.id,
-                                      prompt: tabText.prompt,
-                                      negativePrompt: tabText.negativePrompt,
-                                    };
-                                    if (
-                                      mainPrev &&
-                                      !isLikelyMainVideoUrl(mainPrev) &&
-                                      (tab.id === 'instruction' || tab.id === 'video')
-                                    ) {
-                                      const stripDup = (list?: string[]) => {
-                                        if (!list?.length) return undefined;
-                                        const next = list.filter(
-                                          (u) => !isDuplicateOfMainImagePreview(u, mainPrev)
-                                        );
-                                        return next.length === list.length ? undefined : next;
-                                      };
-                                      const inst = stripDup(data.klingOmniInstructionReferenceImages);
-                                      const vid = stripDup(data.klingOmniVideoReferenceImages);
-                                      if (inst) tabPatch.klingOmniInstructionReferenceImages = inst;
-                                      if (vid) tabPatch.klingOmniVideoReferenceImages = vid;
-                                    }
-                                    onUpdate(tabPatch);
-                                    requestAnimationFrame(() => {
-                                      const el = promptTextareaRef.current;
-                                      if (!el) return;
-                                      const len = tabText.prompt.length;
-                                      el.focus();
-                                      el.setSelectionRange(len, len);
-                                    });
-                                }}
+                                onClick={() => switchKlingOmniTab(tab.id)}
                                 className={`px-2.5 py-1.5 text-[10px] font-bold rounded-lg transition-colors ${
                                     klingOmniTab === tab.id
                                         ? 'bg-brand-500 text-gray-950'
@@ -4279,41 +5301,46 @@ function NodeInspector({
                                         accept="image/*"
                                         onChange={handleMainUpload}
                                     />
-                            <div className="text-[10px] text-red-300 px-2 py-2 leading-relaxed text-center bg-red-500/10 border border-red-500/30 rounded-lg">
-                                ⚠ 添加首帧图，或者同时添加首尾帧图，并文字描述场景过渡、运镜轨迹或角色动作。
-                            </div>
-                            <div className="flex items-center gap-3 h-24">
-                                <FrameDropZone
-                                    nodeId={nodeId}
-                                    frameType="firstFrame"
-                                    label="首帧图"
-                                    imageUrl={data.firstFrameImageUrl}
-                                    imageData={data.firstFrameImage}
-                                    onImageUpdate={applyFirstFrameUpdate}
-                                    displayUrl={data.firstFrameImageUrl}
-                                    showImage={true}
-                                    mediaRefCaption={flMediaCaptions.first}
-                                />
-                                <div className="h-full flex items-center justify-center">
-                                    <button
-                                        onClick={handleSwapFrames}
-                                        className="p-1.5 rounded-full hover:bg-gray-800 text-gray-500 hover:text-brand-500 transition-colors"
-                                        title="Swap Start/End Frames"
-                                    >
-                                        <ArrowRightLeft className="w-4 h-4" />
-                                    </button>
+                            <div className="rounded-lg border border-gray-800 bg-gray-950/40 p-3 flex flex-col gap-3">
+                                <div className="text-[10px] text-red-300 px-2 py-2 leading-relaxed text-center bg-red-500/10 border border-red-500/30 rounded-lg shrink-0">
+                                    ⚠ 添加首帧图，或者同时添加首尾帧图，并文字描述场景过渡、运镜轨迹或角色动作。
                                 </div>
-                                <FrameDropZone
-                                    nodeId={nodeId}
-                                    frameType="lastFrame"
-                                    label="尾帧图"
-                                    imageUrl={data.lastFrameImageUrl}
-                                    imageData={data.lastFrameImage}
-                                    onImageUpdate={applyLastFrameUpdate}
-                                    displayUrl={data.lastFrameImageUrl}
-                                    showImage={true}
-                                    mediaRefCaption={flMediaCaptions.last}
-                                />
+                                <div className="grid grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] gap-2 items-stretch h-24">
+                                    <FrameDropZone
+                                        nodeId={nodeId}
+                                        frameType="firstFrame"
+                                        label="首帧图"
+                                        imageUrl={data.firstFrameImageUrl}
+                                        imageData={data.firstFrameImage}
+                                        onImageUpdate={applyFirstFrameUpdate}
+                                        displayUrl={data.firstFrameImageUrl}
+                                        fallbackMainPreview={inspectorMainPreviewFallback}
+                                        showImage={true}
+                                        compact={true}
+                                        mediaRefCaption={flMediaCaptions.first}
+                                    />
+                                    <div className="flex items-center justify-center self-center px-0.5 shrink-0">
+                                        <button
+                                            onClick={handleSwapFrames}
+                                            className="p-1.5 rounded-full hover:bg-gray-800 text-gray-500 hover:text-brand-500 transition-colors"
+                                            title="Swap Start/End Frames"
+                                        >
+                                            <ArrowRightLeft className="w-4 h-4" />
+                                        </button>
+                                    </div>
+                                    <FrameDropZone
+                                        nodeId={nodeId}
+                                        frameType="lastFrame"
+                                        label="尾帧图"
+                                        imageUrl={data.lastFrameImageUrl}
+                                        imageData={data.lastFrameImage}
+                                        onImageUpdate={applyLastFrameUpdate}
+                                        displayUrl={data.lastFrameImageUrl}
+                                        showImage={true}
+                                        compact={true}
+                                        mediaRefCaption={flMediaCaptions.last}
+                                    />
+                                </div>
                             </div>
                         </>
                     ) : (
@@ -4352,7 +5379,7 @@ function NodeInspector({
                                   omniTab={klingOmniTab as 'instruction' | 'video'}
                                   displayUrl={stableOmniTabVideoDisplayUrl}
                                   posterUrl={omniTabVideoPosterUrl}
-                                  mainPreview={data.imagePreview}
+                                  nodeData={data}
                                   videoRefRegister={registerInspectorVideoRef}
                                   isPlaying={Boolean(
                                     videoPlayingMap[
@@ -4439,9 +5466,10 @@ function NodeInspector({
                                             .filter(
                                               ({ img }) =>
                                                 !shouldDedupePanelRefsAgainstMainPreview(data) ||
-                                                !isDuplicateOfMainImagePreview(
+                                                !isPanelRefDuplicateOfMainImageSlot(
                                                   img,
-                                                  data.imagePreview
+                                                  data,
+                                                  projectAssetLabelRows
                                                 )
                                             );
                                           const cells: Array<
@@ -4470,12 +5498,13 @@ function NodeInspector({
                                               );
                                             }
                                             const { img, origIdx, slotIdx } = cell;
-                                            const isVid = isOmniVideoItemUrl(img);
+                                            const isVid = isOmniMultiReferenceSlotVideo(data, origIdx, img);
                                             const caption = isVid
                                               ? omniMixedRefSlotCaption(
                                                   origIdx,
-                                              klingOmniActiveRefImages,
-                                                  panelReferenceLabelImagePreview(data)
+                                                  klingOmniActiveRefImages,
+                                                  panelReferenceLabelImagePreview(data),
+                                                  data
                                                 )
                                               : resolveReferenceSlotDisplayLabel(
                                                   origIdx,
@@ -4537,6 +5566,7 @@ function NodeInspector({
                                   imageData={data.firstFrameImage}
                                   onImageUpdate={applyFirstFrameUpdate}
                                   displayUrl={data.firstFrameImageUrl}
+                                  fallbackMainPreview={inspectorMainPreviewFallback}
                                   showImage={true}
                                   compact={true}
                                   mediaRefCaption={
@@ -4556,11 +5586,11 @@ function NodeInspector({
                         {(
                             [
                                 {
-                                    id: 'text' as const,
-                                    label: '文生视频',
-                                    Icon: Type,
-                                    active: 'bg-emerald-600 text-white shadow-sm shadow-emerald-950/40',
-                                    idle: 'bg-gray-900 text-emerald-400/90 hover:bg-emerald-950/35 hover:text-emerald-300',
+                                    id: 'reference' as const,
+                                    label: '参考生视频',
+                                    Icon: Layers,
+                                    active: 'bg-blue-600 text-white shadow-sm shadow-blue-950/40',
+                                    idle: 'bg-gray-900 text-blue-400 hover:bg-blue-950/35 hover:text-blue-300',
                                 },
                                 {
                                     id: 'image' as const,
@@ -4570,11 +5600,11 @@ function NodeInspector({
                                     idle: 'bg-gray-900 text-blue-400 hover:bg-blue-950/35 hover:text-blue-300',
                                 },
                                 {
-                                    id: 'reference' as const,
-                                    label: '参考生视频',
-                                    Icon: Layers,
-                                    active: 'bg-blue-600 text-white shadow-sm shadow-blue-950/40',
-                                    idle: 'bg-gray-900 text-blue-400 hover:bg-blue-950/35 hover:text-blue-300',
+                                    id: 'text' as const,
+                                    label: '文生视频',
+                                    Icon: Type,
+                                    active: 'bg-emerald-600 text-white shadow-sm shadow-emerald-950/40',
+                                    idle: 'bg-gray-900 text-emerald-400/90 hover:bg-emerald-950/35 hover:text-emerald-300',
                                 },
                             ] as const
                         ).map((tab) => {
@@ -4603,8 +5633,8 @@ function NodeInspector({
                             )}
 
                     {seedanceMode === 'image' && (
-                        <>
-                            <div className="text-[10px] text-red-300 px-2 py-2 leading-relaxed text-left bg-red-500/10 border border-red-500/30 rounded-lg space-y-1.5">
+                        <div className="rounded-lg border border-gray-800 bg-gray-950/40 p-3 flex flex-col gap-3">
+                            <div className="text-[10px] text-red-300 px-2 py-2 leading-relaxed text-left bg-red-500/10 border border-red-500/30 rounded-lg space-y-1.5 shrink-0">
                                 <p className="text-center font-medium">⚠ 图生视频 · 素材要求</p>
                                 <p>首帧必选；若使用尾帧，则首尾帧共 2 张。每张图须满足：</p>
                                 <ul className="list-disc pl-4 space-y-0.5">
@@ -4614,8 +5644,8 @@ function NodeInspector({
                                     <li>大小：单张 &lt; 30 MB</li>
                                     <li>数量：仅首帧 1 张；首尾帧模式 2 张</li>
                                 </ul>
-                </div>
-                            <div className="flex items-center gap-3 h-24">
+                            </div>
+                            <div className="grid grid-cols-2 gap-2 items-stretch h-24">
                                 <FrameDropZone
                                     nodeId={nodeId}
                                     frameType="firstFrame"
@@ -4624,7 +5654,9 @@ function NodeInspector({
                                     imageData={data.firstFrameImage}
                                     onImageUpdate={applyFirstFrameUpdate}
                                     displayUrl={data.firstFrameImageUrl}
+                                    fallbackMainPreview={inspectorMainPreviewFallback}
                                     showImage={true}
+                                    compact={true}
                                     mediaRefCaption={flMediaCaptions.first}
                                 />
                                 <FrameDropZone
@@ -4636,10 +5668,11 @@ function NodeInspector({
                                     onImageUpdate={applyLastFrameUpdate}
                                     displayUrl={data.lastFrameImageUrl}
                                     showImage={true}
+                                    compact={true}
                                     mediaRefCaption={flMediaCaptions.last}
                                 />
-                    </div>
-                        </>
+                            </div>
+                        </div>
                     )}
 
                     {seedanceMode === 'reference' && (
@@ -4670,6 +5703,9 @@ function NodeInspector({
                               }`}
                             >
                             <div
+                              data-flowgen-media-drop="1"
+                              data-flowgen-node-id={nodeId}
+                              data-flowgen-drop-zone="seedance-reference"
                               className="min-h-[220px] rounded-xl border-2 border-dashed border-gray-800 bg-gray-950/30 p-2 flex flex-col gap-2"
                               onDragOver={handleSeedanceReferenceDragOver}
                               onDrop={handleSeedanceReferenceDrop}
@@ -4804,14 +5840,9 @@ function NodeInspector({
                                                 }
                                               />
                                               <div className="absolute bottom-0 left-0 right-0 z-[2] bg-black/70 text-white text-[9px] font-medium text-center py-0.5 pointer-events-none">
-                                                {(() => {
-                                                  const mainPrev = data.imagePreview?.trim();
-                                                  const isMainVideo =
-                                                    !!mainPrev &&
-                                                    isLikelyMainVideoUrl(mainPrev) &&
-                                                    mainPrev === m.url;
-                                                  return isMainVideo ? '主视频' : `视频${vi + 1}`;
-                                                })()}
+                                                {isSeedanceReferenceMovMainVideo(data, m.url)
+                                                  ? '主视频'
+                                                  : `视频${vi + 1}`}
                                               </div>
                                             </div>
                                             <div className="flex-1 min-w-0">
@@ -4845,7 +5876,7 @@ function NodeInspector({
                                       </div>
                                     )}
                                     <div className="grid grid-cols-3 gap-2">
-                                      {seedanceShowMainInRefGrid && data.imagePreview && (
+                                      {seedanceShowMainInRefGrid && (mainPreviewDisplaySrc || data.imageLocalRef) && (
                                         <div className="group relative aspect-square rounded overflow-hidden border border-brand-500/50 bg-black">
                                           <img
                                             src={mainPreviewDisplaySrc}
@@ -4922,72 +5953,75 @@ function NodeInspector({
             ) : (isKeling || isVidu || isSeedance15) ? (
                 /* === KELING / VIDU / SEEDANCE 首尾帧 UI（与 Input 节点一致，Output Mov 节点也显示）=== */
                 <div className="p-4 flex flex-col gap-3">
-                    <div className="flex items-center gap-2 mb-1">
-                        <ArrowRightLeft className="text-brand-500 w-3 h-3" />
+                    <div className="flex items-center gap-2">
+                        <ArrowRightLeft className="text-brand-500 w-3 h-3 shrink-0" />
                         <span className="text-[10px] font-bold text-gray-400 uppercase tracking-wider">首尾帧</span>
                     </div>
 
-                            <input 
-                                type="file" 
-                                ref={mainUploadInputRef}
-                                className="hidden" 
-                                accept="image/*"
-                                onChange={handleMainUpload}
-                            />
+                    <input
+                        type="file"
+                        ref={mainUploadInputRef}
+                        className="hidden"
+                        accept="image/*"
+                        onChange={handleMainUpload}
+                    />
                     {supportsSubjectLibraryPicker && (
-                        <div className="flex gap-2">
                         <button
-                                type="button"
+                            type="button"
                             onClick={() => {
                                 setShowLibraryModal(true);
                                 loadLibraryImages();
                             }}
-                                className="w-full flex flex-col items-center justify-center p-3 border-2 border-dashed border-gray-800 rounded-xl bg-gray-950/30 text-center gap-1.5 cursor-pointer hover:border-gray-700 transition-colors group"
+                            className="w-full flex flex-col items-center justify-center p-3 border-2 border-dashed border-gray-800 rounded-xl bg-gray-950/30 text-center gap-1.5 cursor-pointer hover:border-gray-700 transition-colors group"
                         >
                             <ImageIcon className="text-gray-600 w-6 h-6 group-hover:text-gray-500 transition-colors" />
-                                <div className="text-xs font-semibold text-gray-400 group-hover:text-gray-300">从主体库文件选择</div>
+                            <div className="text-xs font-semibold text-gray-400 group-hover:text-gray-300">从主体库文件选择</div>
                         </button>
-                    </div>
                     )}
-                    
-                    <div className="text-[10px] text-red-300 px-2 py-2 leading-relaxed text-center bg-red-500/10 border border-red-500/30 rounded-lg">
-                        ⚠ 支持JPG / PNG格式, 文件大小不超过10MB, 尺寸不小于300px
-                    </div>
 
-                    <div className="flex items-center gap-3 h-24">
-                        <FrameDropZone 
-                            nodeId={nodeId}
-                            frameType="firstFrame"
-                            label="首帧图" 
-                            imageUrl={data.firstFrameImageUrl}
-                            imageData={data.firstFrameImage}
-                            onImageUpdate={applyFirstFrameUpdate}
-                            displayUrl={data.firstFrameImageUrl}
-                            showImage={true}
-                            mediaRefCaption={flMediaCaptions.first}
-                        />
-                        
-                        <div className="h-full flex items-center justify-center">
-                            <button 
-                                onClick={handleSwapFrames}
-                                className="p-1.5 rounded-full hover:bg-gray-800 text-gray-500 hover:text-brand-500 transition-colors"
-                                title="Swap Start/End Frames"
-                            >
-                                <ArrowRightLeft className="w-4 h-4" />
-                            </button>
+                    <div className="rounded-lg border border-gray-800 bg-gray-950/40 p-3 flex flex-col gap-3">
+                        <div className="text-[10px] text-red-300 px-2 py-2 leading-relaxed text-center bg-red-500/10 border border-red-500/30 rounded-lg shrink-0">
+                            ⚠ 支持JPG / PNG格式, 文件大小不超过10MB, 尺寸不小于300px
                         </div>
 
-                        <FrameDropZone 
-                            nodeId={nodeId}
-                            frameType="lastFrame"
-                            label="尾帧图" 
-                            imageUrl={data.lastFrameImageUrl}
-                            imageData={data.lastFrameImage}
-                            onImageUpdate={applyLastFrameUpdate}
-                            displayUrl={data.lastFrameImageUrl}
-                            showImage={true}
-                            mediaRefCaption={flMediaCaptions.last}
-                        />
+                        <div className="grid grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] gap-2 items-stretch h-24">
+                            <FrameDropZone
+                                nodeId={nodeId}
+                                frameType="firstFrame"
+                                label="首帧图"
+                                imageUrl={data.firstFrameImageUrl}
+                                imageData={data.firstFrameImage}
+                                onImageUpdate={applyFirstFrameUpdate}
+                                displayUrl={data.firstFrameImageUrl}
+                                fallbackMainPreview={inspectorMainPreviewFallback}
+                                showImage={true}
+                                compact={true}
+                                mediaRefCaption={flMediaCaptions.first}
+                            />
+
+                            <div className="flex items-center justify-center self-center px-0.5 shrink-0">
+                                <button
+                                    onClick={handleSwapFrames}
+                                    className="p-1.5 rounded-full hover:bg-gray-800 text-gray-500 hover:text-brand-500 transition-colors"
+                                    title="Swap Start/End Frames"
+                                >
+                                    <ArrowRightLeft className="w-4 h-4" />
+                                </button>
+                            </div>
+
+                            <FrameDropZone
+                                nodeId={nodeId}
+                                frameType="lastFrame"
+                                label="尾帧图"
+                                imageUrl={data.lastFrameImageUrl}
+                                imageData={data.lastFrameImage}
+                                onImageUpdate={applyLastFrameUpdate}
+                                displayUrl={data.lastFrameImageUrl}
+                                showImage={true}
+                                compact={true}
+                                mediaRefCaption={flMediaCaptions.last}
+                            />
+                        </div>
                     </div>
                 </div>
             ) : isImage2 ? (
@@ -5001,7 +6035,7 @@ function NodeInspector({
                         </span>
                       </div>
                       <span className="text-[10px] text-gray-500">
-                        {Math.min(3, image2RefSlotFilledCount)}/3
+                        {Math.min(IMAGE2_MAX_PANEL_SLOTS, image2RefSlotFilledCount)}/{IMAGE2_MAX_PANEL_SLOTS}
                       </span>
                     </div>
                     <div
@@ -5015,15 +6049,16 @@ function NodeInspector({
                       onDragLeave={handleDragLeave}
                       onDrop={handleRefDrop}
                     >
-                      <div className="flex gap-2">
-                        {[0, 1, 2].map((slotIdx) => {
+                      <div className="grid grid-cols-4 gap-2">
+                        {Array.from({ length: IMAGE2_MAX_PANEL_SLOTS }, (_, slotIdx) => slotIdx).map((slotIdx) => {
                           const isMainSlot = image2ShowMainInRefGrid && slotIdx === 0;
                           const refOffset = image2ShowMainInRefGrid ? 1 : 0;
                           const refEntry = !isMainSlot
                             ? image2RefEntries[slotIdx - refOffset]
                             : undefined;
                           const showAdd =
-                            slotIdx === image2RefSlotFilledCount && image2RefSlotFilledCount < 3;
+                            slotIdx === image2RefSlotFilledCount &&
+                            image2RefSlotFilledCount < IMAGE2_MAX_PANEL_SLOTS;
                           const displayUrl = isMainSlot ? data.imagePreview : refEntry?.url;
                           const slotLabel = isMainSlot
                             ? mainImageSlotCaption
@@ -5190,28 +6225,19 @@ function NodeInspector({
                     {(() => {
                       /** Nano 多图参考仅图片：主预览为视频时不占参考格，也不当作「已有一张参考」 */
                       const nanoHideVideoMain =
-                        isNano && !!data.imagePreview && isLikelyMainVideoUrl(data.imagePreview);
+                        isNano && !!resolvePanelMainSlotPreviewUrl(data) && isLikelyMainVideoUrl(resolvePanelMainSlotPreviewUrl(data)!);
                       const showMainInRefGrid =
-                        Boolean(data.imagePreview) &&
+                        Boolean(resolvePanelMainSlotPreviewUrl(data)) &&
                         shouldShowPanelMainImageSlot(data) &&
                         !nanoHideVideoMain;
                       const refList = data.referenceImages || [];
+                      const mainForRefGrid = panelReferenceLabelImagePreview(data) ?? data.imagePreview;
                       let refDisplayEntries = buildPanelReferenceDisplayEntries(refList, {
-                        imagePreview: data.imagePreview,
-                        dedupeAgainstMain:
-                          isNano && shouldDedupePanelRefsAgainstMainPreview(data),
+                        imagePreview: mainForRefGrid,
+                        dedupeAgainstMain: shouldDedupePanelRefsAgainstMainPreview(data),
                         referenceImageLabels: data.referenceImageLabels,
                         projectAssets: projectAssetLabelRows,
                       });
-                      if (isNano && showMainInRefGrid) {
-                        refDisplayEntries = filterPanelReferenceDisplayEntriesExcludingMainPreview(
-                          refDisplayEntries,
-                          data.imagePreview,
-                          data.imageName,
-                          data.referenceImageLabels,
-                          projectAssetLabelRows
-                        );
-                      }
                       const refSlots = refDisplayEntries
                         .filter(({ url }) => !isNano || !isLikelyMainVideoUrl(url))
                         .map(({ url, slotIndex }) => ({ img: url, idx: slotIndex }));
@@ -5335,7 +6361,7 @@ function NodeInspector({
             <div className="px-3 pt-0 pb-3 flex flex-col gap-1 relative">
                 {mentionDropdownItems.length > 0 && (
                   <div
-                    className={`absolute left-3 right-3 top-0 rounded-lg border border-gray-700 bg-gray-950 shadow-lg z-30 overflow-visible ${
+                    className={`absolute left-3 right-3 top-0 z-40 rounded-lg border border-gray-700 bg-gray-950 shadow-lg overflow-visible max-h-48 overflow-y-auto custom-scrollbar ${
                       mentionDropdownItems.length > 6 ? 'grid grid-cols-2 gap-0' : 'flex flex-col'
                     }`}
                   >
@@ -5406,16 +6432,28 @@ function NodeInspector({
                             : isSeedance20 && seedanceMode === 'text'
                               ? '模板：先写【身份锁定】→【仅允许变化】→【禁止变化】→【画面要求】'
                               : promptMentionItems.length > 0
-                                ? '模板：先写【身份锁定：严格保持@主图人物脸/年龄不变】→【仅允许变化】→【禁止变化】→【画面要求】。输入 @ 可引用主图/主视频、首尾帧与面板已拖入素材；项目库素材请用「扫描 @素材」'
+                                ? '模板：先写【身份锁定：严格保持@主图人物脸/年龄不变】→【仅允许变化】→【禁止变化】→【画面要求】。输入 @ 可引用主图/主视频、首尾帧与面板素材；项目素材请用「扫描 @素材」'
                                 : '模板：先写【身份锁定】→【仅允许变化】→【禁止变化】→【画面要求】。有主预览或参考素材后可输入 @'
                       }
                       value={inspectorPromptValue}
                       onChange={handlePromptChange}
                       onKeyDown={handlePromptKeyDown}
                       onPaste={handlePromptPaste}
+                      onContextMenu={(e) => {
+                        e.preventDefault();
+                        e.stopPropagation();
+                        setPromptPlainCopyMenu({ x: e.clientX, y: e.clientY });
+                      }}
                       onScroll={(e) => syncPromptHighlightScroll(e.currentTarget)}
                       onFocus={(e) => syncPromptHighlightScroll(e.currentTarget)}
-                      onSelect={(e) => syncPromptHighlightScroll(e.currentTarget)}
+                      onSelect={(e) => {
+                        syncPromptHighlightScroll(e.currentTarget);
+                        const ta = e.currentTarget;
+                        const cursor = ta.selectionStart ?? 0;
+                        if (cursor > 0 && ta.value[cursor - 1] === '@') {
+                          syncMentionFromPromptTextarea(ta, { force: true });
+                        }
+                      }}
                       onKeyUp={(e) => syncPromptHighlightScroll(e.currentTarget)}
                       onClick={(e) => syncPromptHighlightScroll(e.currentTarget)}
                   />
@@ -6167,12 +7205,13 @@ function NodeInspector({
                         </div>
                         <div className="relative">
                             <select
-                                value={data.image2AspectRatio || '1:1'}
+                                value={image2NormalizeAspectRatio(data.image2AspectRatio)}
                                 onChange={(e) => {
                                     const ar = e.target.value;
+                                    const q = image2ResolveQuality(data.image2Quality, data.image2ImageSize);
                                     onUpdate({
                                         image2AspectRatio: ar,
-                                        image2ImageSize: image2CoerceSizeForAspect(ar, data.image2ImageSize),
+                                        image2ImageSize: image2CoerceSizeForAspect(ar, data.image2ImageSize, q),
                                     });
                                 }}
                                 className="w-full bg-gray-950 border border-gray-700 hover:border-brand-500 text-gray-200 text-xs rounded px-2 py-2 pr-6 appearance-none focus:outline-none focus:ring-1 focus:ring-brand-500"
@@ -6189,17 +7228,46 @@ function NodeInspector({
                     <div className="space-y-1">
                         <div className="flex items-center gap-2 text-gray-400">
                             <Monitor size={12} />
-                            <span className="text-[10px] font-bold uppercase tracking-wider">图像尺寸（清晰度）</span>
+                            <span className="text-[10px] font-bold uppercase tracking-wider">清晰度</span>
+                        </div>
+                        <div className="relative">
+                            <select
+                                value={image2ResolveQuality(data.image2Quality, data.image2ImageSize)}
+                                onChange={(e) => {
+                                    const q = image2NormalizeQuality(e.target.value);
+                                    const ar = image2NormalizeAspectRatio(data.image2AspectRatio);
+                                    onUpdate({
+                                        image2Quality: q,
+                                        image2ImageSize: image2CoerceSizeForAspect(ar, data.image2ImageSize, q),
+                                    });
+                                }}
+                                className="w-full bg-gray-950 border border-gray-700 hover:border-brand-500 text-gray-200 text-xs rounded px-2 py-2 pr-6 appearance-none focus:outline-none focus:ring-1 focus:ring-brand-500"
+                            >
+                                {IMAGE2_QUALITY_OPTIONS.map((q) => (
+                                    <option key={q} value={q}>
+                                        {q}
+                                    </option>
+                                ))}
+                            </select>
+                            <ChevronDown className="absolute right-2 top-1/2 -translate-y-1/2 w-3 h-3 text-gray-500 pointer-events-none" />
+                        </div>
+                    </div>
+                    <div className="space-y-1">
+                        <div className="flex items-center gap-2 text-gray-400">
+                            <Monitor size={12} />
+                            <span className="text-[10px] font-bold uppercase tracking-wider">图像尺寸</span>
                         </div>
                         <div className="relative">
                             <select
                                 value={image2CoerceSizeForAspect(
-                                    data.image2AspectRatio || '1:1',
-                                    data.image2ImageSize
+                                    image2NormalizeAspectRatio(data.image2AspectRatio),
+                                    data.image2ImageSize,
+                                    image2ResolveQuality(data.image2Quality, data.image2ImageSize)
                                 )}
                                 onChange={(e) => {
                                     const sz = e.target.value;
-                                    const implied = image2AspectForSize(sz);
+                                    const q = image2ResolveQuality(data.image2Quality, data.image2ImageSize);
+                                    const implied = image2AspectForSize(sz, q);
                                     onUpdate({
                                         image2ImageSize: sz,
                                         ...(implied ? { image2AspectRatio: implied } : {}),
@@ -6207,9 +7275,32 @@ function NodeInspector({
                                 }}
                                 className="w-full bg-gray-950 border border-gray-700 hover:border-brand-500 text-gray-200 text-xs rounded px-2 py-2 pr-6 appearance-none focus:outline-none focus:ring-1 focus:ring-brand-500"
                             >
-                                {image2SizesForAspect(data.image2AspectRatio || '1:1').map((s) => (
+                                {image2SizesForAspect(
+                                    image2NormalizeAspectRatio(data.image2AspectRatio),
+                                    image2ResolveQuality(data.image2Quality, data.image2ImageSize)
+                                ).map((s) => (
                                     <option key={s} value={s}>
                                         {s}
+                                    </option>
+                                ))}
+                            </select>
+                            <ChevronDown className="absolute right-2 top-1/2 -translate-y-1/2 w-3 h-3 text-gray-500 pointer-events-none" />
+                        </div>
+                    </div>
+                    <div className="space-y-1">
+                        <div className="flex items-center gap-2 text-gray-400">
+                            <SlidersHorizontal size={12} />
+                            <span className="text-[10px] font-bold uppercase tracking-wider">画质等级</span>
+                        </div>
+                        <div className="relative">
+                            <select
+                                value={image2NormalizeQualityLevel(data.image2QualityLevel)}
+                                onChange={(e) => onUpdate({ image2QualityLevel: image2NormalizeQualityLevel(e.target.value) })}
+                                className="w-full bg-gray-950 border border-gray-700 hover:border-brand-500 text-gray-200 text-xs rounded px-2 py-2 pr-6 appearance-none focus:outline-none focus:ring-1 focus:ring-brand-500"
+                            >
+                                {IMAGE2_QUALITY_LEVEL_OPTIONS.map((lv) => (
+                                    <option key={lv} value={lv}>
+                                        {lv}
                                     </option>
                                 ))}
                             </select>
@@ -6722,6 +7813,26 @@ function NodeInspector({
                 </button>
               </div>
             </div>
+          </div>
+        </div>
+      )}
+      {promptPlainCopyMenu && (
+        <div
+          data-prompt-plain-copy-menu
+          className="fixed z-[80] animate-[fadeIn_0.12s_ease-out]"
+          style={{ left: `${promptPlainCopyMenu.x}px`, top: `${promptPlainCopyMenu.y}px` }}
+          onMouseDown={(e) => e.stopPropagation()}
+        >
+          <div className="bg-gray-900/98 backdrop-blur-xl border border-gray-700/60 rounded-lg shadow-2xl overflow-hidden min-w-[180px]">
+            <button
+              type="button"
+              onClick={() => void copyPlainPromptDescription()}
+              className="w-full text-left px-3 py-2 text-xs font-medium text-gray-100 hover:bg-brand-900/35 hover:text-white transition-colors flex items-center gap-2"
+              title="复制创意描述纯文本，自动去掉 @主图/@图片/@资产 等引用标记"
+            >
+              <Copy size={12} className="shrink-0 text-brand-300" />
+              复制描述（纯文本）
+            </button>
           </div>
         </div>
       )}

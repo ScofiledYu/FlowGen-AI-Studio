@@ -19,9 +19,11 @@ export function clearInheritedPanelMedia(patch: Partial<NodeData>): void {
   patch.imageLocalRef = undefined;
   patch.referenceImages = [];
   patch.referenceImageLabels = undefined;
+  patch.referenceImageLocalRefs = [];
   patch.referenceMovs = [];
   patch.referenceAudios = [];
   patch.panelMainSlotVisible = undefined;
+  patch.panelMainImageUrl = undefined;
 }
 
 export function snapshotFrameSlotsFromNode(data: NodeData): FrameSlotSnapshot {
@@ -50,4 +52,45 @@ export function applyFrameSlotSnapshot(
   patch.lastFrameImageLabel = snap.lastFrameImageLabel;
   patch.firstFrameLocalRef = snap.firstFrameLocalRef;
   patch.lastFrameLocalRef = snap.lastFrameLocalRef;
+}
+
+/** 切到 Nano Banana 2.0：曾保存过快照则恢复主图预览，否则保留节点当前主图 */
+export function nanoBananaMainPatchOnModelSwitch(
+  nanoConfig:
+    | {
+        imagePreview?: string;
+        imageName?: string;
+        imageLocalRef?: string;
+        panelMainImageUrl?: string;
+        panelMainSlotVisible?: boolean;
+      }
+    | undefined,
+  current: Pick<
+    NodeData,
+    'imagePreview' | 'imageName' | 'imageLocalRef' | 'panelMainImageUrl' | 'panelMainSlotVisible'
+  >
+): Partial<
+  Pick<
+    NodeData,
+    'imagePreview' | 'imageName' | 'imageLocalRef' | 'panelMainImageUrl' | 'panelMainSlotVisible'
+  >
+> {
+  if (nanoConfig && ('imagePreview' in nanoConfig || nanoConfig.imageLocalRef)) {
+    return {
+      imagePreview: nanoConfig.imagePreview,
+      imageName: nanoConfig.imageName,
+      imageLocalRef: nanoConfig.imageLocalRef,
+      panelMainImageUrl: nanoConfig.panelMainImageUrl,
+      ...(Object.prototype.hasOwnProperty.call(nanoConfig, 'panelMainSlotVisible')
+        ? { panelMainSlotVisible: nanoConfig.panelMainSlotVisible }
+        : {}),
+    };
+  }
+  return {
+    imagePreview: current.imagePreview,
+    imageName: current.imageName,
+    imageLocalRef: current.imageLocalRef,
+    panelMainImageUrl: current.panelMainImageUrl,
+    panelMainSlotVisible: current.panelMainSlotVisible,
+  };
 }

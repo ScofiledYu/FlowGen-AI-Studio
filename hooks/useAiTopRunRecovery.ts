@@ -4,6 +4,7 @@ import { getTaskStatus, uploadVideo } from '../services/aitop';
 import { ensureAitopCosVideoUrl } from '../utils/aitopCosMediaUrl';
 import {
   defaultPollConfigForModel,
+  isKnownUpstreamFailureMessage,
   isVideoModelName,
   parseAiTopTaskIds,
   pollAiTopTaskUntilResourceUrl,
@@ -13,21 +14,32 @@ import {
   applyRecoveryToOutputNode,
   buildRecoveryGraphUpdates,
   fetchCompletedAiTopTaskUrls,
-  normalizeNodeRunStateForPersist,
-  nodeNeedsAiTopTaskRecovery,
-  reconcileZombieRunningNode,
+  clearRunRecoveryHints,
+  clearStaleRunTaskBeforeFreshRun,
+  nodeHasDownstreamErrorResultForTaskIds,
+  prepareNodesAfterWorkspaceLoad,
+  shouldTriggerAiTopRunRecovery,
 } from '../utils/runRecovery';
 import { NodeType } from '../types';
+import type { NodeData } from '../types';
 
 export type UseAiTopRunRecoveryParams = {
   graphHydrationReady: boolean;
+  /** 节点 run/task 签名变化时重试恢复（避免 hydration 竞态漏启动轮询） */
+  recoveryWatchKey?: string;
   getNodes: () => RFNode[];
   getEdges: () => Edge[];
   setNodes: React.Dispatch<React.SetStateAction<RFNode[]>>;
   setEdges: React.Dispatch<React.SetStateAction<Edge[]>>;
   createNodeId: () => string;
   onPersistRequest?: () => void;
+  /** FlowEditor 正在本页轮询的节点：勿重复启动 recoverOneNode（会与 live poll 抢 setNodes） */
+  isNodeLiveRunActive?: (nodeId: string) => boolean;
 };
+
+function resolveRunNodeTaskIds(runNode: RFNode): string[] {
+  return parseAiTopTaskIds(runNode.data?.taskId || runNode.data?.generationParams?.taskId);
+}
 
 /**
  * 工程加载后：修复僵尸 running 节点，并按 taskId 向 AiTop 恢复未落盘的生成结果。
@@ -35,16 +47,19 @@ export type UseAiTopRunRecoveryParams = {
 export function useAiTopRunRecovery(params: UseAiTopRunRecoveryParams): void {
   const {
     graphHydrationReady,
+    recoveryWatchKey,
     getNodes,
     getEdges,
     setNodes,
     setEdges,
     createNodeId,
     onPersistRequest,
+    isNodeLiveRunActive,
   } = params;
 
   const recoveringRef = useRef(new Set<string>());
-  const bootRecoveryDoneRef = useRef(false);
+  /** 仅工程首次 hydration 后跑一次 prepare，避免 effect 重入时覆盖 live running 态 */
+  const postLoadPrepDoneRef = useRef(false);
 
   const recoverOneNode = useCallback(
     async (runNode: RFNode) => {
@@ -52,36 +67,110 @@ export function useAiTopRunRecovery(params: UseAiTopRunRecoveryParams): void {
       if (recoveringRef.current.has(nodeId)) return;
       recoveringRef.current.add(nodeId);
 
-      try {
-        const taskIds = parseAiTopTaskIds(
-          runNode.data?.taskId || runNode.data?.generationParams?.taskId
+      let progressTimer: ReturnType<typeof setInterval> | null = null;
+      const stopProgressTimer = () => {
+        if (progressTimer != null) {
+          clearInterval(progressTimer);
+          progressTimer = null;
+        }
+      };
+      const bumpRecoveryProgress = () => {
+        setNodes((nds) =>
+          nds.map((n) => {
+            if (n.id !== nodeId || n.data.status !== 'running') return n;
+            const prev = Number(n.data.progress || 0);
+            const next = Math.min(95, Math.max(5, prev + 1));
+            if (next === prev) return n;
+            return {
+              ...n,
+              data: { ...n.data, progress: next, runRecoveryProgress: next },
+            };
+          })
         );
-        if (!taskIds.length) return;
+      };
+
+      try {
+        const latestRunNode = getNodes().find((n) => n.id === nodeId) || runNode;
+        const taskIds = resolveRunNodeTaskIds(latestRunNode);
+        if (!taskIds.length) {
+          setNodes((nds) =>
+            nds.map((n) =>
+              n.id === nodeId
+                ? {
+                    ...n,
+                    data: clearRunRecoveryHints({
+                      ...n.data,
+                      status: 'idle',
+                      progress: 0,
+                      errorMessage: undefined,
+                    }),
+                  }
+                : n
+            )
+          );
+          return;
+        }
+
+        const graphNodes = getNodes();
+        const graphEdges = getEdges();
+        if (nodeHasDownstreamErrorResultForTaskIds(latestRunNode, graphNodes, graphEdges, taskIds)) {
+          setNodes((nds) =>
+            nds.map((n) =>
+              n.id === nodeId
+                ? {
+                    ...n,
+                    data: clearRunRecoveryHints({
+                      ...n.data,
+                      status: 'idle',
+                      progress: 0,
+                      errorMessage: undefined,
+                    }),
+                  }
+                : n
+            )
+          );
+          return;
+        }
+
+        const prevProgress = Number(
+          latestRunNode.data?.runRecoveryProgress ?? latestRunNode.data?.progress ?? 0
+        );
+        const nextProgress = Math.max(5, prevProgress > 0 ? prevProgress : 5);
+        setNodes((nds) =>
+          nds.map((n) =>
+            n.id === nodeId
+              ? {
+                  ...n,
+                  data: {
+                    ...n.data,
+                    status: 'running',
+                    progress: nextProgress,
+                    runRecoveryProgress: nextProgress,
+                    runRecoveryPending: true,
+                    errorMessage: undefined,
+                  },
+                }
+              : n
+          )
+        );
+
+        progressTimer = setInterval(bumpRecoveryProgress, 2000);
 
         const model =
-          runNode.data?.selectedModel ||
-          runNode.data?.generationParams?.model ||
+          latestRunNode.data?.selectedModel ||
+          latestRunNode.data?.generationParams?.model ||
           '';
         const pollCfg = defaultPollConfigForModel(model);
         const treatAsVideo =
           isVideoModelName(model) ||
-          runNode.type === NodeType.MOV ||
-          /\.(mov|mp4|webm)/i.test(String(runNode.data?.imageName || ''));
+          latestRunNode.type === NodeType.MOV ||
+          /\.(mov|mp4|webm)/i.test(String(latestRunNode.data?.imageName || ''));
 
         let mediaUrls: string[] =
-          (await fetchCompletedAiTopTaskUrls(taskIds, getTaskStatus)) || [];
+          (await fetchCompletedAiTopTaskUrls(taskIds, getTaskStatus, model)) || [];
 
         const needsPolling = mediaUrls.length === 0;
         const requireAitopCos = treatAsVideo;
-        if (needsPolling) {
-          setNodes((nds) =>
-            nds.map((n) =>
-              n.id === nodeId
-                ? { ...n, data: { ...n.data, status: 'running', progress: n.data.progress || 5 } }
-                : n
-            )
-          );
-        }
 
         if (needsPolling) {
           for (const taskId of taskIds) {
@@ -89,22 +178,15 @@ export function useAiTopRunRecovery(params: UseAiTopRunRecoveryParams): void {
               getTaskStatus,
               pollConfig: pollCfg,
               requireAitopCos,
+              model,
               maxConsecutiveErrors: model.includes('seedance2.0 (高质量版)') ? 18 : 10,
-              onProgress: () => {
-                setNodes((nds) =>
-                  nds.map((n) => {
-                    if (n.id !== nodeId || n.data.status !== 'running') return n;
-                    const prev = Number(n.data.progress || 0);
-                    const next = Math.min(95, prev + 1);
-                    if (next === prev) return n;
-                    return { ...n, data: { ...n.data, progress: next } };
-                  })
-                );
-              },
+              onProgress: bumpRecoveryProgress,
             });
             mediaUrls.push(rawUrl);
           }
         }
+
+        stopProgressTimer();
 
         if (treatAsVideo && mediaUrls.length > 0) {
           const stabilized: string[] = [];
@@ -125,9 +207,9 @@ export function useAiTopRunRecovery(params: UseAiTopRunRecoveryParams): void {
 
         const joined = taskIds.join(', ');
         const isOutputVideo =
-          runNode.type === NodeType.MOV ||
-          (runNode.type === NodeType.OUTPUT &&
-            /\.(mov|mp4|webm)/i.test(String(runNode.data?.imageName || '')));
+          latestRunNode.type === NodeType.MOV ||
+          (latestRunNode.type === NodeType.OUTPUT &&
+            /\.(mov|mp4|webm)/i.test(String(latestRunNode.data?.imageName || '')));
 
         if (isOutputVideo) {
           setNodes((nds) =>
@@ -147,7 +229,13 @@ export function useAiTopRunRecovery(params: UseAiTopRunRecoveryParams): void {
         }
         onPersistRequest?.();
       } catch (e) {
-        console.warn('[flowgen] AiTop task recovery failed', nodeId, e);
+        const rawMsg = e instanceof Error ? e.message : String(e);
+        const isKnownUpstreamFailure = isKnownUpstreamFailureMessage(rawMsg);
+        if (isKnownUpstreamFailure) {
+          console.info('[flowgen] AiTop task already failed upstream', nodeId, rawMsg.slice(0, 160));
+        } else {
+          console.warn('[flowgen] AiTop task recovery failed', nodeId, e);
+        }
         setNodes((nds) =>
           nds.map((n) =>
             n.id === nodeId
@@ -155,10 +243,14 @@ export function useAiTopRunRecovery(params: UseAiTopRunRecoveryParams): void {
                   ...n,
                   data: {
                     ...n.data,
-                    status: 'idle',
+                    ...clearStaleRunTaskBeforeFreshRun(n.data as NodeData),
+                    status: isKnownUpstreamFailure ? 'error' : 'idle',
                     progress: 0,
-                    errorMessage:
-                      e instanceof Error
+                    runRecoveryPending: undefined,
+                    runRecoveryProgress: undefined,
+                    errorMessage: isKnownUpstreamFailure
+                      ? rawMsg.replace(/^恢复生成结果失败：/, '')
+                      : e instanceof Error
                         ? `恢复生成结果失败：${e.message}`
                         : '恢复生成结果失败',
                   },
@@ -168,40 +260,58 @@ export function useAiTopRunRecovery(params: UseAiTopRunRecoveryParams): void {
         );
         onPersistRequest?.();
       } finally {
+        stopProgressTimer();
         recoveringRef.current.delete(nodeId);
       }
     },
     [createNodeId, getEdges, getNodes, onPersistRequest, setEdges, setNodes]
   );
 
+  const triggerPendingRecoveries = useCallback(() => {
+    const graphNodes = getNodes();
+    const graphEdges = getEdges();
+    for (const n of graphNodes) {
+      if (isNodeLiveRunActive?.(n.id)) continue;
+      if (!shouldTriggerAiTopRunRecovery(n, graphNodes, graphEdges)) continue;
+      if (recoveringRef.current.has(n.id)) continue;
+      void recoverOneNode(n);
+    }
+  }, [getEdges, getNodes, isNodeLiveRunActive, recoverOneNode]);
+
   useEffect(() => {
-    if (!graphHydrationReady || bootRecoveryDoneRef.current) return;
-    bootRecoveryDoneRef.current = true;
+    if (!graphHydrationReady) return;
+    let cancelled = false;
 
     void (async () => {
-      const rawNodes = getNodes();
-      const normalized = rawNodes.map((n) => normalizeNodeRunStateForPersist(n));
-      const normalizedChanged = normalized.some((n, i) => n !== rawNodes[i]);
-      let zombieChanged = false;
-      const afterZombie = normalized.map((n) => {
-        const patch = reconcileZombieRunningNode(n);
-        if (!patch) return n;
-        zombieChanged = true;
-        return { ...n, data: { ...n.data, ...patch } };
-      });
-      const afterMovHydrate = hydrateMovNodesFromUpstream(afterZombie, getEdges());
-      const movHydrateChanged = afterMovHydrate.some((n, i) => n !== afterZombie[i]);
-      if (zombieChanged || normalizedChanged || movHydrateChanged) {
-        setNodes(afterMovHydrate);
-        onPersistRequest?.();
+      if (!postLoadPrepDoneRef.current) {
+        postLoadPrepDoneRef.current = true;
+        const graphEdges = getEdges();
+        const graphNodes = getNodes();
+        const { nodes: prepared, changed: prepChanged } = prepareNodesAfterWorkspaceLoad(
+          graphNodes,
+          graphEdges
+        );
+        const afterMovHydrate = hydrateMovNodesFromUpstream(prepared, graphEdges);
+        const movHydrateChanged = afterMovHydrate.some((n, i) => n !== prepared[i]);
+        if (!cancelled && (prepChanged || movHydrateChanged)) {
+          setNodes(afterMovHydrate);
+          onPersistRequest?.();
+        }
       }
 
-      const graphNodes = afterMovHydrate;
-      const graphEdges = getEdges();
-      for (const n of graphNodes) {
-        if (!nodeNeedsAiTopTaskRecovery(n, graphNodes, graphEdges)) continue;
-        void recoverOneNode(n);
-      }
+      if (!cancelled) triggerPendingRecoveries();
     })();
-  }, [graphHydrationReady, getNodes, getEdges, onPersistRequest, recoverOneNode, setNodes]);
+
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    graphHydrationReady,
+    recoveryWatchKey,
+    getNodes,
+    getEdges,
+    onPersistRequest,
+    setNodes,
+    triggerPendingRecoveries,
+  ]);
 }

@@ -1,0 +1,880 @@
+{
+  "nodes": [
+    {
+      "id": "node_0_1782821064275",
+      "type": "processorNode",
+      "position": {
+        "x": 8821.21600340478,
+        "y": 16865.145518414793
+      },
+      "data": {
+        "label": "Input Picture Node",
+        "imagePreview": "blob:http://localhost:3001/807153fe-d50d-47e3-b73d-e70426351bba",
+        "imageLocalRef": "flowgen-local:a69d57e4-7ac9-4e78-8757-e5996cab184e_14:node_0_1782821064275:main",
+        "selectedModel": "image 2",
+        "imageName": "ahmetyuksek-curved-road-10072702_1920.jpg",
+        "referenceImages": [],
+        "referenceImageLabels": [],
+        "prompt": "",
+        "customName": "ep001",
+        "aspectRatio": "16:9",
+        "status": "completed",
+        "progress": 100,
+        "panelMainImageUrl": "blob:http://localhost:3001/091817cc-fb1d-49dd-a737-c1f25145cae5",
+        "taskId": "1459710",
+        "generationParams": {
+          "taskId": "1459710",
+          "generatedAt": "2026-06-30T12:06:23.379Z",
+          "prompt": "@图片1参考@图片3风格",
+          "numberOfImages": "1张",
+          "referenceImages": [
+            "https://aitop100app-1251510006.cos.ap-shanghai.myqcloud.com/openApi/212508/d4308db3-eea3-437e-a7cf-12acf2b4bbc8.png",
+            "https://aitop100app-1251510006.cos.ap-shanghai.myqcloud.com/openApi/212508/199c3f2d-faa4-4e92-8841-3506a8a1bee4.png"
+          ],
+          "model": "Nano Banana 2.0",
+          "referenceImageLabels": [
+            "图片1",
+            "",
+            "图片3"
+          ],
+          "aspectRatio": "16:9",
+          "resolution": "1K",
+          "outputUrl": "https://aitop100app-1251510006.cos.ap-shanghai.myqcloud.com/imagesGenerations/c19d6e45-af6e-4ba3-9a9f-856c50d8e744.png"
+        },
+        "generatedAt": "2026-06-30T12:06:23.379Z",
+        "modelConfigs": {
+          "Nano Banana 2.0": {
+            "prompt": "@图片1参考@图片3风格",
+            "negativePrompt": "",
+            "aspectRatio": "16:9",
+            "numberOfImages": "1张",
+            "referenceImages": [
+              "https://aitop100app-1251510006.cos.ap-shanghai.myqcloud.com/openApi/212508/d4308db3-eea3-437e-a7cf-12acf2b4bbc8.png",
+              "",
+              "https://aitop100app-1251510006.cos.ap-shanghai.myqcloud.com/openApi/212508/199c3f2d-faa4-4e92-8841-3506a8a1bee4.png"
+            ]
+          },
+          "image2": {
+            "prompt": "",
+            "negativePrompt": "",
+            "numberOfImages": "1张",
+            "imagePreview": "https://aitop100app-1251510006.cos.ap-shanghai.myqcloud.com/openApi/212508/d4308db3-eea3-437e-a7cf-12acf2b4bbc8.png",
+            "imageName": "ahmetyuksek-curved-road-10072702_1920.jpg",
+            "image2Style": "vivid",
+            "image2AspectRatio": "1:1",
+            "image2ImageSize": "1024x1024"
+          },
+          "可灵 2.5 Turbo": {
+            "prompt": "",
+            "negativePrompt": "",
+            "firstFrameImage": "https://aitop100app-1251510006.cos.ap-shanghai.myqcloud.com/openApi/212508/d4308db3-eea3-437e-a7cf-12acf2b4bbc8.png",
+            "firstFrameImageUrl": "https://aitop100app-1251510006.cos.ap-shanghai.myqcloud.com/openApi/212508/d4308db3-eea3-437e-a7cf-12acf2b4bbc8.png",
+            "quality": "高质量",
+            "duration": "5s",
+            "creativityLevel": 50,
+            "numberOfImages": "1条",
+            "aspectRatio": "16:9"
+          },
+          "可灵3.0 Omni": {
+            "prompt": "",
+            "negativePrompt": "",
+            "quality": "高质量",
+            "duration": "5s",
+            "numberOfImages": "1条",
+            "aspectRatio": "16:9",
+            "klingAudioSync": false,
+            "referenceImages": [],
+            "klingOmniMultiReferenceImages": [],
+            "klingOmniInstructionReferenceImages": [],
+            "klingOmniVideoReferenceImages": [],
+            "klingOmniMultiPrompt": "",
+            "klingOmniMultiNegativePrompt": "",
+            "klingOmniInstructionPrompt": "",
+            "klingOmniInstructionNegativePrompt": "",
+            "klingOmniVideoPrompt": "",
+            "klingOmniVideoNegativePrompt": "",
+            "klingOmniFramesPrompt": "",
+            "klingOmniFramesNegativePrompt": "",
+            "klingOmniTab": "multi"
+          },
+          "即梦3.0 Pro": {
+            "prompt": "",
+            "negativePrompt": "",
+            "jimengGenerationMode": "text",
+            "jimengProfessionalMode": false,
+            "jimengResolution": "1080p",
+            "jimengVideoRatio": "自动匹配",
+            "duration": "5s",
+            "numberOfImages": "1条",
+            "firstFrameImage": "https://aitop100app-1251510006.cos.ap-shanghai.myqcloud.com/openApi/212508/d4308db3-eea3-437e-a7cf-12acf2b4bbc8.png",
+            "firstFrameImageUrl": "https://aitop100app-1251510006.cos.ap-shanghai.myqcloud.com/openApi/212508/d4308db3-eea3-437e-a7cf-12acf2b4bbc8.png",
+            "jimengImages": []
+          },
+          "vidu 2.0": {
+            "prompt": "",
+            "negativePrompt": "",
+            "firstFrameImage": "https://aitop100app-1251510006.cos.ap-shanghai.myqcloud.com/openApi/212508/d4308db3-eea3-437e-a7cf-12acf2b4bbc8.png",
+            "firstFrameImageUrl": "https://aitop100app-1251510006.cos.ap-shanghai.myqcloud.com/openApi/212508/d4308db3-eea3-437e-a7cf-12acf2b4bbc8.png",
+            "viduDuration": "4s",
+            "viduClarity": "1080p",
+            "viduMotionRange": "自动",
+            "aspectRatio": "16:9",
+            "numberOfImages": "1条"
+          },
+          "seedance1.5-pro": {
+            "prompt": "",
+            "negativePrompt": "",
+            "firstFrameImage": "https://aitop100app-1251510006.cos.ap-shanghai.myqcloud.com/openApi/212508/d4308db3-eea3-437e-a7cf-12acf2b4bbc8.png",
+            "firstFrameImageUrl": "https://aitop100app-1251510006.cos.ap-shanghai.myqcloud.com/openApi/212508/d4308db3-eea3-437e-a7cf-12acf2b4bbc8.png",
+            "numberOfImages": "1条",
+            "seedanceResolution": "480p",
+            "seedanceAspectRatio": "自动匹配",
+            "seedanceDuration": "5s",
+            "seedanceGenerateAudio": false,
+            "seedanceFixedCamera": false,
+            "seedanceGenerationMode": "image",
+            "seedanceReferenceRatioMode": "force",
+            "seedanceReferenceWebSearch": false,
+            "seedanceTabConfigs": {},
+            "referenceImages": [],
+            "referenceMovs": [],
+            "referenceAudios": []
+          },
+          "seedance2.0 (高质量版)": {
+            "prompt": "",
+            "negativePrompt": "",
+            "numberOfImages": "1条",
+            "seedanceResolution": "1080p",
+            "seedanceAspectRatio": "16:9",
+            "seedanceDuration": "5s",
+            "seedanceGenerateAudio": false,
+            "seedanceFixedCamera": false,
+            "seedanceGenerationMode": "reference",
+            "seedanceReferenceRatioMode": "force",
+            "seedanceReferenceWebSearch": false,
+            "seedanceTabConfigs": {
+              "text": {
+                "prompt": "",
+                "negativePrompt": ""
+              },
+              "image": {
+                "prompt": "",
+                "negativePrompt": "",
+                "firstFrameImage": "https://aitop100app-1251510006.cos.ap-shanghai.myqcloud.com/openApi/212508/d4308db3-eea3-437e-a7cf-12acf2b4bbc8.png",
+                "firstFrameImageUrl": "https://aitop100app-1251510006.cos.ap-shanghai.myqcloud.com/openApi/212508/d4308db3-eea3-437e-a7cf-12acf2b4bbc8.png"
+              }
+            },
+            "referenceImages": [],
+            "referenceMovs": [],
+            "referenceAudios": []
+          },
+          "seedance2.0 (急速版)": {
+            "prompt": "",
+            "negativePrompt": "",
+            "numberOfImages": "1条",
+            "seedanceResolution": "720p",
+            "seedanceAspectRatio": "16:9",
+            "seedanceDuration": "5s",
+            "seedanceGenerateAudio": false,
+            "seedanceFixedCamera": false,
+            "seedanceGenerationMode": "reference",
+            "seedanceReferenceRatioMode": "force",
+            "seedanceReferenceWebSearch": false,
+            "seedanceTabConfigs": {
+              "text": {
+                "prompt": "",
+                "negativePrompt": ""
+              },
+              "image": {
+                "prompt": "",
+                "negativePrompt": "",
+                "firstFrameImage": "https://aitop100app-1251510006.cos.ap-shanghai.myqcloud.com/openApi/212508/d4308db3-eea3-437e-a7cf-12acf2b4bbc8.png",
+                "firstFrameImageUrl": "https://aitop100app-1251510006.cos.ap-shanghai.myqcloud.com/openApi/212508/d4308db3-eea3-437e-a7cf-12acf2b4bbc8.png"
+              }
+            },
+            "referenceImages": [],
+            "referenceMovs": [],
+            "referenceAudios": []
+          }
+        },
+        "generatedThumbnails": [
+          {
+            "id": "node_2_1782821183381",
+            "url": "https://aitop100app-1251510006.cos.ap-shanghai.myqcloud.com/imagesGenerations/c19d6e45-af6e-4ba3-9a9f-856c50d8e744.png",
+            "type": "image",
+            "nodeId": "node_2_1782821183381",
+            "name": "ep001",
+            "generationParams": {
+              "generatedAt": "2026-06-30T12:06:23.379Z",
+              "taskId": "1459710",
+              "prompt": "@图片1参考@图片3风格",
+              "numberOfImages": "1张",
+              "referenceImages": [
+                "https://aitop100app-1251510006.cos.ap-shanghai.myqcloud.com/openApi/212508/d4308db3-eea3-437e-a7cf-12acf2b4bbc8.png",
+                "https://aitop100app-1251510006.cos.ap-shanghai.myqcloud.com/openApi/212508/199c3f2d-faa4-4e92-8841-3506a8a1bee4.png"
+              ],
+              "model": "Nano Banana 2.0",
+              "referenceImageLabels": [
+                "图片1",
+                "",
+                "图片3"
+              ],
+              "aspectRatio": "16:9",
+              "resolution": "1K",
+              "outputUrl": "https://aitop100app-1251510006.cos.ap-shanghai.myqcloud.com/imagesGenerations/c19d6e45-af6e-4ba3-9a9f-856c50d8e744.png"
+            }
+          }
+        ],
+        "negativePrompt": "",
+        "numberOfImages": "1张",
+        "image2AspectRatio": "1:1",
+        "image2ImageSize": "1024x1024",
+        "image2Style": "vivid",
+        "klingOmniTab": "multi",
+        "klingOmniMultiPrompt": "",
+        "klingOmniMultiNegativePrompt": "",
+        "klingOmniInstructionPrompt": "",
+        "klingOmniInstructionNegativePrompt": "",
+        "klingOmniVideoPrompt": "",
+        "klingOmniVideoNegativePrompt": "",
+        "klingOmniFramesPrompt": "",
+        "klingOmniFramesNegativePrompt": "",
+        "klingOmniMultiReferenceImages": [],
+        "klingOmniInstructionReferenceImages": [],
+        "klingOmniVideoReferenceImages": [],
+        "jimengGenerationMode": "text",
+        "jimengProfessionalMode": false,
+        "seedanceResolution": "720p",
+        "seedanceAspectRatio": "16:9",
+        "seedanceDuration": "5s",
+        "seedanceGenerateAudio": false,
+        "seedanceFixedCamera": false,
+        "seedanceReferenceRatioMode": "force",
+        "seedanceReferenceWebSearch": false,
+        "seedanceGenerationMode": "reference",
+        "seedanceTabConfigs": {
+          "text": {
+            "prompt": "",
+            "negativePrompt": ""
+          },
+          "image": {
+            "prompt": "",
+            "negativePrompt": "",
+            "firstFrameImage": "https://aitop100app-1251510006.cos.ap-shanghai.myqcloud.com/openApi/212508/d4308db3-eea3-437e-a7cf-12acf2b4bbc8.png",
+            "firstFrameImageUrl": "https://aitop100app-1251510006.cos.ap-shanghai.myqcloud.com/openApi/212508/d4308db3-eea3-437e-a7cf-12acf2b4bbc8.png"
+          }
+        },
+        "referenceMovs": [],
+        "referenceAudios": []
+      }
+    },
+    {
+      "id": "node_1_1782821131949",
+      "type": "processorNode",
+      "position": {
+        "x": 8797.93861833566,
+        "y": 17350.366245495494
+      },
+      "data": {
+        "label": "Input Picture Node",
+        "imagePreview": "blob:http://localhost:3001/a0c69b76-c0a7-418e-b4cd-3055e05b7d08",
+        "imageLocalRef": "flowgen-local:a69d57e4-7ac9-4e78-8757-e5996cab184e_14:node_1_1782821131949:main",
+        "selectedModel": "可灵3.0 Omni",
+        "imageName": "strandkind_muecke-woods-7661735_1920.jpg",
+        "modelConfigs": {
+          "Nano Banana 2.0": {},
+          "image2": {
+            "prompt": "@图片1参考@图片3风格",
+            "negativePrompt": "",
+            "numberOfImages": "1张",
+            "referenceImages": [
+              "https://aitop100app-1251510006.cos.ap-shanghai.myqcloud.com/openApi/212508/bb0c3dba-fbd1-4af3-84d2-a61a81debf24.png",
+              "https://aitop100app-1251510006.cos.ap-shanghai.myqcloud.com/openApi/212508/542f335f-21db-44d7-968a-6532f020b3ee.png"
+            ],
+            "referenceImageLabels": [
+              "图片1",
+              "图片3"
+            ],
+            "imagePreview": "https://aitop100app-1251510006.cos.ap-shanghai.myqcloud.com/openApi/212508/bb0c3dba-fbd1-4af3-84d2-a61a81debf24.png",
+            "imageName": "strandkind_muecke-woods-7661735_1920.jpg",
+            "image2Style": "natural",
+            "image2AspectRatio": "16:9",
+            "image2ImageSize": "2048x1152"
+          }
+        },
+        "prompt": "",
+        "negativePrompt": "",
+        "numberOfImages": "1条",
+        "referenceImages": [],
+        "quality": "高质量",
+        "duration": "5s",
+        "status": "completed",
+        "progress": 100,
+        "panelMainImageUrl": "blob:http://localhost:3001/28270d06-c28a-4991-97ca-43fd851de6ce",
+        "taskId": "1459715",
+        "generationParams": {
+          "taskId": "1459715",
+          "generatedAt": "2026-06-30T12:07:19.182Z",
+          "prompt": "@图片1参考@图片3风格",
+          "negativePrompt": "",
+          "numberOfImages": "1张",
+          "referenceImages": [
+            "https://aitop100app-1251510006.cos.ap-shanghai.myqcloud.com/openApi/212508/bb0c3dba-fbd1-4af3-84d2-a61a81debf24.png",
+            "https://aitop100app-1251510006.cos.ap-shanghai.myqcloud.com/openApi/212508/542f335f-21db-44d7-968a-6532f020b3ee.png"
+          ],
+          "model": "image 2",
+          "image2AspectRatio": "16:9",
+          "image2ImageSize": "2048x1152",
+          "image2Style": "natural",
+          "referenceImageLabels": [
+            "图片1",
+            "",
+            "图片3"
+          ],
+          "aspectRatio": "16:9",
+          "resolution": "2048x1152",
+          "outputUrl": "https://aitop100app-1251510006.cos.ap-shanghai.myqcloud.com/imagesGenerations/b25c9021-51e2-41d9-ad99-fe4b384b9804.png"
+        },
+        "generatedAt": "2026-06-30T12:07:19.182Z",
+        "generatedThumbnails": [
+          {
+            "id": "node_3_1782821239183",
+            "url": "https://aitop100app-1251510006.cos.ap-shanghai.myqcloud.com/imagesGenerations/b25c9021-51e2-41d9-ad99-fe4b384b9804.png",
+            "type": "image",
+            "nodeId": "node_3_1782821239183",
+            "name": "Generated_504.png",
+            "generationParams": {
+              "generatedAt": "2026-06-30T12:07:19.182Z",
+              "taskId": "1459715",
+              "prompt": "@图片1参考@图片3风格",
+              "negativePrompt": "",
+              "numberOfImages": "1张",
+              "referenceImages": [
+                "https://aitop100app-1251510006.cos.ap-shanghai.myqcloud.com/openApi/212508/bb0c3dba-fbd1-4af3-84d2-a61a81debf24.png",
+                "https://aitop100app-1251510006.cos.ap-shanghai.myqcloud.com/openApi/212508/542f335f-21db-44d7-968a-6532f020b3ee.png"
+              ],
+              "model": "image 2",
+              "image2AspectRatio": "16:9",
+              "image2ImageSize": "2048x1152",
+              "image2Style": "natural",
+              "referenceImageLabels": [
+                "图片1",
+                "",
+                "图片3"
+              ],
+              "aspectRatio": "16:9",
+              "resolution": "2048x1152",
+              "outputUrl": "https://aitop100app-1251510006.cos.ap-shanghai.myqcloud.com/imagesGenerations/b25c9021-51e2-41d9-ad99-fe4b384b9804.png"
+            }
+          }
+        ],
+        "aspectRatio": "16:9",
+        "klingAudioSync": false,
+        "klingOmniTab": "multi",
+        "klingOmniMultiPrompt": "",
+        "klingOmniMultiNegativePrompt": "",
+        "klingOmniInstructionPrompt": "",
+        "klingOmniInstructionNegativePrompt": "",
+        "klingOmniVideoPrompt": "",
+        "klingOmniVideoNegativePrompt": "",
+        "klingOmniFramesPrompt": "",
+        "klingOmniFramesNegativePrompt": "",
+        "klingOmniMultiReferenceImages": [],
+        "klingOmniInstructionReferenceImages": [],
+        "klingOmniVideoReferenceImages": []
+      }
+    },
+    {
+      "id": "node_2_1782821183381",
+      "type": "outputNode",
+      "position": {
+        "x": 9277.889708352972,
+        "y": 16915.865097997077
+      },
+      "data": {
+        "status": "completed",
+        "progress": 100,
+        "generatedThumbnails": [
+          {
+            "id": "node_6_1782821444992",
+            "url": "https://aitop100app-1251510006.cos.ap-shanghai.myqcloud.com/videosGenerations/videosGenerations/bcb1e122-c525-41b9-a78c-a2ab9a5cfa50.mp4",
+            "type": "video",
+            "nodeId": "node_6_1782821444992",
+            "name": "ep001",
+            "generationParams": {
+              "generatedAt": "2026-06-30T12:10:44.988Z",
+              "taskId": "1459723",
+              "prompt": "@首帧图与@尾帧图生成视频",
+              "negativePrompt": "",
+              "numberOfImages": "1条",
+              "referenceImages": [
+                "https://aitop100app-1251510006.cos.ap-shanghai.myqcloud.com/openApi/212508/b78ba8b1-b199-4264-91fd-6b42fadad61f.png",
+                "https://aitop100app-1251510006.cos.ap-shanghai.myqcloud.com/openApi/212508/59a8cff2-bda7-4f2e-81dd-b4fe0fcfd53f.png"
+              ],
+              "model": "seedance2.0 (急速版)",
+              "seedanceResolution": "480p",
+              "seedanceAspectRatio": "16:9",
+              "seedanceDuration": "5s",
+              "seedanceGenerateAudio": false,
+              "seedanceGenerationMode": "image",
+              "seedanceReferenceRatioMode": "force",
+              "seedanceReferenceWebSearch": false,
+              "firstFrameImage": "https://aitop100app-1251510006.cos.ap-shanghai.myqcloud.com/openApi/212508/b78ba8b1-b199-4264-91fd-6b42fadad61f.png",
+              "lastFrameImage": "https://aitop100app-1251510006.cos.ap-shanghai.myqcloud.com/openApi/212508/59a8cff2-bda7-4f2e-81dd-b4fe0fcfd53f.png",
+              "firstFrameImageUrl": "https://aitop100app-1251510006.cos.ap-shanghai.myqcloud.com/openApi/212508/b78ba8b1-b199-4264-91fd-6b42fadad61f.png",
+              "lastFrameImageUrl": "https://aitop100app-1251510006.cos.ap-shanghai.myqcloud.com/openApi/212508/59a8cff2-bda7-4f2e-81dd-b4fe0fcfd53f.png",
+              "outputUrl": "https://aitop100app-1251510006.cos.ap-shanghai.myqcloud.com/videosGenerations/videosGenerations/bcb1e122-c525-41b9-a78c-a2ab9a5cfa50.mp4"
+            },
+            "posterDataUrl": "/flowgen-api/projects/14/node-media/56167292-272c-46c8-b68e-4f26fc7dee34.jpg/file"
+          }
+        ],
+        "customName": "ep001",
+        "generationParams": {
+          "generatedAt": "2026-06-30T12:10:44.988Z",
+          "taskId": "1459723",
+          "prompt": "@首帧图与@尾帧图生成视频",
+          "numberOfImages": "1条",
+          "referenceImages": [
+            "https://aitop100app-1251510006.cos.ap-shanghai.myqcloud.com/openApi/212508/b78ba8b1-b199-4264-91fd-6b42fadad61f.png",
+            "https://aitop100app-1251510006.cos.ap-shanghai.myqcloud.com/openApi/212508/59a8cff2-bda7-4f2e-81dd-b4fe0fcfd53f.png"
+          ],
+          "model": "seedance2.0 (急速版)",
+          "referenceImageLabels": [
+            "图片1",
+            "",
+            "图片3"
+          ],
+          "aspectRatio": "16:9",
+          "resolution": "1K",
+          "outputUrl": "https://aitop100app-1251510006.cos.ap-shanghai.myqcloud.com/videosGenerations/videosGenerations/bcb1e122-c525-41b9-a78c-a2ab9a5cfa50.mp4",
+          "negativePrompt": "",
+          "seedanceResolution": "480p",
+          "seedanceAspectRatio": "16:9",
+          "seedanceDuration": "5s",
+          "seedanceGenerateAudio": false,
+          "seedanceGenerationMode": "image",
+          "seedanceReferenceRatioMode": "force",
+          "seedanceReferenceWebSearch": false,
+          "firstFrameImage": "https://aitop100app-1251510006.cos.ap-shanghai.myqcloud.com/openApi/212508/b78ba8b1-b199-4264-91fd-6b42fadad61f.png",
+          "lastFrameImage": "https://aitop100app-1251510006.cos.ap-shanghai.myqcloud.com/openApi/212508/59a8cff2-bda7-4f2e-81dd-b4fe0fcfd53f.png",
+          "firstFrameImageUrl": "https://aitop100app-1251510006.cos.ap-shanghai.myqcloud.com/openApi/212508/b78ba8b1-b199-4264-91fd-6b42fadad61f.png",
+          "lastFrameImageUrl": "https://aitop100app-1251510006.cos.ap-shanghai.myqcloud.com/openApi/212508/59a8cff2-bda7-4f2e-81dd-b4fe0fcfd53f.png"
+        },
+        "label": "ep001",
+        "imagePreview": "https://aitop100app-1251510006.cos.ap-shanghai.myqcloud.com/openApi/212508/b78ba8b1-b199-4264-91fd-6b42fadad61f.png",
+        "selectedModel": "seedance2.0 (急速版)",
+        "generatedAt": "2026-06-30T12:10:44.988Z",
+        "imageName": "ep001.png",
+        "taskId": "1459723",
+        "prompt": "@首帧图与@尾帧图生成视频",
+        "negativePrompt": "",
+        "numberOfImages": "1条",
+        "resolution": "1K",
+        "referenceImages": [],
+        "firstFrameImage": "https://aitop100app-1251510006.cos.ap-shanghai.myqcloud.com/openApi/212508/b78ba8b1-b199-4264-91fd-6b42fadad61f.png",
+        "firstFrameImageUrl": "https://aitop100app-1251510006.cos.ap-shanghai.myqcloud.com/openApi/212508/b78ba8b1-b199-4264-91fd-6b42fadad61f.png",
+        "lastFrameImage": "https://aitop100app-1251510006.cos.ap-shanghai.myqcloud.com/openApi/212508/59a8cff2-bda7-4f2e-81dd-b4fe0fcfd53f.png",
+        "lastFrameImageUrl": "https://aitop100app-1251510006.cos.ap-shanghai.myqcloud.com/openApi/212508/59a8cff2-bda7-4f2e-81dd-b4fe0fcfd53f.png",
+        "referenceMovs": [],
+        "referenceAudios": [],
+        "modelConfigs": {
+          "可灵 2.5 Turbo": {
+            "numberOfImages": "1张",
+            "aspectRatio": "16:9"
+          },
+          "seedance2.0 (急速版)": {
+            "prompt": "@首帧图与@尾帧图生成视频",
+            "negativePrompt": "",
+            "firstFrameImage": "https://aitop100app-1251510006.cos.ap-shanghai.myqcloud.com/openApi/212508/b78ba8b1-b199-4264-91fd-6b42fadad61f.png",
+            "lastFrameImage": "https://aitop100app-1251510006.cos.ap-shanghai.myqcloud.com/openApi/212508/59a8cff2-bda7-4f2e-81dd-b4fe0fcfd53f.png",
+            "firstFrameImageUrl": "https://aitop100app-1251510006.cos.ap-shanghai.myqcloud.com/openApi/212508/b78ba8b1-b199-4264-91fd-6b42fadad61f.png",
+            "lastFrameImageUrl": "https://aitop100app-1251510006.cos.ap-shanghai.myqcloud.com/openApi/212508/59a8cff2-bda7-4f2e-81dd-b4fe0fcfd53f.png",
+            "numberOfImages": "1条",
+            "seedanceResolution": "480p",
+            "seedanceAspectRatio": "16:9",
+            "seedanceDuration": "5s",
+            "seedanceGenerateAudio": false,
+            "seedanceFixedCamera": false,
+            "seedanceGenerationMode": "image",
+            "seedanceReferenceRatioMode": "force",
+            "seedanceReferenceWebSearch": false,
+            "seedanceTabConfigs": {
+              "text": {
+                "prompt": "",
+                "negativePrompt": ""
+              },
+              "image": {
+                "prompt": "@首帧图与@尾帧图生成视频",
+                "negativePrompt": "",
+                "lastFrameImage": "https://aitop100app-1251510006.cos.ap-shanghai.myqcloud.com/openApi/212508/59a8cff2-bda7-4f2e-81dd-b4fe0fcfd53f.png",
+                "lastFrameImageUrl": "https://aitop100app-1251510006.cos.ap-shanghai.myqcloud.com/openApi/212508/59a8cff2-bda7-4f2e-81dd-b4fe0fcfd53f.png",
+                "firstFrameImageUrl": "https://aitop100app-1251510006.cos.ap-shanghai.myqcloud.com/openApi/212508/b78ba8b1-b199-4264-91fd-6b42fadad61f.png",
+                "firstFrameImage": "https://aitop100app-1251510006.cos.ap-shanghai.myqcloud.com/openApi/212508/b78ba8b1-b199-4264-91fd-6b42fadad61f.png"
+              }
+            },
+            "referenceImages": [],
+            "referenceMovs": [],
+            "referenceAudios": []
+          }
+        },
+        "seedanceResolution": "480p",
+        "seedanceAspectRatio": "16:9",
+        "seedanceDuration": "5s",
+        "seedanceGenerateAudio": false,
+        "seedanceFixedCamera": false,
+        "seedanceReferenceRatioMode": "force",
+        "seedanceReferenceWebSearch": false,
+        "seedanceGenerationMode": "image",
+        "seedanceTabConfigs": {
+          "text": {
+            "prompt": "",
+            "negativePrompt": ""
+          },
+          "image": {
+            "prompt": "@首帧图与@尾帧图生成视频",
+            "negativePrompt": "",
+            "lastFrameImage": "https://aitop100app-1251510006.cos.ap-shanghai.myqcloud.com/openApi/212508/59a8cff2-bda7-4f2e-81dd-b4fe0fcfd53f.png",
+            "lastFrameImageUrl": "https://aitop100app-1251510006.cos.ap-shanghai.myqcloud.com/openApi/212508/59a8cff2-bda7-4f2e-81dd-b4fe0fcfd53f.png",
+            "firstFrameImageUrl": "https://aitop100app-1251510006.cos.ap-shanghai.myqcloud.com/openApi/212508/b78ba8b1-b199-4264-91fd-6b42fadad61f.png",
+            "firstFrameImage": "https://aitop100app-1251510006.cos.ap-shanghai.myqcloud.com/openApi/212508/b78ba8b1-b199-4264-91fd-6b42fadad61f.png"
+          }
+        },
+        "panelMainSlotVisible": false
+      }
+    },
+    {
+      "id": "node_3_1782821239183",
+      "type": "outputNode",
+      "position": {
+        "x": 9211.736308305832,
+        "y": 17362.83276068716
+      },
+      "data": {
+        "numberOfImages": "1条",
+        "status": "completed",
+        "progress": 100,
+        "generatedThumbnails": [
+          {
+            "id": "node_5_1782821407367",
+            "url": "https://aitop100app-1251510006.cos.ap-shanghai.myqcloud.com/videosGenerations/videosGenerations/ed7c0b61-1fd4-490b-9007-d45377e237e4.mp4",
+            "type": "video",
+            "nodeId": "node_5_1782821407367",
+            "name": "Video_494.mov",
+            "generationParams": {
+              "generatedAt": "2026-06-30T12:10:07.362Z",
+              "taskId": "1459734",
+              "prompt": "@主图与@图片3大战",
+              "negativePrompt": "",
+              "numberOfImages": "1条",
+              "referenceImages": [
+                "https://aitop100app-1251510006.cos.ap-shanghai.myqcloud.com/openApi/212508/1d0e15b3-784f-44b6-aded-8db02cfbb36a.png",
+                "https://aitop100app-1251510006.cos.ap-shanghai.myqcloud.com/openApi/212508/ce399826-5cd4-4286-bf71-d4b17418ca87.png"
+              ],
+              "model": "seedance2.0 (急速版)",
+              "referenceImageLabels": [
+                "主图",
+                "图片3"
+              ],
+              "seedanceResolution": "480p",
+              "seedanceAspectRatio": "16:9",
+              "seedanceDuration": "5s",
+              "seedanceGenerateAudio": false,
+              "seedanceGenerationMode": "reference",
+              "seedanceReferenceRatioMode": "force",
+              "seedanceReferenceWebSearch": false,
+              "outputUrl": "https://aitop100app-1251510006.cos.ap-shanghai.myqcloud.com/videosGenerations/videosGenerations/ed7c0b61-1fd4-490b-9007-d45377e237e4.mp4"
+            },
+            "posterDataUrl": "/flowgen-api/projects/14/node-media/1740d8de-5d12-4872-a0be-5f9ee45203d0.jpg/file"
+          }
+        ],
+        "generationParams": {
+          "generatedAt": "2026-06-30T12:10:07.362Z",
+          "taskId": "1459734",
+          "prompt": "@主图与@图片3大战",
+          "negativePrompt": "",
+          "numberOfImages": "1条",
+          "referenceImages": [
+            "https://aitop100app-1251510006.cos.ap-shanghai.myqcloud.com/openApi/212508/1d0e15b3-784f-44b6-aded-8db02cfbb36a.png",
+            "https://aitop100app-1251510006.cos.ap-shanghai.myqcloud.com/openApi/212508/ce399826-5cd4-4286-bf71-d4b17418ca87.png"
+          ],
+          "model": "seedance2.0 (急速版)",
+          "image2AspectRatio": "16:9",
+          "image2ImageSize": "2048x1152",
+          "image2Style": "natural",
+          "referenceImageLabels": [
+            "主图",
+            "图片3"
+          ],
+          "aspectRatio": "16:9",
+          "resolution": "2048x1152",
+          "outputUrl": "https://aitop100app-1251510006.cos.ap-shanghai.myqcloud.com/videosGenerations/videosGenerations/ed7c0b61-1fd4-490b-9007-d45377e237e4.mp4",
+          "seedanceResolution": "480p",
+          "seedanceAspectRatio": "16:9",
+          "seedanceDuration": "5s",
+          "seedanceGenerateAudio": false,
+          "seedanceGenerationMode": "reference",
+          "seedanceReferenceRatioMode": "force",
+          "seedanceReferenceWebSearch": false
+        },
+        "label": "Output Picture Node",
+        "imagePreview": "https://aitop100app-1251510006.cos.ap-shanghai.myqcloud.com/imagesGenerations/b25c9021-51e2-41d9-ad99-fe4b384b9804.png",
+        "selectedModel": "seedance2.0 (急速版)",
+        "generatedAt": "2026-06-30T12:10:07.362Z",
+        "imageName": "Generated_504.png",
+        "taskId": "1459734",
+        "prompt": "@主图与@图片3大战",
+        "negativePrompt": "",
+        "resolution": "2048x1152",
+        "referenceImages": [
+          "",
+          "",
+          "https://aitop100app-1251510006.cos.ap-shanghai.myqcloud.com/openApi/212508/ce399826-5cd4-4286-bf71-d4b17418ca87.png"
+        ],
+        "referenceImageLabels": [
+          "",
+          "",
+          "图片3"
+        ],
+        "referenceMovs": [],
+        "referenceAudios": [],
+        "modelConfigs": {
+          "image2": {
+            "numberOfImages": "1张",
+            "imagePreview": "https://aitop100app-1251510006.cos.ap-shanghai.myqcloud.com/imagesGenerations/b25c9021-51e2-41d9-ad99-fe4b384b9804.png",
+            "imageName": "Generated_504.png",
+            "image2Style": "natural",
+            "image2AspectRatio": "16:9",
+            "image2ImageSize": "2048x1152"
+          },
+          "seedance2.0 (急速版)": {
+            "prompt": "@主图与@图片3大战",
+            "negativePrompt": "",
+            "numberOfImages": "1条",
+            "seedanceResolution": "480p",
+            "seedanceAspectRatio": "16:9",
+            "seedanceDuration": "5s",
+            "seedanceGenerateAudio": false,
+            "seedanceFixedCamera": false,
+            "seedanceGenerationMode": "reference",
+            "seedanceReferenceRatioMode": "force",
+            "seedanceReferenceWebSearch": false,
+            "seedanceTabConfigs": {
+              "text": {
+                "prompt": "",
+                "negativePrompt": ""
+              },
+              "reference": {
+                "prompt": "@主图与@图片3大战",
+                "referenceImages": [
+                  "",
+                  "",
+                  "https://aitop100app-1251510006.cos.ap-shanghai.myqcloud.com/openApi/212508/ce399826-5cd4-4286-bf71-d4b17418ca87.png"
+                ],
+                "referenceImageLabels": [
+                  "",
+                  "",
+                  "图片3"
+                ],
+                "referenceMovs": [],
+                "referenceAudios": []
+              }
+            },
+            "referenceImages": [
+              "",
+              "",
+              "https://aitop100app-1251510006.cos.ap-shanghai.myqcloud.com/openApi/212508/ce399826-5cd4-4286-bf71-d4b17418ca87.png"
+            ],
+            "referenceMovs": [],
+            "referenceAudios": []
+          }
+        },
+        "seedanceResolution": "480p",
+        "seedanceAspectRatio": "16:9",
+        "seedanceDuration": "5s",
+        "seedanceGenerateAudio": false,
+        "seedanceFixedCamera": false,
+        "seedanceReferenceRatioMode": "force",
+        "seedanceReferenceWebSearch": false,
+        "seedanceGenerationMode": "reference",
+        "seedanceTabConfigs": {
+          "text": {
+            "prompt": "",
+            "negativePrompt": ""
+          },
+          "reference": {
+            "prompt": "@主图与@图片3大战",
+            "referenceImages": [
+              "",
+              "",
+              "https://aitop100app-1251510006.cos.ap-shanghai.myqcloud.com/openApi/212508/ce399826-5cd4-4286-bf71-d4b17418ca87.png"
+            ],
+            "referenceImageLabels": [
+              "",
+              "",
+              "图片3"
+            ],
+            "referenceMovs": [],
+            "referenceAudios": []
+          }
+        }
+      }
+    },
+    {
+      "id": "node_5_1782821407367",
+      "type": "movNode",
+      "position": {
+        "x": 9622.425398228926,
+        "y": 17393.16226912054
+      },
+      "data": {
+        "resolution": "2048x1152",
+        "numberOfImages": "1条",
+        "seedanceResolution": "480p",
+        "seedanceAspectRatio": "16:9",
+        "seedanceDuration": "5s",
+        "seedanceGenerateAudio": false,
+        "seedanceFixedCamera": false,
+        "seedanceGenerationMode": "reference",
+        "seedanceReferenceRatioMode": "force",
+        "seedanceReferenceWebSearch": false,
+        "status": "idle",
+        "progress": 0,
+        "generationParams": {
+          "generatedAt": "2026-06-30T12:10:07.362Z",
+          "taskId": "1459734",
+          "prompt": "@主图与@图片3大战",
+          "negativePrompt": "",
+          "numberOfImages": "1条",
+          "referenceImages": [
+            "https://aitop100app-1251510006.cos.ap-shanghai.myqcloud.com/openApi/212508/1d0e15b3-784f-44b6-aded-8db02cfbb36a.png",
+            "https://aitop100app-1251510006.cos.ap-shanghai.myqcloud.com/openApi/212508/ce399826-5cd4-4286-bf71-d4b17418ca87.png"
+          ],
+          "model": "seedance2.0 (急速版)",
+          "referenceImageLabels": [
+            "主图",
+            "图片3"
+          ],
+          "seedanceResolution": "480p",
+          "seedanceAspectRatio": "16:9",
+          "seedanceDuration": "5s",
+          "seedanceGenerateAudio": false,
+          "seedanceGenerationMode": "reference",
+          "seedanceReferenceRatioMode": "force",
+          "seedanceReferenceWebSearch": false,
+          "outputUrl": "https://aitop100app-1251510006.cos.ap-shanghai.myqcloud.com/videosGenerations/videosGenerations/ed7c0b61-1fd4-490b-9007-d45377e237e4.mp4"
+        },
+        "label": "Output Mov Node",
+        "imagePreview": "https://aitop100app-1251510006.cos.ap-shanghai.myqcloud.com/videosGenerations/videosGenerations/ed7c0b61-1fd4-490b-9007-d45377e237e4.mp4",
+        "selectedModel": "seedance2.0 (急速版)",
+        "generatedAt": "2026-06-30T12:10:07.362Z",
+        "imageName": "Video_494.mov",
+        "taskId": "1459734",
+        "referenceMovs": [
+          {
+            "url": "https://aitop100app-1251510006.cos.ap-shanghai.myqcloud.com/videosGenerations/videosGenerations/ed7c0b61-1fd4-490b-9007-d45377e237e4.mp4"
+          }
+        ],
+        "videoPosterDataUrl": "/flowgen-api/projects/14/node-media/1740d8de-5d12-4872-a0be-5f9ee45203d0.jpg/file"
+      }
+    },
+    {
+      "id": "node_6_1782821444992",
+      "type": "movNode",
+      "position": {
+        "x": 9644.16049935701,
+        "y": 16959.9023181269
+      },
+      "data": {
+        "resolution": "1K",
+        "numberOfImages": "1条",
+        "seedanceResolution": "480p",
+        "seedanceAspectRatio": "16:9",
+        "seedanceDuration": "5s",
+        "seedanceGenerateAudio": false,
+        "seedanceFixedCamera": false,
+        "seedanceGenerationMode": "image",
+        "seedanceReferenceRatioMode": "force",
+        "seedanceReferenceWebSearch": false,
+        "status": "idle",
+        "progress": 0,
+        "customName": "ep001",
+        "generationParams": {
+          "generatedAt": "2026-06-30T12:10:44.988Z",
+          "taskId": "1459723",
+          "prompt": "@首帧图与@尾帧图生成视频",
+          "negativePrompt": "",
+          "numberOfImages": "1条",
+          "referenceImages": [
+            "https://aitop100app-1251510006.cos.ap-shanghai.myqcloud.com/openApi/212508/b78ba8b1-b199-4264-91fd-6b42fadad61f.png",
+            "https://aitop100app-1251510006.cos.ap-shanghai.myqcloud.com/openApi/212508/59a8cff2-bda7-4f2e-81dd-b4fe0fcfd53f.png"
+          ],
+          "model": "seedance2.0 (急速版)",
+          "seedanceResolution": "480p",
+          "seedanceAspectRatio": "16:9",
+          "seedanceDuration": "5s",
+          "seedanceGenerateAudio": false,
+          "seedanceGenerationMode": "image",
+          "seedanceReferenceRatioMode": "force",
+          "seedanceReferenceWebSearch": false,
+          "firstFrameImage": "https://aitop100app-1251510006.cos.ap-shanghai.myqcloud.com/openApi/212508/b78ba8b1-b199-4264-91fd-6b42fadad61f.png",
+          "lastFrameImage": "https://aitop100app-1251510006.cos.ap-shanghai.myqcloud.com/openApi/212508/59a8cff2-bda7-4f2e-81dd-b4fe0fcfd53f.png",
+          "firstFrameImageUrl": "https://aitop100app-1251510006.cos.ap-shanghai.myqcloud.com/openApi/212508/b78ba8b1-b199-4264-91fd-6b42fadad61f.png",
+          "lastFrameImageUrl": "https://aitop100app-1251510006.cos.ap-shanghai.myqcloud.com/openApi/212508/59a8cff2-bda7-4f2e-81dd-b4fe0fcfd53f.png",
+          "outputUrl": "https://aitop100app-1251510006.cos.ap-shanghai.myqcloud.com/videosGenerations/videosGenerations/bcb1e122-c525-41b9-a78c-a2ab9a5cfa50.mp4"
+        },
+        "label": "ep001",
+        "imagePreview": "https://aitop100app-1251510006.cos.ap-shanghai.myqcloud.com/videosGenerations/videosGenerations/bcb1e122-c525-41b9-a78c-a2ab9a5cfa50.mp4",
+        "selectedModel": "seedance2.0 (急速版)",
+        "generatedAt": "2026-06-30T12:10:44.988Z",
+        "imageName": "ep001.mov",
+        "taskId": "1459723",
+        "videoPosterDataUrl": "/flowgen-api/projects/14/node-media/56167292-272c-46c8-b68e-4f26fc7dee34.jpg/file"
+      }
+    }
+  ],
+  "edges": [
+    {
+      "id": "enode_0_1782821064275-node_2_1782821183381-1782821183381-0",
+      "source": "node_0_1782821064275",
+      "target": "node_2_1782821183381",
+      "animated": true,
+      "style": {
+        "stroke": "#6366f1",
+        "strokeWidth": 2
+      }
+    },
+    {
+      "id": "enode_1_1782821131949-node_3_1782821239183-1782821239183-0",
+      "source": "node_1_1782821131949",
+      "target": "node_3_1782821239183",
+      "animated": true,
+      "style": {
+        "stroke": "#6366f1",
+        "strokeWidth": 2
+      }
+    },
+    {
+      "id": "enode_3_1782821239183-node_5_1782821407367-1782821407367-0",
+      "source": "node_3_1782821239183",
+      "target": "node_5_1782821407367",
+      "animated": true,
+      "style": {
+        "stroke": "#6366f1",
+        "strokeWidth": 2
+      }
+    },
+    {
+      "id": "enode_2_1782821183381-node_6_1782821444992-1782821444992-0",
+      "source": "node_2_1782821183381",
+      "target": "node_6_1782821444992",
+      "animated": true,
+      "style": {
+        "stroke": "#6366f1",
+        "strokeWidth": 2
+      }
+    }
+  ],
+  "exportedAt": "2026-06-30T12:11:47.805Z",
+  "nodeCount": 6,
+  "edgeCount": 4
+}

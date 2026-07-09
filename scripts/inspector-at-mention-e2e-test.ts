@@ -87,7 +87,7 @@ console.log('\n=== A. Nano 多图：@ 下拉仅面板槽 @资产:展示名 ===\n
   ok('不传项目库时不额外增加条目', withLib.length === mentions.length);
 }
 
-console.log('\n=== A1b. @ 下拉合并项目素材库（面板无 chip）===\n');
+console.log('\n=== A1b. mergeInspectorAtMentionItems 工具函数（UI @ 下拉不用）===\n');
 
 {
   const data = simNode({
@@ -315,6 +315,38 @@ console.log('\n=== H. 全模型抽样：Seedance 参考生 plan ===\n');
   ok('Seedance 下拉含夏茉', mentions.some((m) => m.insertText === '@资产:夏茉'));
   const plan = collectReferencedMediaFromPrompt(data.prompt!, data, ctx, slugMap, ASSETS);
   ok('Seedance plan 2 图', plan.images.length === 2);
+}
+
+console.log('\n=== I. 运行后追加参考图：@ 下拉含新槽 ===\n');
+
+{
+  const main = 'https://cos.example/main-cat.png';
+  const ref1 = 'https://cos.example/ref1.png';
+  const ref2 = 'https://cos.example/ref2.png';
+  const refNew = 'https://cos.example/ref-new.png';
+  const afterRun = simNode({
+    selectedModel: 'Nano Banana 2.0',
+    imagePreview: ref1,
+    panelMainImageUrl: main,
+    referenceImages: [ref1, ref2],
+    referenceImageLabels: ['图片1', '图片2'],
+    prompt: '@图片1参考@图片2风格',
+    generationParams: {
+      referenceImages: [ref1, ref2],
+      prompt: '@图片1参考@图片2风格',
+    },
+  });
+  const withNew = {
+    ...afterRun,
+    referenceImages: [...(afterRun.referenceImages || []), refNew],
+    referenceImageLabels: [...(afterRun.referenceImageLabels || []), '新图'],
+  };
+  const ctx = buildPromptMediaRefContextForRun(withNew, ASSETS);
+  const mentions = buildInspectorPromptMentionItems(withNew, ctx);
+  ok('@ 下拉含 @主图', mentions.some((m) => m.insertText === '@主图'));
+  ok('@ 下拉含新槽 @图片3', mentions.some((m) => m.insertText === '@图片3' && m.refImageIndex === 2));
+  ok('ref1 槽为 @图片1', mentions.some((m) => m.insertText === '@图片1' && m.refImageIndex === 0));
+  ok('过滤「新图」命中新槽', filterMediaRefs(mentions, '新图').some((m) => m.refImageIndex === 2));
 }
 
 console.log('\n=== 汇总 ===\n');

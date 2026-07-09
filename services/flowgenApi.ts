@@ -73,17 +73,38 @@ function logAssetDebug(...args: unknown[]) {
   }
 }
 
+function isTransientFetchError(e: unknown): boolean {
+  if (!(e instanceof Error)) return false;
+  const m = e.message.toLowerCase();
+  return (
+    m === 'failed to fetch' ||
+    m.includes('networkerror') ||
+    m.includes('network error') ||
+    m.includes('load failed')
+  );
+}
+
 export async function flowgenFetch<T = unknown>(
   path: string,
   init?: RequestInit & { json?: unknown }
 ): Promise<T> {
   const { json, headers, ...rest } = init || {};
-  const res = await fetch(`${BASE}${path.startsWith('/') ? path : `/${path}`}`, {
-    ...rest,
-    cache: rest.cache ?? 'no-store',
-    headers: { ...authHeaders(), ...headers },
-    body: json !== undefined ? JSON.stringify(json) : rest.body,
-  });
+  let res: Response;
+  try {
+    res = await fetch(`${BASE}${path.startsWith('/') ? path : `/${path}`}`, {
+      ...rest,
+      cache: rest.cache ?? 'no-store',
+      headers: { ...authHeaders(), ...headers },
+      body: json !== undefined ? JSON.stringify(json) : rest.body,
+    });
+  } catch (e) {
+    if (isTransientFetchError(e)) {
+      throw new Error(
+        '无法连接 FlowGen API（网络中断或服务未响应）。请确认本机 3001 端口服务已启动，开发环境需 npm run dev:full。'
+      );
+    }
+    throw e;
+  }
   const text = await res.text();
   let data: unknown = null;
   try {
@@ -99,6 +120,17 @@ export async function flowgenFetch<T = unknown>(
     }
   }
   if (!res.ok) {
+    if (res.status === 401) {
+      try {
+        localStorage.removeItem(FLOWGEN_TOKEN_KEY);
+        localStorage.removeItem(FLOWGEN_USER_KEY);
+      } catch {
+        /* ignore */
+      }
+      if (typeof window !== 'undefined' && window.location.hash !== '#/login') {
+        window.location.hash = '#/login';
+      }
+    }
     const msg =
       data && typeof data === 'object' && data !== null && 'error' in data
         ? String((data as { error?: string }).error)

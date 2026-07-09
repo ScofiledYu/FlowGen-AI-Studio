@@ -27,6 +27,57 @@ const WEAK_SINGLE_TERMS = new Set([
 const SHORT_FOLLOW_UP_RE =
   /表格|对比|总结|再查|做成|继续|刚才|上面|^(用|再|请|帮|麻烦)/;
 
+/**
+ * 用户在问「当前助手是谁 / 哪个模型」——会话元问题，禁止联网。
+ * 原因：联网检索会把 DeepSeek 等带成 Claude 等其他产品名（已复现）。
+ * 允许句末带短困惑追问（如「你是哪个模型 你删除做什么」）。
+ * 不匹配「Claude 是哪个公司的」等外部产品调研（句首为第三方品牌且较长）。
+ */
+export function isAssistantIdentityQuestion(text: string): boolean {
+  const t = (text || '').trim().toLowerCase();
+  if (!t || t.length > 120) return false;
+  // 外部产品调研：句首即第三方品牌 → 允许联网
+  if (
+    /^(claude|gpt|chatgpt|gemini|deepseek|豆包|qwen|openai|anthropic|google|微软|microsoft)\b/i.test(
+      t
+    ) &&
+    !/^(你是|who\s+are\s+you)/i.test(t)
+  ) {
+    return false;
+  }
+  if (
+    /你是(谁|哪个模型|什么模型|哪款模型|什么\s*ai|哪个\s*ai|哪一个模型)/i.test(t) ||
+    /你(叫什么|的名字是什么|属于哪个模型)/i.test(t) ||
+    /(which|what)\s+model\s+are\s+you|who\s+are\s+you|what(?:'s| is)\s+your\s+name/i.test(t)
+  ) {
+    return true;
+  }
+  // 短自我介绍请求；「你能做什么」过宽，不纳入（避免误关联网）
+  if (/介绍一下你自己|自我介绍一下/.test(t) && t.length <= 40) return true;
+  return false;
+}
+
+/**
+ * 问候 / 身份 / 致谢等：不需要检索，也不应把历史话题改写成查询。
+ * 与 ChatPanel isLightweightPrompt 对齐（国际常见开场 + 身份元问题）。
+ */
+export function isNonSearchableChatUtterance(text: string): boolean {
+  const t = (text || '').trim().toLowerCase();
+  if (!t || t.length > 120) return false;
+  if (isAssistantIdentityQuestion(t)) return true;
+  if (/^(你好|嗨|hi|hello|嘿|在吗|你是谁|测试|test|ok)[\s!,.，。!?？]*$/i.test(t)) return true;
+  if (
+    /^(你好|嗨|hi|hello|嘿)[，,\s]*(你是谁|请问你是谁|who\s*are\s*you)[\s!,.，。!?？]*$/i.test(t)
+  ) {
+    return true;
+  }
+  if (/^(who\s*are\s*you|what(?:'s| is)\s+your\s+name|how\s+are\s+you)[\s!,.？?]*$/i.test(t)) {
+    return true;
+  }
+  if (/^(谢谢|thanks|thank\s*you|再见|bye|goodbye)[\s!,.，。!?？]*$/i.test(t)) return true;
+  return false;
+}
+
 export function sanitizeWebSearchQueryText(text: string): string {
   return (text || '')
     .replace(/【[^】]+】/g, ' ')
@@ -82,6 +133,10 @@ export function buildWebSearchProbeQueryFallback(
   turns: WebSearchDialogueTurn[] = []
 ): string {
   const latest = sanitizeWebSearchQueryText(latestUserText);
+  // 问候等：绝不拼历史（与 resolveWebSearchProbeQuery 双保险）
+  if (isNonSearchableChatUtterance(latestUserText) || isNonSearchableChatUtterance(latest)) {
+    return compactWebSearchQuery(latest || latestUserText);
+  }
   if (latest && !needsContextualProbeFallback(latest)) {
     return compactWebSearchQuery(latest);
   }
@@ -130,7 +185,8 @@ function buildRewritePrompt(turns: WebSearchDialogueTurn[], latestUserText: stri
   const dlg = lines.length ? `【对话】\n${lines.join('\n')}\n\n` : '';
   return (
     `你是检索查询改写器。根据对话，将用户最后一问改写成一条适合搜索引擎的中文查询。\n` +
-    `要求：只输出一行查询（≤80字）；保留专有名词；纠正检索时按真实问题改写；禁止解释、JSON、引号、英文标题。\n\n` +
+    `要求：只输出一行查询（≤80字）；保留专有名词；纠正检索时按真实问题改写；禁止解释、JSON、引号、英文标题。\n` +
+    `若最后一问是问候、问你是谁/哪个模型、致谢、闲聊（如「你好」「你是哪个模型」「谢谢」），与检索无关：只输出最后一问原文，禁止用历史话题改写。\n\n` +
     dlg +
     `【最后一问】\n${latest}\n\n` +
     `查询：`
@@ -249,6 +305,15 @@ export async function resolveWebSearchProbeQuery(params: {
   enableLlmRewrite?: boolean;
 }): Promise<string> {
   const latest = [params.latestUserText, params.tailAppend].filter(Boolean).join(' ').trim();
+
+  // 问候等非检索句：禁止 LLM/历史拼接改写（防「你好你是谁」→ 上一轮 Claude Code 话题）
+  if (isNonSearchableChatUtterance(params.latestUserText) || isNonSearchableChatUtterance(latest)) {
+    const q = compactWebSearchQuery(sanitizeWebSearchQueryText(params.latestUserText || latest));
+    console.warn('[chat] web search probe skip rewrite (non-searchable)', {
+      query: q.slice(0, 120),
+    });
+    return q || compactWebSearchQuery(latest);
+  }
 
   if (params.enableLlmRewrite !== false) {
     const rewritten = await rewriteWebSearchProbeQueryViaLlm({

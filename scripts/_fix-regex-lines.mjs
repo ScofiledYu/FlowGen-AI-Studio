@@ -76,10 +76,16 @@ for (let i = 0; i < lines.length; i++) {
     }
   }
   if (t.includes('function isLightweightPrompt')) {
-    for (let j = i + 1; j < Math.min(i + 6, lines.length); j++) {
-      if (lines[j].trim().startsWith('return /^') && (lines[j].includes('??') || lines[j].includes('????'))) {
+    // 仅修复乱码行；完整组合问候逻辑以 ChatPanel 源码为准，勿整段覆盖
+    for (let j = i + 1; j < Math.min(i + 20, lines.length); j++) {
+      const lj = lines[j].trim();
+      if (
+        lj.startsWith('return /^') &&
+        (lj.includes('??') || lj.includes('????')) &&
+        lj.includes('你好')
+      ) {
         lines[j] =
-          "  return /^(你好|嗨|hi|hello|嘿|在吗|你是谁|测试|test|ok)[\\s!,.，。!?？]*$/i.test(t);";
+          "  if (/^(你好|嗨|hi|hello|嘿|在吗|你是谁|测试|test|ok)[\\s!,.，。!?？]*$/i.test(t)) return true;";
         break;
       }
     }

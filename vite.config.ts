@@ -111,15 +111,18 @@ export default defineConfig({
             const host = req.headers.host || 'localhost:3000'
             const parsed = new URL(req.url || '', `http://${host}`)
             const taskId = parsed.searchParams.get('taskId') || ''
+            const domainAccount = (parsed.searchParams.get('domainAccount') || '').trim()
             if (!taskId) {
               res.statusCode = 400
               res.setHeader('Content-Type', 'application/json; charset=utf-8')
               res.end(JSON.stringify({ error: 'missing taskId param' }))
               return
             }
+            const statusHeaders: Record<string, string> = { 'api-key': AITOP_API_KEY }
+            if (domainAccount) statusHeaders['domain-account'] = domainAccount
             const statusResp = await fetch(`${AITOP_API_BASE}/api/v1/task/${encodeURIComponent(taskId)}`, {
               method: 'GET',
-              headers: { 'api-key': AITOP_API_KEY }
+              headers: statusHeaders
             })
             const statusJson: any = await statusResp.json().catch(() => ({}))
             const resourceUrl =
@@ -165,6 +168,7 @@ export default defineConfig({
             const host = req.headers.host || 'localhost:3000'
             const parsed = new URL(req.url || '', `http://${host}`)
             const taskId = parsed.searchParams.get('taskId') || ''
+            const domainAccount = (parsed.searchParams.get('domainAccount') || '').trim()
             if (!taskId) {
               res.statusCode = 400
               res.setHeader('Content-Type', 'application/json; charset=utf-8')
@@ -172,9 +176,11 @@ export default defineConfig({
               return
             }
 
+            const statusHeaders: Record<string, string> = { 'api-key': AITOP_API_KEY }
+            if (domainAccount) statusHeaders['domain-account'] = domainAccount
             const statusResp = await fetch(`${AITOP_API_BASE}/api/v1/task/${encodeURIComponent(taskId)}`, {
               method: 'GET',
-              headers: { 'api-key': AITOP_API_KEY }
+              headers: statusHeaders
             })
             const statusText = await statusResp.text()
 

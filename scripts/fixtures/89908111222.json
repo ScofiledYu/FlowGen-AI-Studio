@@ -1,0 +1,127 @@
+{
+  "nodes": [
+    {
+      "id": "node_7_1782870116896",
+      "type": "processorNode",
+      "position": {
+        "x": 9334.056849969196,
+        "y": 18044.491783653542
+      },
+      "data": {
+        "label": "Input Picture Node",
+        "prompt": "把@主图中的角色按照@视频1中的角色运动起来",
+        "status": "completed",
+        "taskId": "1460856",
+        "quality": "高质量",
+        "duration": "5s",
+        "progress": 100,
+        "imageName": "ronaldplett-cat-10150982.jpg",
+        "aspectRatio": "16:9",
+        "imagePreview": "https://aitop100app-1251510006.cos.ap-shanghai.myqcloud.com/openApi/212508/1c5ae635-5cd1-4865-9ddd-22dd85411b5d.png",
+        "klingOmniTab": "video",
+        "modelConfigs": {
+          "Nano Banana 2.0": {}
+        },
+        "imageLocalRef": "flowgen-local:a69d57e4-7ac9-4e78-8757-e5996cab184e_14:node_7_1782870116896:main",
+        "referenceMovs": [
+          {
+            "url": "https://aitop100app-1251510006.cos.ap-shanghai.myqcloud.com/openApi/297409/aec30c9e-f93b-4eca-924d-1695ee6d4323.mp4"
+          }
+        ],
+        "selectedModel": "可灵3.0 Omni",
+        "klingAudioSync": false,
+        "negativePrompt": "",
+        "numberOfImages": "1条",
+        "referenceImages": [],
+        "generationParams": {
+          "taskId": "1460856",
+          "generatedAt": "2026-07-01T01:46:17.112Z",
+          "model": "可灵3.0 Omni",
+          "prompt": "把@主图中的角色按照@视频1中的角色运动起来",
+          "negativePrompt": "",
+          "klingOmniTab": "video"
+        },
+        "klingOmniVideoUrl": "https://aitop100app-1251510006.cos.ap-shanghai.myqcloud.com/openApi/297409/aec30c9e-f93b-4eca-924d-1695ee6d4323.mp4",
+        "klingOmniMultiPrompt": "",
+        "klingOmniVideoPrompt": "把@主图中的角色按照@视频1中的角色运动起来",
+        "panelMainSlotVisible": true,
+        "klingOmniFramesPrompt": "",
+        "klingOmniInstructionPrompt": "",
+        "klingOmniMultiNegativePrompt": "",
+        "klingOmniVideoNegativePrompt": "",
+        "klingOmniFramesNegativePrompt": "",
+        "klingOmniMultiReferenceImages": [],
+        "klingOmniVideoManuallyCleared": false,
+        "klingOmniVideoReferenceImages": [],
+        "klingOmniInstructionNegativePrompt": "",
+        "klingOmniInstructionReferenceImages": [],
+        "generatedAt": "2026-07-01T01:46:17.112Z",
+        "generatedThumbnails": [
+          {
+            "id": "node_0_1782870377112",
+            "url": "https://aitop100app-1251510006.cos.ap-shanghai.myqcloud.com/videosGenerations/videosGenerations/cdc4db19-2735-403c-b521-e6dee1c29c4c.mp4",
+            "type": "video",
+            "nodeId": "node_0_1782870377112",
+            "name": "Video_46.mov",
+            "generationParams": {
+              "taskId": "1460856",
+              "generatedAt": "2026-07-01T01:46:17.112Z",
+              "model": "可灵3.0 Omni",
+              "prompt": "把@主图中的角色按照@视频1中的角色运动起来",
+              "negativePrompt": "",
+              "klingOmniTab": "video"
+            },
+            "posterDataUrl": "/flowgen-api/projects/14/node-media/0b477664-0fc2-4300-bd59-6d1a4cb1a97a.jpg/file"
+          }
+        ]
+      }
+    },
+    {
+      "id": "node_0_1782870377112",
+      "type": "movNode",
+      "position": {
+        "x": 9798.651313501785,
+        "y": 18089.607714178186
+      },
+      "data": {
+        "label": "Output Mov Node",
+        "imagePreview": "https://aitop100app-1251510006.cos.ap-shanghai.myqcloud.com/videosGenerations/videosGenerations/cdc4db19-2735-403c-b521-e6dee1c29c4c.mp4",
+        "imageName": "Video_46.mov",
+        "selectedModel": "可灵3.0 Omni",
+        "status": "idle",
+        "generatedAt": "2026-07-01T01:46:17.112Z",
+        "taskId": "1460856",
+        "generationParams": {
+          "taskId": "1460856",
+          "generatedAt": "2026-07-01T01:46:17.112Z",
+          "model": "可灵3.0 Omni",
+          "prompt": "把@主图中的角色按照@视频1中的角色运动起来",
+          "negativePrompt": "",
+          "klingOmniTab": "video"
+        },
+        "videoPosterDataUrl": "/flowgen-api/projects/14/node-media/0b477664-0fc2-4300-bd59-6d1a4cb1a97a.jpg/file",
+        "referenceMovs": [
+          {
+            "url": "https://aitop100app-1251510006.cos.ap-shanghai.myqcloud.com/videosGenerations/videosGenerations/cdc4db19-2735-403c-b521-e6dee1c29c4c.mp4"
+          }
+        ],
+        "klingOmniInstructionVideoPreviewUrl": "https://aitop100app-1251510006.cos.ap-shanghai.myqcloud.com/videosGenerations/videosGenerations/cdc4db19-2735-403c-b521-e6dee1c29c4c.mp4"
+      }
+    }
+  ],
+  "edges": [
+    {
+      "id": "enode_7_1782870116896-node_0_1782870377112-recover-1782870377112-0",
+      "source": "node_7_1782870116896",
+      "target": "node_0_1782870377112",
+      "animated": true,
+      "style": {
+        "stroke": "#6366f1",
+        "strokeWidth": 2
+      }
+    }
+  ],
+  "exportedAt": "2026-07-01T01:50:07.319Z",
+  "nodeCount": 2,
+  "edgeCount": 1
+}

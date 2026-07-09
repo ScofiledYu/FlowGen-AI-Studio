@@ -1,6 +1,6 @@
 import React, { lazy, Suspense, useCallback, useEffect, useMemo, useState, useSyncExternalStore } from 'react';
 import { ErrorBoundary } from './components/ErrorBoundary';
-import { FilePlus2, FolderOpen, Save, Zap, LogOut } from 'lucide-react';
+import { FilePlus2, FolderOpen, Save, Zap, LogOut, Pause, RefreshCw } from 'lucide-react';
 import TestChatPage from './components/TestChatPage';
 import type { FlowEditorProjectActions } from './components/FlowEditor';
 import { LoginPage } from './components/flowgen/LoginPage';
@@ -30,6 +30,68 @@ function FlowEditorLoadFallback() {
         aria-hidden
       />
       <p className="text-sm">正在加载编辑器…</p>
+    </div>
+  );
+}
+
+function CanvasRefreshHeaderControls({
+  actions,
+}: {
+  actions: FlowEditorProjectActions | null;
+}) {
+  if (!actions) return null;
+  const paused = actions.canvasRefreshPaused;
+  const advanced = actions.canvasPerfAdvanced;
+  return (
+    <div className="flex items-center gap-2">
+      <div
+        className={`flex items-center rounded-md border overflow-hidden ${
+          paused ? 'border-amber-500/40 bg-amber-950/50' : 'border-gray-700 bg-gray-800'
+        }`}
+      >
+        <button
+          type="button"
+          onClick={actions.toggleCanvasRefresh}
+          className={`flex items-center gap-1.5 px-2.5 py-1 text-xs font-medium transition-colors ${
+            paused ? 'text-amber-100 hover:bg-amber-500/20' : 'text-gray-200 hover:bg-gray-700/60'
+          }`}
+          title={
+            paused
+              ? '恢复预览刷新；主要减轻视频解码与缩略图负载'
+              : '暂停视频解码与缩略图刷新；对拖动画布本身帮助有限，重度布局可开「高级」'
+          }
+        >
+          {paused ? <RefreshCw size={14} className="text-amber-300" /> : <Pause size={14} />}
+          {paused ? '恢复刷新' : '暂停刷新'}
+        </button>
+        {paused && (
+          <>
+            <div className="w-px h-5 bg-amber-500/30" />
+            <button
+              type="button"
+              onClick={actions.toggleCanvasPerfAdvanced}
+              className={`flex items-center gap-1 px-2 py-1 text-[10px] font-medium transition-colors ${
+                advanced
+                  ? 'text-amber-200 bg-amber-500/25'
+                  : 'text-gray-400 hover:text-gray-200 hover:bg-gray-700/50'
+              }`}
+              title={
+                advanced
+                  ? '关闭高级：恢复自动保存与撤销，仍保持预览暂停'
+                  : '高级：额外暂停自动保存与撤销（布局更流畅；崩溃可能丢改动）'
+              }
+            >
+              <Zap size={12} className={advanced ? 'text-amber-300' : ''} />
+              高级
+            </button>
+          </>
+        )}
+      </div>
+      {paused && advanced && (
+        <span className="text-[10px] text-amber-400/90 whitespace-nowrap hidden xl:inline">
+          自动保存已暂停
+        </span>
+      )}
     </div>
   );
 }
@@ -279,13 +341,16 @@ function App() {
             <span className="font-bold text-xl tracking-tight text-gray-100">FlowGen AI</span>
             <span className="text-[10px] text-amber-400 border border-amber-500/40 rounded px-2 py-0.5">离线单机</span>
           </div>
-          <button
-            type="button"
-            onClick={() => navigate('#/login')}
-            className="text-xs text-brand-400 hover:underline"
-          >
-            多用户登录 →
-          </button>
+          <div className="flex items-center gap-4">
+            <CanvasRefreshHeaderControls actions={projectActions} />
+            <button
+              type="button"
+              onClick={() => navigate('#/login')}
+              className="text-xs text-brand-400 hover:underline"
+            >
+              多用户登录 →
+            </button>
+          </div>
         </header>
         <main className="flex-1 relative bg-gray-800 overflow-hidden">
           <ErrorBoundary>
@@ -415,6 +480,7 @@ function App() {
               >
                 <FolderOpen size={14} />
               </button>
+              <CanvasRefreshHeaderControls actions={projectActions} />
             </div>
             <span className="text-xs text-gray-500 max-w-[120px] truncate" title={user?.username}>
               {user?.username}

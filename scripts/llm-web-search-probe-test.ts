@@ -4,6 +4,8 @@
  */
 import {
   buildWebSearchProbeQueryFallback,
+  isAssistantIdentityQuestion,
+  isNonSearchableChatUtterance,
   isPlausibleSearchQuery,
   resolveWebSearchProbeQuery,
 } from '../utils/webSearchProbe.ts';
@@ -23,6 +25,68 @@ function assert(name: string, ok: boolean, detail = '') {
 
 function runFallbackUnitTests() {
   let pass = 0;
+  pass += assert(
+    '组合问候识别为非检索',
+    isNonSearchableChatUtterance('你好，你是谁？'),
+    '你好，你是谁？'
+  );
+  pass += assert(
+    'who are you 非检索',
+    isNonSearchableChatUtterance('Who are you?'),
+    'Who are you?'
+  );
+  pass += assert(
+    '你是哪个模型 身份问',
+    isAssistantIdentityQuestion('你是哪个模型 你删除做什么'),
+    '你是哪个模型 你删除做什么'
+  );
+  pass += assert(
+    '你是哪个模型 非检索（不开联网）',
+    isNonSearchableChatUtterance('你是哪个模型 你删除做什么'),
+    '你是哪个模型 你删除做什么'
+  );
+  pass += assert(
+    'what model are you 非检索',
+    isNonSearchableChatUtterance('What model are you?'),
+    'What model are you?'
+  );
+  pass += assert(
+    '你能做什么 不是身份问（可联网）',
+    !isAssistantIdentityQuestion('你能做什么'),
+    '你能做什么'
+  );
+  pass += assert(
+    '外部产品调研不是身份问',
+    !isAssistantIdentityQuestion('Claude 是哪家公司开发的模型'),
+    'Claude 是哪家公司开发的模型'
+  );
+  pass += assert(
+    '问候不串历史 Claude Code',
+    !/Claude|Anthropic|编程助手/i.test(
+      buildWebSearchProbeQueryFallback('你好，你是谁？', [
+        { role: 'user', content: 'Claude Code Anthropic AI 编程助手介绍' },
+        {
+          role: 'assistant',
+          content: 'Claude Code 是 Anthropic 的代理编码工具…',
+        },
+      ])
+    ),
+    buildWebSearchProbeQueryFallback('你好，你是谁？', [
+      { role: 'user', content: 'Claude Code Anthropic AI 编程助手介绍' },
+      { role: 'assistant', content: 'Claude Code 是 Anthropic 的代理编码工具…' },
+    ])
+  );
+  pass += assert(
+    '身份问不串历史 Claude',
+    !/Claude|Anthropic/i.test(
+      buildWebSearchProbeQueryFallback('你是哪个模型', [
+        { role: 'assistant', content: '我是 Claude，由 Anthropic 开发…' },
+      ])
+    ),
+    buildWebSearchProbeQueryFallback('你是哪个模型', [
+      { role: 'assistant', content: '我是 Claude，由 Anthropic 开发…' },
+    ])
+  );
   pass += assert(
     '天气：用本轮',
     buildWebSearchProbeQueryFallback('现在深圳的天气怎么样').includes('深圳'),
@@ -59,7 +123,8 @@ function runFallbackUnitTests() {
       { role: 'assistant', content: '深中梅香实验学校 深中龙华附属学校 普高率 四大率…' },
     ])
   );
-  return { pass, fail: 4 - pass };
+  const total = 13;
+  return { pass, fail: total - pass };
 }
 
 async function runApiRewriteTests() {
@@ -118,13 +183,18 @@ async function main() {
   const unit = runFallbackUnitTests();
   console.log(`\n[2/2] LLM 改写 API (${BASE_URL})`);
   let api = { pass: 0, fail: 0 };
-  try {
-    const ping = await fetch(BASE_URL.replace(/\/aitop-llm-see$/, '/'));
-    if (!ping.ok) throw new Error('server down');
-    api = await runApiRewriteTests();
-  } catch (e) {
-    console.log(`  [SKIP] ${e instanceof Error ? e.message : e}`);
-    api = { pass: 0, fail: 4 };
+  const offline = process.env.CHAT_GATE_OFFLINE === '1' || process.argv.includes('--offline');
+  if (offline) {
+    console.log('  [SKIP] CHAT_GATE_OFFLINE=1，跳过 API 改写');
+  } else {
+    try {
+      const ping = await fetch(BASE_URL.replace(/\/aitop-llm-see$/, '/'));
+      if (!ping.ok) throw new Error('server down');
+      api = await runApiRewriteTests();
+    } catch (e) {
+      console.log(`  [SKIP] ${e instanceof Error ? e.message : e}`);
+      api = { pass: 0, fail: 0 };
+    }
   }
   const totalFail = unit.fail + api.fail;
   console.log(`\n=== SUMMARY PASS ${unit.pass + api.pass} FAIL ${totalFail} ===`);

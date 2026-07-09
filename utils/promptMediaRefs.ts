@@ -1,15 +1,26 @@
 import { type NodeData, isImage2Model, isNanoBanana2Model } from '../types';
+import { image2MaxReferenceSlots } from './image2PanelRefs';
 import {
   isProjectAssetLibraryImageUrl,
   parseProjectAssetIdsFromMediaUrl,
 } from './projectAssetPreview';
 import {
+  alignReferenceImageLabels,
   buildPanelReferenceDisplayEntries,
   normalizePanelReferenceUrlKey,
   preferAssetDisplayNameOverGenericLabel,
   projectAssetMediaPairKeyFromUrl,
+  resolveFirstLastFramePanelDisplayLabel,
+  resolveFirstLastFramePanelUrl,
+  resolveMainImagePanelDisplayLabel,
   resolvePanelReferenceSlotDisplayUrl,
+  tryAppendReferenceImageWithLabel,
 } from './referenceImageSlotLabels';
+import { needsFirstFramePanelModel } from './firstFramePanel';
+import {
+  mergePanelWithPersistedRefsIfPromptNeeds,
+  persistedReferenceImagesForRun,
+} from './panelRefPersistence';
 
 /** 创意描述中可 @ 引用的素材（与面板展示序号一致） */
 export type PromptMediaRefItem = {
@@ -72,6 +83,18 @@ export function isDuplicateOfMainImagePreview(
   return normalizeRefUrlForDedupe(u) === normalizeRefUrlForDedupe(prev);
 }
 
+/**
+ * @ 下拉 / plan 主图去重：运行后 imagePreview 常为画布首个 @ 参考，主图格用 panelMainImageUrl。
+ */
+export function resolvePromptMainImagePreviewForRefs(data: Partial<NodeData>): string | undefined {
+  const backup = String(data.panelMainImageUrl || '').trim();
+  if (backup && !isLikelyMainVideoUrl(backup)) return backup;
+  if (data.panelMainSlotVisible === false) return undefined;
+  const preview = String(data.imagePreview || '').trim();
+  if (preview && !isLikelyMainVideoUrl(preview)) return preview;
+  return undefined;
+}
+
 /** 参考槽列表去掉与主预览/已上传主图重复的项（Omni 多图：主图仅 imagePreview，不进 klingOmniMultiReferenceImages） */
 export function stripPanelRefsDuplicateOfMain(
   refs: string[] | undefined,
@@ -115,6 +138,63 @@ export function mainAwareRefImageSlotLabel(
  */
 export type PanelRefSlotLabelMode = 'panelSlot' | 'seedanceSlot';
 
+/** 参考面板是否存在空槽（prune 后稀疏数组） */
+export function panelReferenceHasEmptySlots(urls: string[] | undefined): boolean {
+  return (urls || []).some((u) => !String(u || '').trim());
+}
+
+function leadingGapCountBeforeSlot(imgs: string[], slotIndex: number): number {
+  let gaps = 0;
+  for (let i = 0; i < slotIndex; i++) {
+    if (!String(imgs[i] || '').trim()) gaps += 1;
+  }
+  return gaps;
+}
+
+/** panelSlot：稀疏槽用紧凑序号；密集槽用物理 idx+1 / 自定义标签序号（含主图同 URL 参考槽） */
+export function panelSlotPictureOrdinal(
+  slotIndex: number,
+  urls: string[] | undefined,
+  imagePreview: string | undefined,
+  customLabel?: string
+): number {
+  const imgs = urls || [];
+  const customPicOrd = customLabel?.trim().match(/^图片(\d+)$/);
+  const hasGaps = panelReferenceHasEmptySlots(imgs);
+  if (hasGaps) {
+    if (customPicOrd) {
+      const labelOrd = parseInt(customPicOrd[1], 10);
+      const gapsBefore = leadingGapCountBeforeSlot(imgs, slotIndex);
+      const compact = refImageOrdinalForSlot(slotIndex, imgs, imagePreview);
+      const nonEmpty = imgs.filter((u) => String(u || '').trim()).length;
+      if (labelOrd === slotIndex + 1) {
+        if (gapsBefore >= 2 && labelOrd > compact && compact >= 1 && nonEmpty > 1) return compact;
+        if (nonEmpty > 1 || gapsBefore >= 2) return labelOrd;
+      }
+      if (labelOrd > nonEmpty) {
+        if (compact >= 1) return compact;
+      }
+      return labelOrd;
+    }
+    const compact = refImageOrdinalForSlot(slotIndex, imgs, imagePreview);
+    const physical = slotIndex + 1;
+    const gapsBefore = leadingGapCountBeforeSlot(imgs, slotIndex);
+    const nonEmpty = imgs.filter((u) => String(u || '').trim()).length;
+    if (compact >= 1) {
+      if (nonEmpty === 1) return compact;
+      if (gapsBefore >= 2 && physical > compact) return compact;
+      if (physical > compact && gapsBefore === 1) return physical;
+      return compact;
+    }
+    return 0;
+  }
+  if (customPicOrd) {
+    const labelOrd = parseInt(customPicOrd[1], 10);
+    if (labelOrd === slotIndex + 1) return labelOrd;
+  }
+  return slotIndex + 1;
+}
+
 /** panelSlot：referenceImages[0]=@图片1；seedanceSlot：槽1=@图片1（槽0 常为主图重复） */
 export function panelReferenceSlotLabel(
   slotIndex: number,
@@ -129,11 +209,18 @@ export function panelReferenceSlotLabel(
       ? `图片${Math.max(1, slotIndex)}`
       : `图片${Math.max(1, slotIndex + 1)}`;
   }
-  if (prev && isDuplicateOfMainImagePreview(imgs[slotIndex], prev)) return '主图';
   if (mode === 'seedanceSlot') {
+    if (prev && isDuplicateOfMainImagePreview(imgs[slotIndex], prev)) return '主图';
+    const ord = panelReferenceHasEmptySlots(imgs)
+      ? seedancePictureTokenOrd(slotIndex, urls, imagePreview)
+      : refImageOrdinalForSlot(slotIndex, urls, imagePreview);
+    return ord < 1 ? '主图' : `图片${ord}`;
+  }
+  if (panelReferenceHasEmptySlots(imgs)) {
     const ord = refImageOrdinalForSlot(slotIndex, urls, imagePreview);
     return ord < 1 ? '主图' : `图片${ord}`;
   }
+  if (prev && isDuplicateOfMainImagePreview(imgs[slotIndex], prev)) return '主图';
   return `图片${slotIndex + 1}`;
 }
 
@@ -151,6 +238,9 @@ export function seedancePictureTokenOrd(
   const prev = imagePreview?.trim();
   const leadIsPadding =
     !first || (!!prev && isDuplicateOfMainImagePreview(first, prev));
+  if (panelReferenceHasEmptySlots(imgs)) {
+    return slotIndex < 1 ? 1 : slotIndex;
+  }
   if (leadIsPadding) return slotIndex < 1 ? 1 : slotIndex;
   return slotIndex + 1;
 }
@@ -182,17 +272,22 @@ function pushPanelRefImageAtSlot(
 ): void {
   const s = String(imgs[idx] || '').trim();
   if (!s) return;
-  if (prev && isDuplicateOfMainImagePreview(s, prev)) return;
+  // 仅 seedance 参考生模式按主图去重（主图单独一格，同素材不占 @图片n）；
+  // image2 / Nano / Omni 等面板槽模式下，用户显式拖入同 URL 参考槽仍需 @图片n 可选
+  if (prev && options?.slotLabelMode === 'seedanceSlot' && isDuplicateOfMainImagePreview(s, prev)) return;
   const customCap = data.referenceImageLabels?.[idx]?.trim();
   const customPicOrd = customCap?.match(/^图片(\d+)$/);
   let ord: number;
-  if (customPicOrd) {
-    ord = parseInt(customPicOrd[1], 10);
+  if (options?.slotLabelMode === 'panelSlot') {
+    ord = panelSlotPictureOrdinal(idx, imgs, prev, customCap);
   } else if (options?.slotLabelMode === 'seedanceSlot') {
     if (idx < 1 && (!s || (prev && isDuplicateOfMainImagePreview(s, prev)))) return;
-    ord = refImageOrdinalForSlot(idx, imgs, prev);
-  } else if (options?.slotLabelMode === 'panelSlot') {
-    ord = idx + 1;
+    ord =
+      customPicOrd && panelReferenceHasEmptySlots(imgs)
+        ? panelSlotPictureOrdinal(idx, imgs, prev, customCap)
+        : seedancePictureTokenOrd(idx, imgs, prev);
+  } else if (customPicOrd) {
+    ord = parseInt(customPicOrd[1], 10);
   } else {
     ord = refImageOrdinalForSlot(idx, imgs, prev);
   }
@@ -220,6 +315,14 @@ function pushPanelRefImageAtSlot(
     });
     return;
   }
+  if (displayLabel === '主图') {
+    pushMainImage(refs, displayLabel);
+    return;
+  }
+  if (displayLabel === '主视频') {
+    pushMainVideo(refs, displayLabel);
+    return;
+  }
   pushImage(refs, ord, { refImageIndex: idx, displayLabel });
 }
 
@@ -240,9 +343,9 @@ export function appendPromptReferencedAssetDetailItems(
   if (!prompt) return items;
   const seen = new Set(items.map((i) => i.label.trim()).filter(Boolean));
   const out = [...items];
-  const re = new RegExp(`@资产:\\s*(${PROMPT_ASSET_TOKEN_SUFFIX})`, 'g');
-  for (const m of prompt.matchAll(re)) {
-    const key = m[1].trim();
+  for (const { token } of matchAllPromptMediaTokens(prompt, projectAssets)) {
+    if (!token.startsWith('@资产:')) continue;
+    const key = token.slice('@资产:'.length).trim();
     const row = projectAssets.find((a) => a.slug === key || a.name.trim() === key);
     const name = row?.name?.trim() || key;
     if (seen.has(name)) continue;
@@ -252,6 +355,52 @@ export function appendPromptReferencedAssetDetailItems(
     seen.add(name);
   }
   return out;
+}
+
+/**
+ * Omni multi：imagePreview 是否作为 @图片1/@主图 计入 Details。
+ * 未 @主图 运行后 imagePreview/panelMainImageUrl 可能是备份主图，实际 @图片1 在 klingOmniMultiReferenceImages 槽内。
+ */
+export function omniMultiImagePreviewCountsAsPromptImageRef(
+  data: Partial<NodeData>,
+  main: string,
+  prompt?: string
+): boolean {
+  const preview = String(main || data.imagePreview || '').trim();
+  if (!preview || isLikelyMainVideoUrl(preview)) return false;
+  if (promptMentionsMainImageForNodeData(data)) return true;
+
+  const promptText = String(
+    prompt ??
+      data.klingOmniMultiPrompt ??
+      data.prompt ??
+      ''
+  ).trim();
+  if (!/@图片1|@图片(?!\d)/.test(promptText)) return false;
+
+  const backup = String(data.panelMainImageUrl || '').trim();
+  if (
+    backup &&
+    isDuplicateOfMainImagePreview(preview, backup) &&
+    !promptMentionsMainImageForNodeData(data)
+  ) {
+    const slots = (data.klingOmniMultiReferenceImages || []).filter(Boolean);
+    if (slots.length && !slots.some((u) => isDuplicateOfMainImagePreview(u, preview))) {
+      return false;
+    }
+  }
+
+  const slots = (data.klingOmniMultiReferenceImages || []).filter(Boolean);
+  const gp = data.generationParams as { referenceImages?: string[]; firstFrameImage?: string; firstFrameImageUrl?: string } | undefined;
+  const gpRefs = (gp?.referenceImages || []).filter(Boolean);
+  const pool = [...slots, ...gpRefs];
+  if (pool.some((u) => isDuplicateOfMainImagePreview(u, preview))) return true;
+
+  const gpFirst = String(gp?.firstFrameImageUrl || gp?.firstFrameImage || '').trim();
+  if (gpFirst && isDuplicateOfMainImagePreview(preview, gpFirst)) return true;
+
+  if (pool.length > 0) return false;
+  return true;
 }
 
 /** Node Details / 测试：与属性面板参考格底栏一致；仅文案 @主图 时含「主图」项 */
@@ -297,8 +446,21 @@ export function buildReferenceImageDetailItemsFromPanel(
       return appendPromptReferencedAssetDetailItems(items, data, projectAssets);
     }
     if (mode === 'image') {
-      const first = String(data.firstFrameImageUrl || data.firstFrameImage || '').trim();
-      const last = String(data.lastFrameImageUrl || data.lastFrameImage || '').trim();
+      const tab = data.seedanceTabConfigs?.image;
+      const first = String(
+        data.firstFrameImageUrl ||
+          data.firstFrameImage ||
+          tab?.firstFrameImageUrl ||
+          tab?.firstFrameImage ||
+          ''
+      ).trim();
+      const last = String(
+        data.lastFrameImageUrl ||
+          data.lastFrameImage ||
+          tab?.lastFrameImageUrl ||
+          tab?.lastFrameImage ||
+          ''
+      ).trim();
       if (first) {
         items.push({
           url: first,
@@ -320,12 +482,11 @@ export function buildReferenceImageDetailItemsFromPanel(
     const mentionsMain = promptMentionsMainImageForNodeData(data);
     if (mentionsMain) pushMain();
     const refs = data.referenceImages || [];
-    const dedupeMain = mentionsMain ? main : '';
     const labelMain = mentionsMain ? main : '';
     for (let i = 0; i < refs.length; i++) {
       const u = String(refs[i] || '').trim();
       if (!u) continue;
-      if (dedupeMain && isDuplicateOfMainImagePreview(u, dedupeMain)) continue;
+      // 主图独立一格；参考槽同 URL 仍保留（@图片1 与 @主图 可指向同素材）
       const slotLabel =
         preferAssetDisplayNameOverGenericLabel(data.referenceImageLabels?.[i], u) ||
         panelReferenceSlotLabel(i, refs, labelMain, 'panelSlot');
@@ -348,7 +509,6 @@ export function buildReferenceImageDetailItemsFromPanel(
 
   if (model === '可灵3.0 Omni') {
     const tab = (data.klingOmniTab || 'multi') as 'multi' | 'instruction' | 'video' | 'frames';
-    const mentionsMain = promptMentionsMainImageForNodeData(data);
     if (tab === 'frames') {
       const first = String(data.firstFrameImageUrl || data.firstFrameImage || '').trim();
       const last = String(data.lastFrameImageUrl || data.lastFrameImage || '').trim();
@@ -367,14 +527,31 @@ export function buildReferenceImageDetailItemsFromPanel(
           ? 'klingOmniVideoReferenceImages'
           : 'klingOmniMultiReferenceImages';
     const imgs = (data[refKey] as string[] | undefined) || [];
+    const promptText = String(
+      tab === 'multi'
+        ? data.klingOmniMultiPrompt ?? data.prompt
+        : tab === 'instruction'
+          ? data.klingOmniInstructionPrompt ?? data.prompt
+          : tab === 'video'
+            ? data.klingOmniVideoPrompt ?? data.prompt
+            : data.prompt
+    ).trim();
+    const mentionsMain = promptMentionsMainImageForNodeData(data);
+    const countsAsPromptImg1 = omniMultiImagePreviewCountsAsPromptImageRef(data, main, promptText);
     if (mentionsMain) pushMain();
-    const dedupeMain = mentionsMain ? main : '';
-    const labelMain = mentionsMain ? main : '';
+    else if (tab === 'multi' && countsAsPromptImg1) {
+      items.push({ url: main, label: '图片1' });
+    }
+    const dedupeMain = mentionsMain || countsAsPromptImg1 ? main : '';
+    const labelMain = dedupeMain;
     for (let i = 0; i < imgs.length; i++) {
       const u = String(imgs[i] || '').trim();
-      if (!u || isLikelyMainVideoUrl(u)) continue;
+      if (!u || isOmniMultiReferenceSlotVideo(data, i, u)) continue;
       if (dedupeMain && isDuplicateOfMainImagePreview(u, dedupeMain)) continue;
-      items.push({ url: u, label: panelReferenceSlotLabel(i, imgs, labelMain, 'panelSlot') });
+      const slotLabel =
+        data.referenceImageLabels?.[i]?.trim() ||
+        panelReferenceSlotLabel(i, imgs, labelMain, 'panelSlot');
+      items.push({ url: u, label: slotLabel });
     }
     return items;
   }
@@ -404,6 +581,122 @@ function isOmniMixedRefItemVideo(url: string): boolean {
   return isLikelyMainVideoUrl(url);
 }
 
+/** Omni 多图 tab：参考格是否为视频（mp4 / 底栏「视频n」/ referenceMovs poster 绑定） */
+export function isOmniMultiReferenceSlotVideo(
+  data: Partial<NodeData>,
+  slotIndex: number,
+  url?: string
+): boolean {
+  const u = String(url ?? data.klingOmniMultiReferenceImages?.[slotIndex] ?? '').trim();
+  if (!u) return false;
+  if (isOmniMixedRefItemVideo(u)) return true;
+  const label = data.referenceImageLabels?.[slotIndex]?.trim();
+  if (label && /^视频\d+$/.test(label)) return true;
+  for (const m of data.referenceMovs || []) {
+    const vu = String(m?.url || '').trim();
+    if (!vu || !isLikelyMainVideoUrl(vu)) continue;
+    const poster = String(m.posterDataUrl || '').trim();
+    if (poster && isSameMediaUrl(poster, u)) return true;
+    if (isSameMediaUrl(vu, u)) return true;
+  }
+  return false;
+}
+
+/** Omni 多图 tab：解析参考格绑定的视频 URL（格内为 poster 时从 referenceMovs 反查） */
+export function resolveOmniMultiReferenceSlotVideoUrl(
+  data: Partial<NodeData>,
+  slotIndex: number,
+  url?: string
+): string | undefined {
+  const u = String(url ?? data.klingOmniMultiReferenceImages?.[slotIndex] ?? '').trim();
+  if (!u) return undefined;
+  if (isLikelyMainVideoUrl(u)) return u;
+  for (const m of data.referenceMovs || []) {
+    const vu = String(m?.url || '').trim();
+    if (!vu || !isLikelyMainVideoUrl(vu)) continue;
+    if (m.posterDataUrl && isSameMediaUrl(m.posterDataUrl, u)) return vu;
+  }
+  return undefined;
+}
+
+/** Omni 指令/视频参考 tab：顶栏绑定的参考视频 URL */
+export function resolveOmniTabBoundVideoUrl(
+  data: Partial<NodeData>,
+  tab: 'instruction' | 'video'
+): string | undefined {
+  const url =
+    tab === 'instruction'
+      ? data.klingOmniInstructionVideoUrl || data.klingOmniInstructionVideoPreviewUrl
+      : data.klingOmniVideoUrl || data.klingOmniVideoPreviewUrl;
+  const u = String(url || '').trim();
+  return u && isLikelyMainVideoUrl(u) ? u : undefined;
+}
+
+/** 创意描述是否 @主视频 */
+export function promptMentionsMainVideoForNodeData(data: Partial<NodeData>): boolean {
+  return /@主视频/.test(getNodeInspectorPromptText(data as NodeData));
+}
+
+/**
+ * Seedance 参考生：应对齐 @主视频 / 面板「主视频」角标的视频 URL。
+ * MOV/OUTPUT 切参考生时 imagePreview 可能仍为 mp4，也可能仅为 poster/截帧，成片在 referenceMovs / outputUrl。
+ */
+export function resolveSeedanceReferenceMainVideoUrl(
+  data: Partial<NodeData>
+): string | undefined {
+  const prev = String(data.imagePreview || '').trim();
+  if (prev && isLikelyMainVideoUrl(prev)) return prev;
+
+  const movs = data.referenceMovs || [];
+  const soleMov = movs.length === 1 ? String(movs[0]?.url || '').trim() : '';
+  const outputUrl = String(
+    (data.generationParams as { outputUrl?: string } | undefined)?.outputUrl || ''
+  ).trim();
+
+  if (soleMov && isLikelyMainVideoUrl(soleMov)) {
+    if (outputUrl && isSameMediaUrl(soleMov, outputUrl)) return soleMov;
+    if (prev && isSameMediaUrl(soleMov, prev)) return soleMov;
+  }
+
+  if (outputUrl && isLikelyMainVideoUrl(outputUrl)) {
+    if (soleMov && isSameMediaUrl(soleMov, outputUrl)) return soleMov;
+    return outputUrl;
+  }
+
+  return undefined;
+}
+
+/** Seedance 参考生 referenceMovs 条目是否为「主视频」（与面板角标一致） */
+export function isSeedanceReferenceMovMainVideo(
+  data: Partial<NodeData>,
+  movUrl: string | undefined
+): boolean {
+  const main = resolveSeedanceReferenceMainVideoUrl(data);
+  const u = String(movUrl || '').trim();
+  if (!main || !u) return false;
+  return isSameMediaUrl(main, u);
+}
+
+/**
+ * Omni 指令/视频 tab 顶栏预览：是否应显示「主视频」（非「视频1」）。
+ * imagePreview 常为截帧 PNG，@主视频 实际绑定 klingOmni*VideoUrl。
+ */
+export function isOmniTabVideoMainVideoReference(
+  data: Partial<NodeData>,
+  displayUrl: string,
+  tab: 'instruction' | 'video'
+): boolean {
+  const url = String(displayUrl || '').trim();
+  if (!url) return false;
+  const mainPrev = String(data.imagePreview || '').trim();
+  if (mainPrev && isLikelyMainVideoUrl(mainPrev) && isSameMediaUrl(mainPrev, url)) {
+    return true;
+  }
+  const bound = resolveOmniTabBoundVideoUrl(data, tab);
+  if (!bound || !isSameMediaUrl(bound, url)) return false;
+  return promptMentionsMainVideoForNodeData(data);
+}
+
 /**
  * 可灵 Omni 多图/指令/视频 tab：参考格内图文混排。视频单独编「视频n」。
  * slotIndex 须为面板 referenceImages 的 origIdx（与 @图片n 的 refImageIndex 一致），勿用过滤后的展示序号。
@@ -411,13 +704,23 @@ function isOmniMixedRefItemVideo(url: string): boolean {
 export function omniMixedRefSlotCaption(
   slotIndex: number,
   urls: string[] | undefined,
-  imagePreview: string | undefined
+  imagePreview: string | undefined,
+  data?: Partial<NodeData>
 ): string {
   const all = urls || [];
   if (slotIndex < 0 || slotIndex >= all.length) {
     return `图片${Math.max(1, slotIndex + 1)}`;
   }
   const url = all[slotIndex];
+  const customLabel = data?.referenceImageLabels?.[slotIndex]?.trim();
+  if (customLabel && /^视频\d+$/.test(customLabel)) return customLabel;
+  if (data && isOmniMultiReferenceSlotVideo(data, slotIndex, url)) {
+    let v = 0;
+    for (let i = 0; i <= slotIndex; i++) {
+      if (isOmniMultiReferenceSlotVideo(data, i, all[i])) v++;
+    }
+    return `视频${v}`;
+  }
   if (isOmniMixedRefItemVideo(url)) {
     let v = 0;
     for (let i = 0; i <= slotIndex; i++) {
@@ -561,7 +864,7 @@ function pushAudio(refs: PromptMediaRefItem[], i: number) {
 
 /** 节点默认主预览：资产库主图 → @资产:slug；否则 @主图 / @主视频 */
 function maybePushMainPreview(data: NodeData, ctx: PromptMediaRefContext, refs: PromptMediaRefItem[]) {
-  const p = data.imagePreview?.trim();
+  const p = resolvePromptMainImagePreviewForRefs(data);
   if (!p) return;
   const cap = mainMentionDisplayLabel(data, ctx.projectAssets);
   if (isLikelyMainVideoUrl(p)) {
@@ -708,14 +1011,11 @@ function lookupProjectAssetDisplayName(
 
 function mainMentionDisplayLabel(data: NodeData, assets?: ProjectAssetLabelRow[]): string {
   const p = data.imagePreview?.trim();
-  if (!p) return '主图';
-  if (isLikelyMainVideoUrl(p)) return '主视频';
-  const fromUrl = lookupProjectAssetDisplayName(p, assets);
-  if (fromUrl) return fromUrl;
-  const name = String(data.imageName || '').trim();
-  if (name && isProjectAssetLibraryImageUrl(p)) return name;
-  if (name && assets?.some((a) => a.name === name)) return name;
-  return isLikelyMainVideoUrl(p) ? '主视频' : '主图';
+  return resolveMainImagePanelDisplayLabel(p, {
+    imageName: data.imageName,
+    projectAssets: assets,
+    video: Boolean(p && isLikelyMainVideoUrl(p)),
+  });
 }
 
 function frameMentionDisplayLabel(
@@ -723,18 +1023,102 @@ function frameMentionDisplayLabel(
   frameIndex: 0 | 1,
   assets?: ProjectAssetLabelRow[]
 ): string {
-  const stored =
-    frameIndex === 0
-      ? data.firstFrameImageLabel?.trim()
-      : data.lastFrameImageLabel?.trim();
+  const frame = frameIndex === 0 ? 'first' : 'last';
+  const url = resolveFirstLastFramePanelUrl(data, frame);
+  if (url) {
+    return (
+      resolveFirstLastFramePanelDisplayLabel(data, frame, assets) ||
+      (frameIndex === 0 ? '首帧图' : '尾帧图')
+    );
+  }
+  return frameIndex === 0 ? '首帧图' : '尾帧图';
+}
+
+/** 与属性面板首尾帧格一致：槽位无 URL 时，图生首尾帧模型首帧格回退主预览 */
+export function effectiveFirstFramePanelUrl(
+  data: NodeData,
+  ctx: PromptMediaRefContext
+): string | undefined {
+  const stored = resolveFirstLastFramePanelUrl(data, 'first').trim();
   if (stored) return stored;
+  const main = String(data.imagePreview || '').trim();
+  if (!main || isLikelyMainVideoUrl(main)) return undefined;
+  if (
+    !needsFirstFramePanelModel(data, {
+      seedanceMode: ctx.seedanceMode,
+      klingOmniTab: ctx.klingOmniTab,
+    })
+  ) {
+    return undefined;
+  }
+  return main;
+}
+
+/** 面板首尾帧格当前应对外引用的 URL（与 FrameDropZone / @ 下拉一致） */
+export function resolvedFramePanelUrl(
+  data: NodeData,
+  ctx: PromptMediaRefContext,
+  frameIndex: 0 | 1
+): string | undefined {
+  const frame = frameIndex === 0 ? 'first' : 'last';
+  const stored = resolveFirstLastFramePanelUrl(data, frame).trim();
+  if (stored) return stored;
+  if (frameIndex === 0) return effectiveFirstFramePanelUrl(data, ctx);
+  return undefined;
+}
+
+/** 面板底栏文案 → @ 下拉 insertText（泛称保留 @主图/@首帧图，资产名走 @资产:） */
+export function mentionInsertTextForPanelCaption(
+  caption: string,
+  slot: 'main' | 'first' | 'last',
+  data: NodeData,
+  ctx: PromptMediaRefContext
+): string {
+  const cap = String(caption || '').trim();
+  const genericMain = cap === '主图' || cap === '主视频';
+  const genericFrame = cap === '首帧图' || cap === '尾帧图';
+  if (slot === 'main') {
+    if (genericMain) return cap === '主视频' ? '@主视频' : '@主图';
+    const slug = resolveAssetSlugForReferenceSlot(
+      0,
+      [String(data.imagePreview || '').trim()],
+      [cap],
+      ctx.projectAssets
+    );
+    return slug ? buildProjectAssetPromptToken(slug, ctx.projectAssets) : '@主图';
+  }
+  const frameIndex = slot === 'first' ? 0 : 1;
+  if (genericFrame) return frameIndex === 0 ? '@首帧图' : '@尾帧图';
   const url =
     frameIndex === 0
-      ? data.firstFrameImageUrl || data.firstFrameImage
-      : data.lastFrameImageUrl || data.lastFrameImage;
-  const fromUrl = lookupProjectAssetDisplayName(url, assets);
-  if (fromUrl) return fromUrl;
-  return frameIndex === 0 ? '首帧图' : '尾帧图';
+      ? effectiveFirstFramePanelUrl(data, ctx)
+      : resolveFirstLastFramePanelUrl(data, 'last');
+  const slug = resolveAssetSlugForFrameSlot(
+    frameIndex,
+    url ? { ...data, ...(frameIndex === 0 ? { firstFrameImageUrl: url } : { lastFrameImageUrl: url }) } : data,
+    ctx.projectAssets
+  );
+  return slug ? buildProjectAssetPromptToken(slug, ctx.projectAssets) : frameIndex === 0 ? '@首帧图' : '@尾帧图';
+}
+
+/** 写入 @ 列表：与面板首尾帧格展示/回退规则一致 */
+function pushFrameMentionFromPanel(
+  refs: PromptMediaRefItem[],
+  data: NodeData,
+  ctx: PromptMediaRefContext,
+  frameIndex: 0 | 1
+): void {
+  const u = String(resolvedFramePanelUrl(data, ctx, frameIndex) || '').trim();
+  if (!u || isLikelyMainVideoUrl(u)) return;
+
+  const frame = frameIndex === 0 ? 'first' : 'last';
+  const hasStoredUrl = Boolean(resolveFirstLastFramePanelUrl(data, frame).trim());
+  const pushData: NodeData = { ...data };
+  if (!hasStoredUrl) {
+    if (frameIndex === 0) pushData.firstFrameImageUrl = u;
+    else pushData.lastFrameImageUrl = u;
+  }
+  maybePushFramePreview(refs, pushData, frameIndex, ctx);
 }
 
 function refSlotMentionDisplayLabel(
@@ -746,6 +1130,25 @@ function refSlotMentionDisplayLabel(
   assets?: ProjectAssetLabelRow[]
 ): string {
   const custom = data.referenceImageLabels?.[slotIndex]?.trim();
+  const genericOrd = custom?.match(/^图片(\d+)$/);
+  if (genericOrd) {
+    const labelOrd = parseInt(genericOrd[1], 10);
+    const compactOrd = refImageOrdinalForSlot(slotIndex, imgs, imagePreview);
+    const hasGaps = panelReferenceHasEmptySlots(imgs);
+    if (compactOrd >= 1 && labelOrd === compactOrd) return custom;
+    if (!hasGaps && labelOrd === slotIndex + 1) return custom;
+    if (hasGaps && String(imgs[slotIndex] || '').trim()) {
+      const nonEmpty = imgs.filter((u) => String(u || '').trim()).length;
+      const gapsBefore = leadingGapCountBeforeSlot(imgs, slotIndex);
+      if (
+        labelOrd === slotIndex + 1 &&
+        nonEmpty > 1 &&
+        !(gapsBefore >= 2 && labelOrd > compactOrd)
+      ) {
+        return custom;
+      }
+    }
+  }
   const url = imgs[slotIndex];
   const preferred = preferAssetDisplayNameOverGenericLabel(custom, url, assets);
   if (preferred) return preferred;
@@ -790,18 +1193,14 @@ export function buildPromptMediaRefLabels(data: NodeData, ctx: PromptMediaRefCon
     const tab = ctx.klingOmniTab;
     const prev = data.imagePreview?.trim();
     if (tab === 'frames') {
-      if (data.firstFrameImage || data.firstFrameImageUrl) {
-        maybePushFramePreview(refs, data, 0, ctx);
-      }
-      if (data.lastFrameImage || data.lastFrameImageUrl) {
-        maybePushFramePreview(refs, data, 1, ctx);
-      }
+      pushFrameMentionFromPanel(refs, data, ctx, 0);
+      pushFrameMentionFromPanel(refs, data, ctx, 1);
     } else if (tab === 'multi') {
       const imgs = data.klingOmniMultiReferenceImages || [];
       if (imgs.length > 0) {
         let vidOrd = 0;
         imgs.forEach((url, idx) => {
-          if (isOmniMixedRefItemVideo(url)) {
+          if (isOmniMultiReferenceSlotVideo(data, idx, url)) {
             vidOrd += 1;
             pushVideo(refs, vidOrd);
             return;
@@ -840,25 +1239,30 @@ export function buildPromptMediaRefLabels(data: NodeData, ctx: PromptMediaRefCon
         tab === 'instruction'
           ? Boolean(data.klingOmniInstructionVideoPreviewUrl || data.klingOmniInstructionVideoUrl)
           : Boolean(data.klingOmniVideoPreviewUrl || data.klingOmniVideoUrl);
-      /** 独立视频槽有素材且网格内尚未计入任何视频时补一条 @视频1 */
-      const slotVideoIsMain = !!prev && isLikelyMainVideoUrl(prev) && isSameMediaUrl(slotVideoUrl, prev);
-      if (hasVid && vidOrd === 0 && !slotVideoIsMain) nextVideo();
+      /** 独立视频槽：imagePreview=视频 URL 或创意描述 @主视频 → 主视频，否则 @视频1 */
+      const slotVideoIsMain =
+        (!!prev && isLikelyMainVideoUrl(prev) && isSameMediaUrl(slotVideoUrl, prev)) ||
+        (hasVid && promptMentionsMainVideoForNodeData(data));
+      if (hasVid && vidOrd === 0) {
+        if (slotVideoIsMain) {
+          if (!refs.some((r) => r.kind === 'mainVideo')) pushMainVideo(refs);
+        } else {
+          nextVideo();
+        }
+      }
     }
     return refs;
   }
 
   if (ctx.isJimeng) {
-    maybePushMainPreviewWithoutFrameMainImage(data, ctx, refs);
-    if (data.firstFrameImage || data.firstFrameImageUrl) {
-      maybePushFramePreview(refs, data, 0, ctx);
-    }
+    pushFrameMentionFromPanel(refs, data, ctx, 0);
     return refs;
   }
 
   if (ctx.isImage2) {
     maybePushMainPreview(data, ctx, refs);
     const imgs = data.referenceImages || [];
-    const prev = data.imagePreview?.trim();
+    const prev = resolvePromptMainImagePreviewForRefs(data);
     imgs.forEach((_, idx) =>
       pushPanelRefImageAtSlot(refs, data, imgs, idx, prev, {
         slotLabelMode: 'panelSlot',
@@ -871,7 +1275,7 @@ export function buildPromptMediaRefLabels(data: NodeData, ctx: PromptMediaRefCon
   if (ctx.isNano) {
     maybePushMainPreview(data, ctx, refs);
     const imgs = data.referenceImages || [];
-    const prev = data.imagePreview?.trim();
+    const prev = resolvePromptMainImagePreviewForRefs(data);
     imgs.forEach((_, idx) =>
       pushPanelRefImageAtSlot(refs, data, imgs, idx, prev, {
         slotLabelMode: 'panelSlot',
@@ -882,19 +1286,22 @@ export function buildPromptMediaRefLabels(data: NodeData, ctx: PromptMediaRefCon
   }
 
   if (ctx.isSeedance20) {
-    maybePushMainPreviewWithoutFrameMainImage(data, ctx, refs);
     if (ctx.seedanceMode === 'image') {
-      if (data.firstFrameImage || data.firstFrameImageUrl) {
-        maybePushFramePreview(refs, data, 0, ctx);
-      }
-      if (data.lastFrameImage || data.lastFrameImageUrl) {
-        maybePushFramePreview(refs, data, 1, ctx);
-      }
+      pushFrameMentionFromPanel(refs, data, ctx, 0);
+      pushFrameMentionFromPanel(refs, data, ctx, 1);
       return refs;
     }
     if (ctx.seedanceMode === 'reference') {
+      const mainVideoUrl = resolveSeedanceReferenceMainVideoUrl(data);
+      const mainIsVideo = Boolean(mainVideoUrl);
+      /** 与面板 referenceMovs 角标一致：主视频须 @主视频，而非 @视频1 */
+      if (mainIsVideo && mainVideoUrl) {
+        pushMainVideo(refs, mainMentionDisplayLabel(data, ctx.projectAssets));
+      } else {
+        maybePushMainPreviewWithoutFrameMainImage(data, ctx, refs);
+      }
       const imgs = data.referenceImages || [];
-      const prev = data.imagePreview?.trim();
+      const prev = resolvePromptMainImagePreviewForRefs(data);
       /** 与 UI 一致：主图单独一格，referenceImages 里与主预览同素材的槽不占 @图片1（含 thumb/file 双轨） */
       if (imgs.length > 0) {
         imgs.forEach((_, idx) =>
@@ -903,7 +1310,10 @@ export function buildPromptMediaRefLabels(data: NodeData, ctx: PromptMediaRefCon
             ...panelRefPushOpts(ctx),
           })
         );
-      } else if (data.firstFrameImage || data.firstFrameImageUrl) {
+      } else if (
+        !mainIsVideo &&
+        (data.firstFrameImage || data.firstFrameImageUrl)
+      ) {
         if (!isFirstFrameSlotSameAsMainImagePreview(data, ctx, prev)) {
           nextImage();
         }
@@ -911,6 +1321,7 @@ export function buildPromptMediaRefLabels(data: NodeData, ctx: PromptMediaRefCon
       const movs = data.referenceMovs || [];
       movs.forEach((m) => {
         const u = m?.url;
+        if (mainIsVideo && mainVideoUrl && isSameMediaUrl(u, mainVideoUrl)) return;
         if (prev && isLikelyMainVideoUrl(prev) && isSameMediaUrl(u, prev)) return;
         nextVideo();
       });
@@ -918,17 +1329,13 @@ export function buildPromptMediaRefLabels(data: NodeData, ctx: PromptMediaRefCon
       auds.forEach(() => nextAudio());
       return refs;
     }
+    maybePushMainPreviewWithoutFrameMainImage(data, ctx, refs);
     return refs;
   }
 
   if (ctx.isKeling || ctx.isVidu || ctx.isSeedance15) {
-    maybePushMainPreviewWithoutFrameMainImage(data, ctx, refs);
-    if (data.firstFrameImage || data.firstFrameImageUrl) {
-      maybePushFramePreview(refs, data, 0, ctx);
-    }
-    if (data.lastFrameImage || data.lastFrameImageUrl) {
-      maybePushFramePreview(refs, data, 1, ctx);
-    }
+    pushFrameMentionFromPanel(refs, data, ctx, 0);
+    pushFrameMentionFromPanel(refs, data, ctx, 1);
     return refs;
   }
 
@@ -938,18 +1345,42 @@ export function buildPromptMediaRefLabels(data: NodeData, ctx: PromptMediaRefCon
 /** 解析 @ 提及：从光标前文本中取 @ 后过滤词 */
 export function getActiveAtMention(
   text: string,
-  cursor: number
+  cursor: number,
+  projectAssets?: ProjectAssetLabelRow[]
 ): { atIndex: number; query: string } | null {
   const before = text.slice(0, cursor);
   const atIndex = before.lastIndexOf('@');
   if (atIndex === -1) return null;
   const afterAt = before.slice(atIndex + 1);
   if (/[\s\n\r]/.test(afterAt)) return null;
-  return { atIndex, query: afterAt };
+
+  /** 已完成 @资产:名称 — 光标在库内资产名末尾时不视为正在输入（避免误匹配长串正文） */
+  if (afterAt.startsWith('资产:') && projectAssets?.length) {
+    const tail = afterAt.slice('资产:'.length);
+    const known = matchLongestProjectAssetKey(tail, projectAssets);
+    if (known && tail.startsWith(known)) {
+      if (tail.length === known.length) return null;
+      const afterName = tail.slice(known.length);
+      /** 误粘贴/扫描粘连：@资产:野人围绕着… — 光标在 token 内部时不视为正在输入 @ */
+      if (afterName.length > 0 && !/^[\s@，。；：、,.!?／/与和及{〈(（\[]/.test(afterName[0])) {
+        return null;
+      }
+    }
+  }
+
+  return { atIndex, query: normalizeAtMentionFilterQuery(afterAt) };
+}
+
+/** @ 下拉过滤词：去掉用户手打的「资产:」前缀，与 insertText @资产:名 对齐 */
+export function normalizeAtMentionFilterQuery(query: string): string {
+  const q = query.trim();
+  if (q.startsWith('资产:')) return q.slice('资产:'.length);
+  return q;
 }
 
 /**
  * @图片n 对应面板槽：先匹配底栏「图片n」，再按非空参考槽序号（跳过空槽，避免串位）。
+ * 主图格已单独展示时，跳过与 imagePreview 同素材的槽（避免 @图片1 误绑主图 URL）。
  */
 export function resolvePictureTokenSlotIndex(
   ord: number,
@@ -959,28 +1390,92 @@ export function resolvePictureTokenSlotIndex(
 ): number | undefined {
   if (ord < 1) return undefined;
   const want = `图片${ord}`;
+  const main = String(imagePreview || '').trim();
+  const isMainDupSlot = (i: number) =>
+    Boolean(main && isDuplicateOfMainImagePreview(String(panelUrls[i] || '').trim(), main));
+  const phys = ord - 1;
+  /** 底栏标签重复为同一「图片n」时，@图片n 按物理槽位对齐，避免 @图片1/@图片2 共绑同一槽（image2.json） */
+  const duplicateGenericPictureLabels = (() => {
+    const seen = new Set<string>();
+    for (let i = 0; i < (labels?.length || 0); i++) {
+      const l = labels?.[i]?.trim() || '';
+      if (!/^图片\d+$/.test(l)) continue;
+      if (!String(panelUrls[i] || '').trim()) continue;
+      if (seen.has(l)) return true;
+      seen.add(l);
+    }
+    return false;
+  })();
+  if (
+    duplicateGenericPictureLabels &&
+    phys >= 0 &&
+    phys < panelUrls.length &&
+    String(panelUrls[phys] || '').trim()
+  ) {
+    return phys;
+  }
   const labelHits: number[] = [];
+  const mainDupLabelHits: number[] = [];
   for (let i = 0; i < panelUrls.length; i++) {
     if (labels?.[i]?.trim() !== want) continue;
     if (!String(panelUrls[i] || '').trim()) continue;
+    if (isMainDupSlot(i)) {
+      mainDupLabelHits.push(i);
+      continue;
+    }
     labelHits.push(i);
   }
   if (labelHits.length === 1) return labelHits[0];
   for (const i of labelHits) {
     if (refImageOrdinalForSlot(i, panelUrls, imagePreview) === ord) return i;
   }
-  const phys = ord - 1;
+  /** 底栏「图片n」与 @图片n 同序号，但与 imagePreview 同 URL：仍绑定该槽（可灵3 @图片2）；778990 误标 slot0 时让位给真实参考格 */
+  for (const i of mainDupLabelHits) {
+    if (labels?.[i]?.trim() !== want || i + 1 !== ord) continue;
+    const conflictSlot = panelUrls.findIndex(
+      (_, j) =>
+        j !== i &&
+        String(panelUrls[j] || '').trim() &&
+        !isMainDupSlot(j) &&
+        refImageOrdinalForSlot(j, panelUrls, imagePreview) === ord
+    );
+    const hasNonMainDupOrdinalMatch = conflictSlot >= 0;
+    if (hasNonMainDupOrdinalMatch && ord === 1 && i === 0) {
+      const conflictLabel = labels?.[conflictSlot]?.trim() || '';
+      const conflictPic = conflictLabel.match(/^图片(\d+)$/);
+      // 另一槽底栏为「图片2」等显式序号：slot0 的「图片1」优先（Nano @主图+@图片1）；底栏非图片n 则让位（778990）
+      if (conflictPic && parseInt(conflictPic[1], 10) !== ord) return i;
+      continue;
+    }
+    return i;
+  }
+  /** 优先非主图重复槽（778990：@图片1→猫而非主图 city 重复槽） */
+  for (let i = 0; i < panelUrls.length; i++) {
+    if (!String(panelUrls[i] || '').trim()) continue;
+    if (isMainDupSlot(i)) continue;
+    if (refImageOrdinalForSlot(i, panelUrls, imagePreview) === ord) return i;
+  }
   if (
     phys >= 0 &&
     phys < panelUrls.length &&
     String(panelUrls[phys] || '').trim() &&
-    refImageOrdinalForSlot(phys, panelUrls, imagePreview) === ord
+    !isMainDupSlot(phys)
   ) {
-    return phys;
+    const compactAtPhys = refImageOrdinalForSlot(phys, panelUrls, imagePreview);
+    const gapsBefore = leadingGapCountBeforeSlot(panelUrls, phys);
+    const nonEmpty = panelUrls.filter((u) => String(u || '').trim()).length;
+    if (compactAtPhys !== ord) {
+      if (gapsBefore >= 2 || nonEmpty === 1) return undefined;
+      const want = `图片${ord}`;
+      if (labels?.[phys]?.trim() === want) return phys;
+      if (ord > nonEmpty) return undefined;
+      return phys;
+    }
+    if (compactAtPhys === ord) return phys;
   }
-  for (let i = 0; i < panelUrls.length; i++) {
-    if (!String(panelUrls[i] || '').trim()) continue;
-    if (refImageOrdinalForSlot(i, panelUrls, imagePreview) === ord) return i;
+  /** image2/Nano：仅当无其它槽可匹配时，才允许 @图片n 绑定与主图同 URL 的显式参考槽 */
+  for (const i of mainDupLabelHits) {
+    if (ord === i + 1) return i;
   }
   return undefined;
 }
@@ -1037,51 +1532,73 @@ export function findPromptMediaRefItemForToken(
   return undefined;
 }
 
-/** Image2 属性面板可见槽（3 格：主图格 + 最多 2 参考，或无主图时 3 参考） */
+/** Image2 属性面板可见槽（主图格 + 最多 3 参考，或无主图时 4 参考；与 API image[] 上限一致） */
 export function image2VisiblePanelRefSlotIndices(data: NodeData): {
   showMain: boolean;
   refSlotIndices: number[];
 } {
+  const mainForPanel = resolvePromptMainImagePreviewForRefs(data);
   const prev = data.imagePreview?.trim();
-  const showMain =
-    Boolean(prev && !isLikelyMainVideoUrl(prev) && data.panelMainSlotVisible !== false);
+  const showMain = Boolean(mainForPanel && !isLikelyMainVideoUrl(mainForPanel));
   const entries = buildPanelReferenceDisplayEntries(data.referenceImages, {
-    imagePreview: prev,
-    dedupeAgainstMain: showMain,
+    imagePreview: mainForPanel ?? prev,
+    // @ 下拉不按主图去重：用户显式拖入同 URL 参考槽时 @图片n 仍需可选
+    dedupeAgainstMain: false,
     referenceImageLabels: data.referenceImageLabels,
   });
-  const maxRef = showMain ? 2 : 3;
+  const maxRef = image2MaxReferenceSlots(data);
   return {
     showMain,
     refSlotIndices: entries.slice(0, maxRef).map((e) => e.slotIndex),
   };
 }
 
-function filterLabelsForImage2InspectorDropdown(
+function filterLabelsForPanelInspectorDropdown(
   data: NodeData,
-  labels: PromptMediaRefItem[]
+  labels: PromptMediaRefItem[],
+  ctx: PromptMediaRefContext
 ): PromptMediaRefItem[] {
-  const { showMain, refSlotIndices } = image2VisiblePanelRefSlotIndices(data);
-  const allowed = new Set(refSlotIndices);
-  return labels.filter((it) => {
-    if (it.kind === 'mainImage' || it.kind === 'mainVideo') return showMain;
-    if (it.refImageIndex != null) return allowed.has(it.refImageIndex);
-    if (it.kind === 'projectAsset' && it.refImageIndex == null) return showMain;
-    return false;
-  });
+  if (ctx.isImage2) {
+    const { showMain, refSlotIndices } = image2VisiblePanelRefSlotIndices(data);
+    const allowed = new Set(refSlotIndices);
+    return labels.filter((it) => {
+      if (it.kind === 'mainImage' || it.kind === 'mainVideo') return showMain;
+      if (it.refImageIndex != null) return allowed.has(it.refImageIndex);
+      if (it.kind === 'projectAsset' && it.refImageIndex == null) return showMain;
+      return false;
+    });
+  }
+  if (ctx.isNano) {
+    const allowed = new Set(
+      (data.referenceImages || [])
+        .map((u, i) => (String(u || '').trim() ? i : -1))
+        .filter((i) => i >= 0)
+    );
+    const showMain = Boolean(resolvePromptMainImagePreviewForRefs(data));
+    return labels.filter((it) => {
+      if (it.kind === 'mainImage' || it.kind === 'mainVideo') {
+        return showMain;
+      }
+      if (it.kind === 'projectAsset' && it.refImageIndex == null) return showMain;
+      if (it.refImageIndex != null) return allowed.has(it.refImageIndex);
+      return false;
+    });
+  }
+  return labels;
 }
 
-/** @ 下拉去重键：同一资产展示名只保留一项（不含泛称「图片1」「主图」） */
+/** @ 下拉展示名：与面板底栏文案一致（泛称 @主图/@首帧图 亦返回可读名） */
 export function inspectorMentionDisplayNameForItem(it: PromptMediaRefItem): string {
   const lab = String(it.label || '')
     .replace(/^素材·/, '')
     .trim();
-  if (lab && !/^(图片\d+|主图|主视频|首帧图|尾帧图|视频\d+|音频\d+)$/.test(lab)) {
-    return lab;
-  }
-  if (it.insertText.startsWith('@资产:')) {
-    return it.insertText.slice('@资产:'.length).trim();
-  }
+  if (lab) return lab;
+  const ins = String(it.insertText || '').trim();
+  if (ins === '@主图') return '主图';
+  if (ins === '@主视频') return '主视频';
+  if (ins === '@首帧图') return '首帧图';
+  if (ins === '@尾帧图') return '尾帧图';
+  if (ins.startsWith('@资产:')) return ins.slice('@资产:'.length).trim();
   return '';
 }
 
@@ -1093,8 +1610,8 @@ export function buildInspectorPromptMentionItems(
 ): PromptMediaRefItem[] {
   void _projectAssetRefItems;
   let labels = buildPromptMediaRefLabels(data, ctx);
-  if (ctx.isImage2) {
-    labels = filterLabelsForImage2InspectorDropdown(data, labels);
+  if (ctx.isImage2 || ctx.isNano) {
+    labels = filterLabelsForPanelInspectorDropdown(data, labels, ctx);
   }
   const seenTokens = new Set<string>();
   const seenNames = new Set<string>();
@@ -1128,9 +1645,17 @@ export function buildInspectorPromptMentionItems(
         } else {
           continue;
         }
-      } else {
+      } else if (
+        it.kind === 'mainImage' ||
+        it.kind === 'mainVideo' ||
+        isLegacyFrameImageMentionItem(it)
+      ) {
+        /** 泛称（@主图/@主视频/首尾帧）按展示名去重，避免同义重复 */
         continue;
       }
+      /** image/video/audio（@图片n/@视频n/@音频n）：insertText 已按 ordinal 唯一，
+       *  displayLabel 可能因 referenceImageLabels 错位而重复（如 slot2 标签误写"图片4"），
+       *  不按 displayLabel 去重，否则会误删后续合法 @图片n（如真正的 @图片4）。 */
     }
     seenTokens.add(t);
     if (nameKey) seenNames.add(nameKey);
@@ -1165,7 +1690,7 @@ export function mergeInspectorAtMentionItems(
 
 /** slug 与展示名均可查 URL（创意描述 token 常用 @资产:名称） */
 export function buildProjectAssetSlugUrlMap(
-  rows: Array<{ slug: string; name: string; url: string }>
+  rows: Array<{ slug: string; name: string; url?: string }>
 ): Map<string, string> {
   const m = new Map<string, string>();
   for (const r of rows) {
@@ -1179,7 +1704,7 @@ export function buildProjectAssetSlugUrlMap(
 }
 
 export function filterMediaRefs(items: PromptMediaRefItem[], query: string): PromptMediaRefItem[] {
-  const q = query.trim().toLowerCase();
+  const q = normalizeAtMentionFilterQuery(query).trim().toLowerCase();
   if (!q) return items;
   return items.filter((it) => {
     const ins = it.insertText.toLowerCase();
@@ -1738,12 +2263,6 @@ export function matchAllPromptMediaTokens(
         i = j + known.length;
         continue;
       }
-      const m = tail.match(new RegExp(`^${PROMPT_ASSET_TOKEN_SUFFIX}`));
-      if (m?.[0]) {
-        matches.push({ token: `@资产:${m[0]}`, index: i });
-        i = j + m[0].length;
-        continue;
-      }
       i += 1;
       continue;
     }
@@ -1758,6 +2277,140 @@ export function matchAllPromptMediaTokens(
   return matches;
 }
 
+/**
+ * 复制创意描述为纯文本：去掉 @主图/@图片n/@资产:名称 等媒体引用 token，保留其余正文。
+ * 优先用项目素材库精确匹配 @资产: 边界，再兜底 PROMPT_MEDIA_TOKEN_RE。
+ */
+export function stripPromptMediaTokensForPlainCopy(
+  prompt: string,
+  projectAssets?: ProjectAssetLabelRow[]
+): string {
+  if (!prompt) return '';
+  const matches = matchAllPromptMediaTokens(prompt, projectAssets);
+  let out = prompt;
+  for (const { token, index } of [...matches].sort((a, b) => b.index - a.index)) {
+    out = out.slice(0, index) + out.slice(index + token.length);
+  }
+  out = out.replace(PROMPT_MEDIA_TOKEN_RE, '');
+  return out;
+}
+
+/**
+ * 去掉误写的 @资产: 前缀：仅保留资产库已知名称；未知长串还原为普通正文（避免整句高亮）。
+ */
+export function repairPromptInvalidAssetTokens(
+  prompt: string,
+  projectAssets?: ProjectAssetLabelRow[]
+): string {
+  if (!prompt?.trim() || !projectAssets?.length) return prompt;
+  let out = prompt;
+  const pieces: Array<{ start: number; end: number; replacement: string }> = [];
+  let i = 0;
+  while (i < out.length) {
+    if (out.slice(i, i + '@资产:'.length) !== '@资产:') {
+      i += 1;
+      continue;
+    }
+    const start = i;
+    let j = i + '@资产:'.length;
+    while (j < out.length && /\s/.test(out[j])) j += 1;
+    const tail = out.slice(j);
+    const known = matchLongestProjectAssetKey(tail, projectAssets);
+    if (known) {
+      const end = j + known.length;
+      const expected = `@资产:${known}`;
+      const actual = out.slice(start, end);
+      if (actual !== expected) pieces.push({ start, end, replacement: expected });
+      i = end;
+      continue;
+    }
+    const greedy = tail.match(new RegExp(`^${PROMPT_ASSET_TOKEN_SUFFIX}`));
+    if (greedy?.[0]) {
+      pieces.push({ start, end: j + greedy[0].length, replacement: greedy[0] });
+      i = j + greedy[0].length;
+      continue;
+    }
+    i += 1;
+  }
+  for (const p of pieces.sort((a, b) => b.start - a.start)) {
+    out = out.slice(0, p.start) + p.replacement + out.slice(p.end);
+  }
+  return out;
+}
+
+function omniHasVideoForTab(data: NodeData, tab: 'multi' | 'instruction' | 'video'): boolean {
+  if (tab === 'instruction') {
+    return Boolean(data.klingOmniInstructionVideoPreviewUrl || data.klingOmniInstructionVideoUrl);
+  }
+  if (tab === 'video') {
+    return Boolean(data.klingOmniVideoPreviewUrl || data.klingOmniVideoUrl);
+  }
+  return false;
+}
+
+function omniRefImagesField(
+  tab: 'multi' | 'instruction' | 'video'
+): 'klingOmniMultiReferenceImages' | 'klingOmniInstructionReferenceImages' | 'klingOmniVideoReferenceImages' {
+  if (tab === 'multi') return 'klingOmniMultiReferenceImages';
+  if (tab === 'instruction') return 'klingOmniInstructionReferenceImages';
+  return 'klingOmniVideoReferenceImages';
+}
+
+/** 扫描后：把创意描述中已 @ 到的库内素材补进当前面板参考数组（与展示格一致） */
+export function buildPromptReferencedAssetsPanelPatch(
+  data: NodeData,
+  projectAssets?: ProjectAssetLabelRow[]
+): Partial<NodeData> | undefined {
+  if (!projectAssets?.length) return undefined;
+  const ctx = buildPromptMediaRefContextForRun(data, projectAssets);
+  const prompt = getNodeInspectorPromptText(data);
+  const bySlug = buildProjectAssetSlugUrlMap(projectAssets);
+  const urlsFromPrompt = collectProjectAssetUrlsFromPrompt(prompt, bySlug, projectAssets);
+  if (!urlsFromPrompt.length) return undefined;
+
+  const patch: Partial<NodeData> = {};
+  let labels = [...(data.referenceImageLabels || [])];
+
+  const appendUrls = (
+    field:
+      | 'referenceImages'
+      | 'klingOmniMultiReferenceImages'
+      | 'klingOmniInstructionReferenceImages'
+      | 'klingOmniVideoReferenceImages',
+    max: number
+  ) => {
+    let current = [...(data[field] || [])];
+    let nextLabels = alignReferenceImageLabels(current, labels);
+    let fieldChanged = false;
+    for (const url of urlsFromPrompt) {
+      if (current.length >= max) break;
+      const name = lookupProjectAssetDisplayName(url, projectAssets) || '';
+      const next = tryAppendReferenceImageWithLabel(current, nextLabels, url, name);
+      if (!next.added) continue;
+      current = next.referenceImages;
+      nextLabels = next.referenceImageLabels;
+      fieldChanged = true;
+    }
+    if (!fieldChanged) return;
+    patch[field] = current.slice(0, max);
+    labels = nextLabels;
+    patch.referenceImageLabels = labels.slice(0, Math.max(max, 9));
+  };
+
+  if (ctx.isKelingOmni) {
+    const tab = (ctx.klingOmniTab || 'multi') as 'multi' | 'instruction' | 'video' | 'frames';
+    if (tab === 'frames') return undefined;
+    const max = tab === 'multi' ? 7 : omniHasVideoForTab(data, tab) ? 4 : 7;
+    appendUrls(omniRefImagesField(tab), max);
+  } else if (ctx.isSeedance20 && ctx.seedanceMode === 'reference') {
+    appendUrls('referenceImages', 14);
+  } else if (ctx.isNano || ctx.isImage2) {
+    appendUrls('referenceImages', ctx.isImage2 ? 3 : 14);
+  }
+
+  return Object.keys(patch).length > 0 ? patch : undefined;
+}
+
 const SEEDANCE_PROMPT_TOKEN_RE = PROMPT_MEDIA_TOKEN_RE;
 
 export type ReferencedCollectedImageRef = {
@@ -1765,6 +2418,8 @@ export type ReferencedCollectedImageRef = {
   url: string;
   label: string;
   refImageSlotIndex?: number;
+  /** 首尾帧模型：0=首帧，1=尾帧（@资产:名 与 @首帧图/@尾帧图 对齐） */
+  refFrameIndex?: 0 | 1;
   /** 与 referenceImages 数组下标一致，从 1 开始（对应 [图1]） */
   imageIndex: number;
 };
@@ -1829,30 +2484,43 @@ export function buildReferenceIndexOptionsFromPlan(
 }
 
 /** 与 buildPromptMediaRefLabels 一致：当前模型/tab 下的参考图数组（0-based 槽位） */
-function referenceImageUrlsForContext(data: NodeData, ctx: PromptMediaRefContext): string[] {
+export function referenceImageUrlsForContext(data: NodeData, ctx: PromptMediaRefContext): string[] {
+  const persisted = persistedReferenceImagesForRun(data);
+  /** 勿用 getCanonicalInspectorPromptText：其 remap 会调用本函数，造成循环 */
+  const prompt = getNodeInspectorPromptText(data) || String(data.prompt || '');
   if (ctx.isKelingOmni) {
     const tab = ctx.klingOmniTab;
-    if (tab === 'multi') return data.klingOmniMultiReferenceImages || [];
-    if (tab === 'instruction') return data.klingOmniInstructionReferenceImages || [];
-    if (tab === 'video') return data.klingOmniVideoReferenceImages || [];
-    return [];
+    let panel: string[] = [];
+    if (tab === 'multi') panel = data.klingOmniMultiReferenceImages || [];
+    else if (tab === 'instruction') panel = data.klingOmniInstructionReferenceImages || [];
+    else if (tab === 'video') panel = data.klingOmniVideoReferenceImages || [];
+    return mergePanelWithPersistedRefsIfPromptNeeds(panel, persisted, prompt, data.imagePreview);
   }
   if (ctx.isJimeng) {
     const f = data.firstFrameImageUrl || data.firstFrameImage;
-    return f ? [f] : [];
+    const panel = f ? [f] : [];
+    return mergePanelWithPersistedRefsIfPromptNeeds(panel, persisted, prompt, data.imagePreview);
   }
-  return data.referenceImages || [];
+  return mergePanelWithPersistedRefsIfPromptNeeds(
+    data.referenceImages,
+    persisted,
+    prompt,
+    data.imagePreview
+  );
 }
 
 /** 与 @视频n 标签顺序一致（Omni 指令/视频 tab 含独立视频槽） */
-function referenceVideoUrlsInLabelOrder(data: NodeData, ctx: PromptMediaRefContext): string[] {
+export function referenceVideoUrlsInLabelOrder(data: NodeData, ctx: PromptMediaRefContext): string[] {
   const prev = data.imagePreview?.trim();
   if (ctx.isKelingOmni) {
     const tab = ctx.klingOmniTab;
     if (tab === 'multi') {
       const urls: string[] = [];
-      for (const url of data.klingOmniMultiReferenceImages || []) {
-        if (isOmniMixedRefItemVideo(url)) urls.push(url.trim());
+      for (let i = 0; i < (data.klingOmniMultiReferenceImages || []).length; i++) {
+        const url = data.klingOmniMultiReferenceImages![i];
+        const resolved = resolveOmniMultiReferenceSlotVideoUrl(data, i, url);
+        if (resolved) urls.push(resolved.trim());
+        else if (isOmniMixedRefItemVideo(url)) urls.push(url.trim());
       }
       return urls;
     }
@@ -1874,7 +2542,8 @@ function referenceVideoUrlsInLabelOrder(data: NodeData, ctx: PromptMediaRefConte
       )?.trim();
       const hasVid = Boolean(slotUrl);
       const slotVideoIsMain =
-        !!prev && isLikelyMainVideoUrl(prev) && isSameMediaUrl(slotUrl, prev);
+        (!!prev && isLikelyMainVideoUrl(prev) && isSameMediaUrl(slotUrl, prev)) ||
+        (hasVid && promptMentionsMainVideoForNodeData(data));
       if (hasVid && videos.length === 0 && !slotVideoIsMain) {
         videos.push(slotUrl!);
       }
@@ -1912,21 +2581,28 @@ export function panelLabelSlotMatchesAssetLib(
   return true;
 }
 
-/** @资产: 上传/解析用 URL：资产库优先；底栏标签命中但槽内非同一 assetId 时不用错图 */
+/** @资产: 上传/解析用 URL：误拖 blob/aitop 错图时用资产库；面板已换成其它有效 URL 时以面板为准 */
 export function resolveProjectAssetUrlForPromptToken(
   panelUrl: string | undefined,
   libUrl: string | undefined
 ): string | undefined {
   const lib = libUrl?.trim();
   const panel = panelUrl?.trim();
-  if (!lib) return panel;
   if (!panel) return lib;
-  // 槽内若为上次运行遗留的 aitop COS（误拖图），不得覆盖资产库 file
-  if (/aitop100app-1251510006/i.test(panel)) return lib;
-  const libKey = projectAssetMediaPairKey(lib);
-  const panelKey = projectAssetMediaPairKey(panel);
-  if (libKey && panelKey && libKey === panelKey) return panel;
-  return lib;
+  if (!lib) return panel;
+  if (/^blob:/i.test(panel) || /^data:image\//i.test(panel)) {
+    const libKey = projectAssetMediaPairKey(lib);
+    const slotKey = projectAssetMediaPairKey(panel);
+    if (libKey && slotKey && libKey === slotKey) return panel;
+    return lib;
+  }
+  if (/aitop100app-1251510006/i.test(panel)) {
+    const libKey = projectAssetMediaPairKey(lib);
+    const panelKey = projectAssetMediaPairKey(panel);
+    if (libKey && panelKey && libKey === panelKey) return panel;
+    return lib;
+  }
+  return panel;
 }
 
 function resolveSeedancePromptTokenMedia(
@@ -1950,7 +2626,7 @@ function resolveSeedancePromptTokenMedia(
       for (let i = 0; i < panelLabels.length; i++) {
         if (panelLabels[i]?.trim() !== key) continue;
         const p = panelUrls[i]?.trim();
-        if (libUrl && !panelLabelSlotMatchesAssetLib(p, libUrl, data.imagePreview)) continue;
+        if (!p) continue;
         refImageSlotIndex = i;
         panelUrl = p;
         break;
@@ -1969,9 +2645,9 @@ function resolveSeedancePromptTokenMedia(
         }
       }
     }
-    const url = libUrl
-      ? libUrl
-      : resolveProjectAssetUrlForPromptToken(panelUrl, libUrl);
+    const url = panelUrl?.trim()
+      ? resolveProjectAssetUrlForPromptToken(panelUrl, libUrl)
+      : libUrl;
     if (!url) return null;
     const row = ctx.projectAssets?.find(
       (a) => a.slug === key || a.name.trim() === key
@@ -1985,21 +2661,28 @@ function resolveSeedancePromptTokenMedia(
     return { kind: 'image', url, label: mainMentionDisplayLabel(data, ctx.projectAssets) };
   }
   if (token === '@主视频') {
+    const tab = data.klingOmniTab;
+    if (tab === 'instruction' || tab === 'video') {
+      const bound = resolveOmniTabBoundVideoUrl(data, tab);
+      if (bound) return { kind: 'video', url: bound, label: '主视频' };
+    }
     const url = data.imagePreview?.trim();
     if (!url || !isLikelyMainVideoUrl(url)) return null;
     return { kind: 'video', url, label: '主视频' };
   }
   if (token === '@首帧图') {
-    const url = (
-      data.firstFrameImageUrl ||
-      data.firstFrameImage ||
-      (!isLikelyMainVideoUrl(data.imagePreview || '') ? data.imagePreview : undefined)
-    )?.trim();
+    const url = effectiveFirstFramePanelUrl(data, ctx)?.trim();
     if (!url || isLikelyMainVideoUrl(url)) return null;
     return {
       kind: 'image',
       url,
-      label: frameMentionDisplayLabel(data, 0, ctx.projectAssets) || '首帧图',
+      label: frameMentionDisplayLabel(
+        data.firstFrameImageUrl || data.firstFrameImage
+          ? data
+          : { ...data, firstFrameImageUrl: url },
+        0,
+        ctx.projectAssets
+      ) || '首帧图',
     };
   }
   if (token === '@尾帧图') {
@@ -2011,13 +2694,9 @@ function resolveSeedancePromptTokenMedia(
       label: frameMentionDisplayLabel(data, 1, ctx.projectAssets) || '尾帧图',
     };
   }
-  const labels = buildPromptMediaRefLabels(data, ctx);
-  const alias =
-    token === '@图片' ? '@图片1' : token === '@视频' ? '@视频1' : token === '@音频' ? '@音频1' : token;
-  const item = findPromptMediaRefItemForToken(labels, token, alias);
-  const picEarly = token.match(/^@图片(\d+)$/);
-  if (picEarly && !item) {
-    const ord = parseInt(picEarly[1], 10);
+  const picOrdMatch = token.match(/^@图片(\d+)$/);
+  if (picOrdMatch) {
+    const ord = parseInt(picOrdMatch[1], 10);
     const panelUrls = referenceImageUrlsForContext(data, ctx);
     const idx = resolvePictureTokenSlotIndex(
       ord,
@@ -2025,14 +2704,20 @@ function resolveSeedancePromptTokenMedia(
       data.referenceImageLabels,
       data.imagePreview?.trim()
     );
-    if (idx == null) return null;
-    const url = panelUrls[idx]?.trim();
-    if (!url || isLikelyMainVideoUrl(url)) return null;
-    const custom = data.referenceImageLabels?.[idx]?.trim();
-    const cap =
-      custom && !/^图片\d+$/.test(custom) ? custom : `图片${ord}`;
-    return { kind: 'image', url, label: cap, refImageSlotIndex: idx };
+    if (idx != null) {
+      const url = panelUrls[idx]?.trim();
+      if (url && !isLikelyMainVideoUrl(url)) {
+        const custom = data.referenceImageLabels?.[idx]?.trim();
+        const cap =
+          custom && !/^图片\d+$/.test(custom) ? custom : `图片${ord}`;
+        return { kind: 'image', url, label: cap, refImageSlotIndex: idx };
+      }
+    }
   }
+  const labels = buildPromptMediaRefLabels(data, ctx);
+  const alias =
+    token === '@图片' ? '@图片1' : token === '@视频' ? '@视频1' : token === '@音频' ? '@音频1' : token;
+  const item = findPromptMediaRefItemForToken(labels, token, alias);
   if (!item) return null;
   if (item.kind === 'projectAsset') {
     const key = item.insertText.replace(/^@资产:/, '');
@@ -2158,6 +2843,51 @@ export function filterProjectAssetsForReferencedPlan(
   });
 }
 
+function resolveRefFrameIndexForCollectedToken(
+  token: string,
+  data: NodeData,
+  ctx: PromptMediaRefContext
+): 0 | 1 | undefined {
+  if (token === '@尾帧图') return 1;
+  if (token === '@首帧图') return 0;
+  const isFrameModel =
+    ctx.isKeling ||
+    ctx.isVidu ||
+    ctx.isSeedance15 ||
+    ctx.isJimeng ||
+    (ctx.isSeedance20 && ctx.seedanceMode === 'image');
+  if (isFrameModel) {
+    if (
+      token === '@主图' ||
+      token === '@主体' ||
+      token === '@图片1' ||
+      token === '@图片'
+    ) {
+      return 0;
+    }
+    if (token === '@图片2') return 1;
+  }
+  const labels = buildPromptMediaRefLabels(data, ctx);
+  const item = findPromptMediaRefItemForToken(labels, token);
+  if (item?.refFrameIndex === 0 || item?.refFrameIndex === 1) {
+    return item.refFrameIndex;
+  }
+  return undefined;
+}
+
+function projectAssetsFromSlugMap(
+  projectAssetBySlug: Map<string, string>
+): ProjectAssetLabelRow[] {
+  const out: ProjectAssetLabelRow[] = [];
+  for (const [slug, url] of projectAssetBySlug.entries()) {
+    const u = String(url || '').trim();
+    if (!u) continue;
+    const name = slug.trim();
+    out.push({ slug: name, name, url: u });
+  }
+  return out;
+}
+
 /**
  * 仅收集创意描述里实际 @ 到的素材，顺序与在正文中的出现顺序一致。
  * 未 @ 的主图/参考槽/资产库条目不会进入上传列表（各模型运行前共用）。
@@ -2173,6 +2903,9 @@ export function collectReferencedMediaFromPrompt(
     ...ctx,
     projectAssets: ctx.projectAssets ?? projectAssets,
   };
+  if (!mergedCtx.projectAssets?.length && projectAssetBySlug.size) {
+    mergedCtx.projectAssets = projectAssetsFromSlugMap(projectAssetBySlug);
+  }
   const images: ReferencedCollectedImageRef[] = [];
   const videos: ReferencedCollectedVideoRef[] = [];
   const audios: ReferencedCollectedAudioRef[] = [];
@@ -2200,6 +2933,7 @@ export function collectReferencedMediaFromPrompt(
         url: resolved.url,
         label: resolved.label,
         refImageSlotIndex: resolved.refImageSlotIndex,
+        refFrameIndex: resolveRefFrameIndexForCollectedToken(token, data, mergedCtx),
         imageIndex: images.length + 1,
       });
     } else if (resolved.kind === 'video') {
@@ -2414,6 +3148,20 @@ export function promptMentionsMainImageForNodeData(data: Partial<NodeData>): boo
   return plan.images.some((e) => e.token === '@主图' || e.token === '@主体');
 }
 
+/** 创意描述是否 @ 到任意图片类引用（@图片n / @资产 / @首帧图 等，不含纯文本） */
+export function promptMentionsAnyImageRefForNodeData(data: Partial<NodeData>): boolean {
+  const d = data as NodeData;
+  const prompt = getNodeInspectorPromptText(d).trim();
+  if (!prompt) return false;
+  const plan = collectReferencedMediaFromPrompt(
+    prompt,
+    d,
+    buildPromptMediaRefContextFromNode(d),
+    new Map()
+  );
+  return plan.images.length > 0;
+}
+
 function isGenericPanelRefCaption(label: string): boolean {
   return /^(图片\d+|主图|主视频|首帧图|尾帧图)$/.test(label.trim());
 }
@@ -2464,7 +3212,7 @@ export function buildPromptImageTokenToAssetTokenMap(
   if (!assets?.length) return map;
   const ctxImgs = referenceImageUrlsForContext(data, ctx);
   const panelImgs = data.referenceImages || [];
-  const imgs = panelImgs.length >= ctxImgs.length ? panelImgs : ctxImgs.length ? ctxImgs : panelImgs;
+  const imgs = ctxImgs.length > 0 ? ctxImgs : panelImgs;
   const labels = data.referenceImageLabels;
   const prev = data.imagePreview?.trim();
 
@@ -2678,7 +3426,7 @@ export function repairPromptStraySlotLabelDuplicates(
   const ctx = buildPromptMediaRefContextFromNode(data);
   const ctxImgs = referenceImageUrlsForContext(data, ctx);
   const panelImgs = data.referenceImages || [];
-  const imgs = panelImgs.length >= ctxImgs.length ? panelImgs : ctxImgs.length ? ctxImgs : panelImgs;
+  const imgs = ctxImgs.length > 0 ? ctxImgs : panelImgs;
   const labels = data.referenceImageLabels;
   for (let i = 0; i < imgs.length; i++) {
     const slug = resolveAssetSlugForReferenceSlot(i, imgs, labels, projectAssets);
@@ -2737,7 +3485,7 @@ export function collectPromptAssetScanRefs(
 
   const ctxImgs = referenceImageUrlsForContext(data, ctx);
   const panelImgs = data.referenceImages || [];
-  const imgs = panelImgs.length >= ctxImgs.length ? panelImgs : ctxImgs.length ? ctxImgs : panelImgs;
+  const imgs = ctxImgs.length > 0 ? ctxImgs : panelImgs;
   const labels = data.referenceImageLabels;
   for (let i = 0; i < imgs.length; i++) {
     const slug = resolveAssetSlugForReferenceSlot(i, imgs, labels, assets);
@@ -2760,6 +3508,103 @@ export function collectPromptAssetScanRefs(
   return refs.sort((a, b) => b.label.length - a.label.length);
 }
 
+/** 创意描述里过期/失效 @图片n → 与当前面板槽 @ 列表对齐（跳号泛称 + 删槽后残留如 @图片4） */
+export function repairPromptPictureOrdinalMismatch(
+  prompt: string,
+  data: NodeData,
+  ctx: PromptMediaRefContext
+): string {
+  if (!prompt.includes('@图片')) return prompt;
+  const items = buildPromptMediaRefLabels(data, ctx);
+  const validOrds = new Set<number>();
+  for (const it of items) {
+    const m = it.insertText.match(/^@图片(\d+)$/);
+    if (m) validOrds.add(parseInt(m[1], 10));
+  }
+  if (validOrds.size === 0) return prompt;
+
+  const imgs = referenceImageUrlsForContext(data, ctx);
+  const labels = data.referenceImageLabels || [];
+  const preview = data.imagePreview?.trim();
+  const validSorted = [...validOrds].sort((a, b) => a - b);
+  const maxValid = Math.max(...validOrds);
+  const staleToCurrent = new Map<string, string>();
+
+  for (let i = 0; i < imgs.length; i++) {
+    const custom = labels[i]?.match(/^图片(\d+)$/);
+    if (!custom) continue;
+    const staleOrd = parseInt(custom[1], 10);
+    const compactOrd = refImageOrdinalForSlot(i, imgs, preview);
+    if (
+      compactOrd >= 1 &&
+      staleOrd !== compactOrd &&
+      !validOrds.has(staleOrd) &&
+      validOrds.has(compactOrd)
+    ) {
+      const bySlot = resolvePictureTokenSlotIndex(staleOrd, imgs, labels, preview);
+      if (bySlot === i && staleOrd === i + 1) {
+        const gapsBefore = leadingGapCountBeforeSlot(imgs, i);
+        const nonEmpty = imgs.filter((u) => String(u || '').trim()).length;
+        if (!(gapsBefore >= 2 && staleOrd > nonEmpty)) continue;
+      }
+      staleToCurrent.set(`@图片${staleOrd}`, `@图片${compactOrd}`);
+    }
+  }
+
+  let out = prompt;
+  for (const [from, to] of [...staleToCurrent.entries()].sort(
+    (a, b) => b[0].length - a[0].length
+  )) {
+    out = out.split(from).join(to);
+  }
+
+  const orphans = new Set<number>();
+  for (const m of out.matchAll(/@图片(\d+)/g)) {
+    const ord = parseInt(m[1], 10);
+    if (validOrds.has(ord)) continue;
+    if (resolvePictureTokenSlotIndex(ord, imgs, labels, preview) != null) continue;
+    orphans.add(ord);
+  }
+  if (!orphans.size) return out;
+
+  for (const badOrd of [...orphans].sort((a, b) => b - a)) {
+    const usedValid = new Set<number>();
+    for (const m of out.matchAll(/@图片(\d+)/g)) {
+      const o = parseInt(m[1], 10);
+      if (validOrds.has(o) && o !== badOrd) usedValid.add(o);
+    }
+    const bySlot = resolvePictureTokenSlotIndex(badOrd, imgs, labels, preview);
+    let target: number | undefined;
+    if (bySlot != null) {
+      const compact = refImageOrdinalForSlot(bySlot, imgs, preview);
+      if (compact >= 1 && validOrds.has(compact)) target = compact;
+    }
+    if (target == null) {
+      const unused = validSorted.filter((o) => !usedValid.has(o));
+      target = unused.find((o) => o !== badOrd) ?? (badOrd > maxValid ? maxValid : undefined);
+    }
+    if (target != null && target !== badOrd && validOrds.has(target)) {
+      out = out.replace(new RegExp(`@图片${badOrd}(?!\\d)`, 'g'), `@图片${target}`);
+    }
+  }
+  return out;
+}
+
+/** @deprecated 使用 repairPromptPictureOrdinalMismatch */
+export const repairPromptStalePictureOrdinals = repairPromptPictureOrdinalMismatch;
+
+/** 属性面板打开时：仅修正 @图片n 序号，不做 @资产 规范化 */
+export function buildPromptPictureOrdinalRepairPatch(
+  data: NodeData,
+  projectAssets?: ProjectAssetLabelRow[]
+): Partial<NodeData> | undefined {
+  const raw = getNodeInspectorPromptText(data);
+  const ctx = buildPromptMediaRefContextForRun(data, projectAssets);
+  const repaired = repairPromptPictureOrdinalMismatch(raw, data, ctx);
+  if (repaired === raw) return undefined;
+  return buildNodePromptUpdatePatch(data, repaired);
+}
+
 /** 属性面板展示用文案：读当前 tab + 修复误扫描 + 将可识别的 @图片n 规范为 @资产:名称 */
 export function getCanonicalInspectorPromptText(
   data: NodeData,
@@ -2767,7 +3612,8 @@ export function getCanonicalInspectorPromptText(
 ): string {
   const raw = getNodeInspectorPromptText(data);
   const ctx = buildPromptMediaRefContextForRun(data, projectAssets);
-  let step = repairPromptStraySlotLabelDuplicates(raw, data, projectAssets);
+  let step = repairPromptPictureOrdinalMismatch(raw, data, ctx);
+  step = repairPromptStraySlotLabelDuplicates(step, data, projectAssets);
   step = remapPromptMainImageToAssetToken(step, data, projectAssets);
   step = remapPromptFrameTokensToAssetTokens(step, data, projectAssets);
   return remapPromptPanelImageTokensToAssetTokens(step, data, ctx, projectAssets);
@@ -2828,24 +3674,42 @@ export function scanPromptAppendMediaTokensForNode(
   let out = scanPromptAppendAllTokens(text, refs);
   out = repairPromptStraySlotLabelDuplicates(out, data, projectAssets);
   out = remapPromptMainImageToAssetToken(out, data, projectAssets);
-  return remapPromptPanelImageTokensToAssetTokens(out, data, ctx, projectAssets);
+  out = remapPromptPanelImageTokensToAssetTokens(out, data, ctx, projectAssets);
+  out = repairPromptInvalidAssetTokens(out, projectAssets);
+  return out;
 }
 
-/** 写入创意描述并自动执行「扫描 @素材」 */
+/** 「扫描 @素材」：补全创意描述 token + 修复无效 @资产 + 同步面板参考格 */
+export function buildScanPromptAndPanelPatch(
+  data: NodeData,
+  projectAssetRefItems: PromptMediaRefItem[],
+  rawPrompt: string,
+  projectAssets?: ProjectAssetLabelRow[]
+): Partial<NodeData> | undefined {
+  const scanned = scanPromptAppendMediaTokensForNode(
+    data,
+    projectAssetRefItems,
+    rawPrompt,
+    projectAssets
+  );
+  const promptPatch = buildNodePromptUpdatePatch(data, scanned);
+  const merged = { ...data, ...promptPatch };
+  const panelPatch = buildPromptReferencedAssetsPanelPatch(merged, projectAssets);
+  const patch = { ...promptPatch, ...panelPatch };
+  const promptChanged = scanned !== rawPrompt;
+  const panelChanged = Boolean(panelPatch && Object.keys(panelPatch).length > 0);
+  if (!promptChanged && !panelChanged) return undefined;
+  return patch;
+}
+
+/** 写入创意描述并自动执行「扫描 @素材」（分镜表批量建节点等场景） */
 export function buildScannedNodePromptPatch(
   data: NodeData,
   projectAssetRefItems: PromptMediaRefItem[],
   rawPrompt: string,
   projectAssets?: ProjectAssetLabelRow[]
 ): Partial<NodeData> {
-  const dataWithPrompt = { ...data, ...buildNodePromptUpdatePatch(data, rawPrompt) };
-  const scanned = scanPromptAppendMediaTokensForNode(dataWithPrompt, projectAssetRefItems, rawPrompt);
-  const ctx = buildPromptMediaRefContextForRun(dataWithPrompt, projectAssets);
-  const remapped = remapPromptPanelImageTokensToAssetTokens(
-    scanned,
-    dataWithPrompt,
-    ctx,
-    projectAssets
-  );
-  return buildNodePromptUpdatePatch(data, remapped);
+  const patch = buildScanPromptAndPanelPatch(data, projectAssetRefItems, rawPrompt, projectAssets);
+  if (patch) return patch;
+  return buildNodePromptUpdatePatch(data, rawPrompt);
 }
