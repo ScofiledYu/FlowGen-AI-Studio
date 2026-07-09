@@ -23,6 +23,10 @@ import {
   buildCanonicalInspectorPromptPatch,
   filterProjectAssetsForReferencedPlan,
   getCanonicalInspectorPromptText,
+  buildInspectorPromptMentionItems,
+  repairPromptPictureOrdinalMismatch,
+  repairPromptStalePictureOrdinals,
+  buildPromptPictureOrdinalRepairPatch,
   remapPromptPanelImageTokensToAssetTokens,
   repairPromptStraySlotLabelDuplicates,
   remapPromptMainImageToAssetToken,
@@ -30,6 +34,7 @@ import {
   scanPromptAppendMediaTokensForNode,
   scanPromptAppendAllTokens,
   matchAllPromptMediaTokens,
+  referenceImageUrlsForContext,
 } from '../utils/promptMediaRefs.ts';
 import {
   panelReferencesAlreadyContainUrl,
@@ -45,6 +50,8 @@ import {
   filterPanelReferenceDisplayEntriesExcludingMainPreview,
   panelRefDisplayDedupeKey,
   referenceImagesDedupePatchIfNeeded,
+  isOmniAssetMainUploadRefDuplicate,
+  isPanelRefDuplicateOfMainImageSlot,
 } from '../utils/referenceImageSlotLabels.ts';
 import { enrichSpawnedStoryboardNodeData } from '../utils/enrichSpawnedStoryboardNode.ts';
 import {
@@ -58,6 +65,7 @@ import {
   OMNI_MULTI_FIRST_FRAME_TOKENS,
   populateUploadedRefBySlotFromMediaPlan,
   buildPanelImagePreviewPatchAfterRun,
+  buildPanelMainImageRestorePatchForEditing,
   buildRunNodeImagePreviewPatch,
   panelReferenceDisplaySlots,
   shouldShowPanelMainImageSlot,
@@ -68,17 +76,33 @@ import {
   prunePanelReferenceImagesToPromptRefs,
   promptMentionsMainImageInText,
   promptPlanReferencesMainImage,
+  promptPlanReferencesPanelImages,
   slotOriginalFileConflictsWithPlanEntry,
   shouldUseSlotOriginalFileForUpload,
   buildReferenceOnlyImagesForApiPayload,
+  buildSeedanceReferenceImagesApiPayload,
+  buildSeedanceReferenceApiLabelsFromPlan,
   assertDistinctUploadedRefsForPlan,
   resolveReferencedImageUploadSource,
+  panelReferenceImagesForUpload,
 } from '../utils/referencedMediaRun.ts';
 import { buildReferenceImageDetailItemsFromPanel } from '../utils/promptMediaRefs.ts';
 import {
   nodeUsesHiddenMainPreviewSlot,
   resolveNodeSelectionPreviewUrl,
+  buildSeedanceReferenceDetailsFromSnapshot,
 } from '../utils/nodeDetailsPreview.ts';
+import {
+  outputNodePanelReferenceImagesFromRun,
+  sanitizeOutputNodePanelReferenceImages,
+  sanitizeOutputNodeFramePanelPatch,
+  sanitizeOutputLikeNodeDataOnLoad,
+  shouldPreserveSeedanceReferencePanelBeforePromptRefs,
+  buildPanelRefSlotSyncPatch,
+  buildPanelReferenceImagesRestorePatchForEditing,
+  mergePanelWithPersistedRefsIfPromptNeeds,
+} from '../utils/panelRefPersistence.ts';
+import { NodeType } from '../types.ts';
 
 let pass = 0;
 let fail = 0;
@@ -114,7 +138,7 @@ function mockUploadedByToken(
   return m;
 }
 
-/** 模拟运行成功后的面板写回：按槽合并上传 URL，再去掉未 @ 的参考槽 */
+/** 模拟运行成功后的面板写回：按槽合并上传 URL，未 @ 槽保留原图 */
 function simulatePanelAfterRun(
   panelBefore: string[],
   plan: ReturnType<typeof collectReferencedMediaFromPrompt>,
@@ -205,7 +229,6 @@ function runModelScenario(
 ) {
   const prompt = String(data.prompt || '').trim();
   const panelBefore = [...refArrayForModel(data)];
-  const skipPrune = options?.skipPanelPrune || data.selectedModel === '即梦3.0 Pro';
   const ctx = buildPromptMediaRefContextFromNode(data);
   const plan = collectReferencedMediaFromPrompt(prompt, data, ctx, new Map());
   ok(
@@ -216,12 +239,30 @@ function runModelScenario(
       : undefined
   );
   const uploadedByToken = mockUploadedByToken(plan);
-  const panelAfter = skipPrune
-    ? buildPanelReferenceImagesAfterUpload(panelBefore, plan.images, uploadedByToken, {
-        imagePreview: data.imagePreview,
-      })
-    : simulatePanelAfterRun(panelBefore, plan, uploadedByToken, data.imagePreview);
+  const panelAfter = simulatePanelAfterRun(panelBefore, plan, uploadedByToken, data.imagePreview);
   const dataAfter = applyPrunedPanelToData(data, panelAfter);
+  const labelsAfter = resolveReferenceImageLabelsAfterPanelRun({
+    panelBefore,
+    labelsBefore: data.referenceImageLabels,
+    panelAfter,
+    plan: { images: plan.images, videos: plan.videos, audios: plan.audios },
+  });
+  const dataSynced = {
+    ...dataAfter,
+    referenceImageLabels: labelsAfter,
+  } as NodeData;
+  const ctxAfter = buildPromptMediaRefContextFromNode(dataSynced);
+  const repairedPrompt = repairPromptPictureOrdinalMismatch(prompt, dataSynced, ctxAfter);
+  if (repairedPrompt !== prompt) {
+    if (dataSynced.selectedModel === '可灵3.0 Omni') {
+      const tab = dataSynced.klingOmniTab || 'multi';
+      if (tab === 'multi') dataSynced.klingOmniMultiPrompt = repairedPrompt;
+      else if (tab === 'instruction') dataSynced.klingOmniInstructionPrompt = repairedPrompt;
+      else if (tab === 'video') dataSynced.klingOmniVideoPrompt = repairedPrompt;
+    }
+    dataSynced.prompt = repairedPrompt;
+  }
+  const planResolved = collectReferencedMediaFromPrompt(repairedPrompt, dataSynced, ctxAfter, new Map());
 
   const maxRefSlot = Math.max(-1, ...plan.images.map((e) => e.refImageSlotIndex ?? -1));
   ok(
@@ -240,11 +281,11 @@ function runModelScenario(
         uploadedByToken.has(e.token)
     );
     if (!inPlan) {
-      if (skipPrune) {
-        ok(`${name}: 未@槽${i}保留原图`, after === before || after === `${before}|UP`, `${after} vs ${before}`);
-      } else {
-        ok(`${name}: 未@槽${i}已清空`, !String(after).trim(), `got ${after}`);
-      }
+      ok(
+        `${name}: 未@槽${i}保留原图`,
+        after === before || after === `${before}|UP` || after.replace(/\|UP$/i, '') === before,
+        `${after} vs ${before}`
+      );
     } else {
       ok(`${name}: 已@槽${i}写回上传URL`, after.endsWith('|UP'), after);
     }
@@ -252,8 +293,12 @@ function runModelScenario(
   }
 
   for (const entry of plan.images) {
-    const slotUrl = entry.refImageSlotIndex != null ? panelBefore[entry.refImageSlotIndex] : null;
-    const resolved = urlAtToken(dataAfter, entry.token);
+    const slotIdx = entry.refImageSlotIndex;
+    const slotUrl = slotIdx != null ? panelBefore[slotIdx] : null;
+    const resolved =
+      slotIdx != null
+        ? String(panelAfter[slotIdx] || '').trim() || null
+        : urlAtToken(dataSynced, entry.token);
     const norm = (u: string | null) =>
       u ? u.replace(/\|UP$/i, '').split('?')[0] : null;
     ok(
@@ -335,10 +380,11 @@ console.log('\n=== 1. 面板槽位合并（通用） ===\n');
   const after = simulatePanelAfterRun(panel, plan, uploadedByToken);
   eq(
     after,
-    ['https://asset/a.png|UP', 'https://drag/extra.png|UP'],
-    '逆序@后保留槽0,1（未@槽2清空并去掉尾部空槽）'
+    ['https://asset/a.png|UP', 'https://drag/extra.png|UP', 'https://asset/b.png'],
+    '逆序@后写回已@槽，未@槽2仍保留'
   );
-  ok('未@槽2已去掉', after.length === 2);
+  ok('未@槽2仍保留原图', after[2] === 'https://asset/b.png');
+  ok('面板长度不变', after.length === 3);
 }
 
 console.log('\n=== 2. 分镜克隆合并参考图 ===\n');
@@ -473,7 +519,7 @@ console.log('\n=== 4. 回归：Image2 不再压紧丢槽 ===\n');
   const uploadedByToken = mockUploadedByToken(plan);
   const after = simulatePanelAfterRun(panel, plan, uploadedByToken);
   ok('槽0已@保留', after[0]?.endsWith('|UP'));
-  ok('槽1未@已清空', !String(after[1] || '').trim());
+  ok('槽1未@仍保留', String(after[1] || '').trim() === panel[1]);
   ok('槽2已@保留', after[2]?.endsWith('|UP'));
   ok('中间空槽保留占位', after.length === 3, `len=${after.length}`);
 }
@@ -547,9 +593,9 @@ console.log('\n=== 6. Omni multi：运行后主图 COS 不得占参考槽「图�
     uploadedMainUrl: cosMain,
     imagePreview: dataUrl,
   });
-  ok('合并后仅保留狐狸参考槽', after.length === 1, JSON.stringify(after));
-  ok('参考槽为狐狸上传 URL', after[0] === `${foxUrl}|UP`);
-  ok('不含主图 COS', !after.includes(cosMain));
+  ok('合并后保留全部面板槽', after.length === 2, JSON.stringify(after));
+  ok('狐狸槽写回上传 URL', after[1] === `${foxUrl}|UP`);
+  ok('主图预览槽仍保留', after[0] === dataUrl);
 }
 
 console.log('\n=== 7. Seedance 参考生：主图+三参考 @图片3 槽位对齐 ===\n');
@@ -613,7 +659,7 @@ console.log('\n=== 7. Seedance 参考生：主图+三参考 @图片3 槽位对�
   ok('面板持久化长度不变', panelPersist.length === panelBefore.length, String(panelPersist.length));
 }
 
-console.log('\n=== 8. 运行后 prune：未@槽清空，@图片2/3 名称不变 ===\n');
+console.log('\n=== 8. 运行后合并：未@槽仍保留，@图片2/3 写回上传 URL ===\n');
 
 {
   const main = 'https://cos.example.com/proj/assets/aa/file';
@@ -623,46 +669,61 @@ console.log('\n=== 8. 运行后 prune：未@槽清空，@图片2/3 名称不变 
   const man = 'https://cos.example.com/man.png';
   const sheet = 'https://cos.example.com/sheet.png';
   const panel = [thumb, dragon, street, man, sheet];
-  const plan = collectReferencedMediaFromPrompt(
-    '@图片2 街景 @图片3 人物',
-    simNode({
-      selectedModel: 'seedance2.0 (急速版)',
-      seedanceGenerationMode: 'reference',
-      imagePreview: main,
-      referenceImages: panel,
-    }),
-    buildPromptMediaRefContextFromNode(
-      simNode({
-        selectedModel: 'seedance2.0 (急速版)',
-        seedanceGenerationMode: 'reference',
-        imagePreview: main,
-        referenceImages: panel,
-      })
-    ),
-    new Map()
+  const data = simNode({
+    selectedModel: 'seedance2.0 (急速版)',
+    seedanceGenerationMode: 'reference',
+    imagePreview: main,
+    referenceImages: panel,
+    prompt: '@图片2 街景 @图片3 人物',
+  });
+  const ctx = buildPromptMediaRefContextFromNode(data);
+  const plan = collectReferencedMediaFromPrompt(data.prompt!, data, ctx, new Map());
+  const uploadedByToken = mockUploadedByToken(plan);
+  const panelAfter = mergeAndPrunePanelReferenceImagesAfterUpload(
+    panel,
+    plan.images,
+    uploadedByToken,
+    panelMergeOptionsForReferencedUpload(plan.images, uploadedByToken, main)
   );
-  const uploadedRefBySlot = new Map<number, string>([
-    [2, `${street}|UP`],
-    [3, `${man}|UP`],
-  ]);
-  const mergedFull = mergeSeedancePanelReferenceImagesAfterUpload(panel, uploadedRefBySlot, main, main);
-  const pruned = prunePanelReferenceImagesToPromptRefs(panel, plan.images, mergedFull);
-  ok('未@槽1/4 已清空', pruned[1] === '' && pruned[4] === undefined, JSON.stringify(pruned));
-  ok('槽2仍为街景', pruned[2] === `${street}|UP`);
-  ok('槽3仍为人物', pruned[3] === `${man}|UP`);
+  ok('未@槽1仍保留 dragon', panelAfter[1] === dragon, String(panelAfter[1]));
+  ok('未@槽4仍保留 sheet', panelAfter[4] === sheet, String(panelAfter[4]));
+  ok('槽2仍为街景上传', panelAfter[2] === `${street}|UP`);
+  ok('槽3仍为人物上传', panelAfter[3] === `${man}|UP`);
   const labels = resolveReferenceImageLabelsAfterPanelRun({
     panelBefore: panel,
-    panelAfter: pruned,
+    panelAfter,
     plan: { images: plan.images, videos: [], audios: [] },
   });
-  ok('prune 后槽2/3 保留图片2/3 标签', labels[2] === '图片2' && labels[3] === '图片3', labels.join('|'));
+  ok('合并后槽2/3 保留图片2/3 标签', labels[2] === '图片2' && labels[3] === '图片3', labels.join('|'));
+  const gpRefs = plan.images
+    .map((e) => uploadedByToken.get(e.token))
+    .filter((u): u is string => Boolean(u))
+    .map((u) => u.replace(/\|UP$/i, ''));
+  ok('gp/API 仅含 @ 到的 2 张', gpRefs.length === 2, JSON.stringify(gpRefs));
   const prunedNode = simNode({
     selectedModel: 'seedance2.0 (急速版)',
     seedanceGenerationMode: 'reference',
     imagePreview: main,
-    referenceImages: pruned,
+    referenceImages: panelAfter,
     referenceImageLabels: labels,
+    prompt: data.prompt,
+    generationParams: {
+      referenceImages: gpRefs,
+      referenceImageLabels: ['图片2', '图片3'],
+      prompt: data.prompt,
+    },
   });
+  const sd = buildSeedanceReferenceDetailsFromSnapshot({
+    snapshotRefs: prunedNode.generationParams!.referenceImages!,
+    snapshotLabels: prunedNode.generationParams!.referenceImageLabels,
+    prompt: prunedNode.prompt!,
+  });
+  ok('Details 仅 2 张', sd.referenceImages.length === 2);
+  eq(
+    sd.referenceImageDetailItems.map((x) => x.label),
+    ['图片2', '图片3'],
+    'Details 标签=仅@引用'
+  );
   const plan2 = collectReferencedMediaFromPrompt(
     '@图片3 人物',
     prunedNode,
@@ -670,23 +731,15 @@ console.log('\n=== 8. 运行后 prune：未@槽清空，@图片2/3 名称不变 
     new Map()
   );
   ok('@图片3 仍指向槽3', plan2.images.find((e) => e.token === '@图片3')?.refImageSlotIndex === 3);
-  const enrichedAfterPrune = enrichPlanImagesWithPanelSlotIndexes(pruned, plan.images, {
-    referenceImageLabels: labels,
-    imagePreview: main,
-  });
-  ok(
-    '@图片3 enrich 仍指向槽3',
-    enrichedAfterPrune.find((e) => e.token === '@图片3')?.refImageSlotIndex === 3
-  );
 }
 
-console.log('\n=== 9. 全模型运行后 prune（Nano / image2 / Omni）===\n');
+console.log('\n=== 9. 全模型运行后面板保留未@槽（Nano / image2 / Omni）===\n');
 
 function runPruneScenario(
   name: string,
   data: NodeData,
   prompt: string,
-  expectedSlots: { empty: number[]; kept: number[] }
+  expectedSlots: { preserved: number[]; kept: number[] }
 ) {
   const panelBefore = [...refArrayForModel(data)];
   const ctx = buildPromptMediaRefContextFromNode(data);
@@ -694,22 +747,32 @@ function runPruneScenario(
   const uploadedByToken = mockUploadedByToken(plan);
   const panelAfter = simulatePanelAfterRun(panelBefore, plan, uploadedByToken, data.imagePreview);
   const dataAfter = applyPrunedPanelToData(data, panelAfter);
-  for (const i of expectedSlots.empty) {
-    ok(`${name}: 未@槽${i}已清空`, !String(panelAfter[i] || '').trim());
+  for (const i of expectedSlots.preserved) {
+    const before = String(panelBefore[i] || '').trim();
+    if (!before) continue;
+    const after = String(panelAfter[i] || '').trim();
+    ok(
+      `${name}: 未@槽${i}保留原图`,
+      !!after && (after === before || after.replace(/\|UP$/i, '') === before),
+      `${after} vs ${before}`
+    );
   }
   for (const i of expectedSlots.kept) {
     ok(`${name}: 已@槽${i}保留`, String(panelAfter[i] || '').endsWith('|UP'));
+    const planEntry = plan.images.find((e) => e.refImageSlotIndex === i);
+    const tokenOrd = planEntry?.token.match(/^@图片(\d+)$/)?.[1];
     const label = panelReferenceSlotLabel(
       i,
       panelAfter,
       data.imagePreview,
       data.selectedModel?.includes('seedance') ? 'seedanceSlot' : 'panelSlot'
     );
-    const expectLabel =
-      data.selectedModel?.includes('seedance') && i >= 1
+    const expectLabel = tokenOrd
+      ? `图片${tokenOrd}`
+      : data.selectedModel?.includes('seedance') && i >= 1
         ? `图片${i}`
-        : `图片${i + 1}`;
-    ok(`${name}: 槽${i}标签仍为${expectLabel}`, label === expectLabel, label);
+        : label;
+    ok(`${name}: 槽${i}标签与@${tokenOrd || '?'}一致`, label === expectLabel, label);
   }
   for (const entry of plan.images) {
     if (entry.refImageSlotIndex == null) continue;
@@ -731,7 +794,7 @@ runPruneScenario(
     referenceImages: ['https://r0.png', '', 'https://r2.png'],
   }),
   '@图片1 主体 @图片2 细节',
-  { empty: [1], kept: [0, 2] }
+  { preserved: [], kept: [0, 2] }
 );
 
 runPruneScenario(
@@ -742,7 +805,7 @@ runPruneScenario(
     referenceImages: ['https://a.png', '', 'https://c.png'],
   }),
   '@图片1 前景 @图片2 背景',
-  { empty: [1], kept: [0, 2] }
+  { preserved: [], kept: [0, 2] }
 );
 
 runPruneScenario(
@@ -751,10 +814,10 @@ runPruneScenario(
     selectedModel: '可灵3.0 Omni',
     klingOmniTab: 'multi',
     imagePreview: 'https://first.png',
-    klingOmniMultiReferenceImages: ['', 'https://r1.png', ''],
+    klingOmniMultiReferenceImages: ['https://r1.png', 'https://r2.png', 'https://r3.png'],
   }),
   '@主图 @图片1',
-  { empty: [0, 2], kept: [1] }
+  { preserved: [1, 2], kept: [0] }
 );
 
 console.log('\n=== 10. 首尾帧模型：仅 @首帧 / 仅 @尾帧 面板 prune ===\n');
@@ -852,29 +915,33 @@ function mockPlanUploaded(
   const uploaded = mockPlanUploaded(plan);
   const foxEntry = plan.images.find((e) => e.token === '@图片3');
   ok('Seedance参考: 未@主图', !promptPlanReferencesMainImage(plan.images));
-  const preview = buildPanelImagePreviewPatchAfterRun(plan.images, uploaded);
+  const preview = buildPanelImagePreviewPatchAfterRun(plan.images, uploaded, { nodeData: data });
   ok(
-    'Seedance参考: 预览=首个@',
-    preview.imagePreview === `${foxEntry?.url}|UP`,
+    'Seedance参考: 运行后画布=首个@参考图',
+    preview.imagePreview === 'https://cos/fox.png|UP' && preview.panelMainImageUrl === 'https://cos/mountain.png',
     String(preview.imagePreview)
   );
-  ok('Seedance参考: 运行后隐藏面板主图格', preview.panelMainSlotVisible === false);
-  const merged = prunePanelReferenceImagesToPromptRefs(
+  ok(
+    'Seedance参考: 运行后仍展示主图格',
+    shouldShowPanelMainImageSlot({ ...data, ...preview })
+  );
+  const merged = mergeAndPrunePanelReferenceImagesAfterUpload(
     data.referenceImages || [],
     plan.images,
-    mergeSeedancePanelReferenceImagesAfterUpload(
-      data.referenceImages || [],
-      new Map([[2, 'https://cos/fox.png|UP']]),
-      undefined,
-      undefined
-    )
+    uploaded,
+    panelMergeOptionsForReferencedUpload(plan.images, uploaded, data.imagePreview)
   );
-  const details = buildReferenceImageDetailItemsFromPanel({
-    ...data,
-    imagePreview: preview.imagePreview,
-    referenceImages: merged,
+  ok('Seedance参考: 运行后面板保留全部槽', merged.length >= 3, JSON.stringify(merged));
+  const gpRefs = plan.images
+    .map((e) => uploaded.get(e.token))
+    .filter((u): u is string => Boolean(u));
+  const details = buildSeedanceReferenceDetailsFromSnapshot({
+    snapshotRefs: gpRefs.map((u) => u.replace(/\|UP$/i, '')),
+    snapshotLabels: ['图片3'],
+    prompt: data.prompt!,
   });
-  ok('Seedance参考: Details 无「主图」', !details.some((i) => i.label === '主图'));
+  ok('Seedance参考: Details 无「主图」', !details.referenceImageDetailItems.some((i) => i.label === '主图'));
+  ok('Seedance参考: Details 仅 @ 引用 1 张', details.referenceImages.length === 1);
 }
 
 {
@@ -896,10 +963,9 @@ function mockPlanUploaded(
   const uploaded = mockPlanUploaded(plan);
   const preview = buildPanelImagePreviewPatchAfterRun(plan.images, uploaded);
   ok('Omni multi: 未@主图', !promptPlanReferencesMainImage(plan.images));
-  ok('Omni multi: 预览=图片1', preview.imagePreview === 'https://cos/fox.png|UP');
+  ok('Omni multi: 运行后画布=首个@参考图', preview.imagePreview === 'https://cos/fox.png|UP' && preview.panelMainSlotVisible === false);
   const details = buildReferenceImageDetailItemsFromPanel({
     ...data,
-    imagePreview: preview.imagePreview,
     klingOmniMultiReferenceImages: ['https://cos/fox.png|UP'],
   });
   ok('Omni multi: Details 无「主图」', !details.some((i) => i.label === '主图'));
@@ -921,13 +987,13 @@ function mockPlanUploaded(
     endUrl: 'https://cos/wolf-up.png',
   });
   ok(
-    'vidu: 仅@尾帧预览=尾帧',
+    'vidu: 仅@尾帧预览=尾帧@引用上传URL',
     preview.imagePreview === 'https://cos/wolf.png|UP',
     String(preview.imagePreview)
   );
 }
 
-console.log('\n=== 12a. Nano 未 @主图：主预览=首个 @ 参考图 ===\n');
+console.log('\n=== 12a. Nano 未 @主图：编辑态保留主图格，运行后画布=首个@ ===\n');
 
 {
   const data = simNode({
@@ -940,9 +1006,14 @@ console.log('\n=== 12a. Nano 未 @主图：主预览=首个 @ 参考图 ===\n');
   const plan = collectReferencedMediaFromPrompt(data.prompt!, data, ctx, new Map());
   const uploaded = mockUploadedByToken(plan);
   ok('文案未 @主图', !promptMentionsMainImageInText(data.prompt!));
-  const previewPatch = buildPanelImagePreviewPatchAfterRun(plan.images, uploaded);
-  ok('imagePreview 改为首个 @ 图', previewPatch.imagePreview === 'https://cos/fox.png|UP');
-  ok('运行后隐藏面板主图格', previewPatch.panelMainSlotVisible === false);
+  const previewPatch = buildPanelImagePreviewPatchAfterRun(plan.images, uploaded, { nodeData: data });
+  ok('运行后 imagePreview=首个@参考图', previewPatch.imagePreview === 'https://cos/fox.png|UP' && previewPatch.panelMainImageUrl === 'https://cos/mountain.png');
+  ok('运行后备份主图', previewPatch.panelMainImageUrl === 'https://cos/mountain.png');
+  ok('主图格标签=主图', resolveMainImagePanelDisplayLabel(previewPatch.panelMainImageUrl!) === '主图');
+  ok(
+    '运行后仍展示主图格',
+    shouldShowPanelMainImageSlot({ ...data, ...previewPatch })
+  );
   ok(
     '拖入后默认展示主图格',
     shouldShowPanelMainImageSlot({
@@ -951,9 +1022,9 @@ console.log('\n=== 12a. Nano 未 @主图：主预览=首个 @ 参考图 ===\n');
     })
   );
   ok(
-    '运行后未@主图不展示主图格',
+    '显式 panelMainSlotVisible=false 才隐藏',
     !shouldShowPanelMainImageSlot({
-      imagePreview: 'https://cos/fox.png|UP',
+      imagePreview: 'https://cos/mountain.png',
       panelMainSlotVisible: false,
     })
   );
@@ -965,6 +1036,266 @@ console.log('\n=== 12a. Nano 未 @主图：主预览=首个 @ 参考图 ===\n');
   );
   ok('参考槽仍保留狐狸', merged[0] === 'https://cos/fox.png|UP');
   ok('合并时未因主图去重掏空参考', merged.length >= 1);
+}
+
+console.log('\n=== 12a-restore. 运行后重新选中：恢复主图格 ===\n');
+
+{
+  const afterRun = simNode({
+    selectedModel: 'image 2',
+    imagePreview: 'https://cos/fox.png|UP',
+    panelMainSlotVisible: false,
+    panelMainImageUrl: 'https://cos/mountain.png',
+    referenceImages: ['https://cos/fox.png|UP'],
+  });
+  const patch = buildPanelMainImageRestorePatchForEditing(afterRun);
+  ok('image2 恢复主图格', patch?.panelMainSlotVisible === undefined);
+  ok('image2 恢复备份主图', patch?.imagePreview === 'https://cos/mountain.png');
+  ok(
+    'image2 恢复后可展示主图格',
+    shouldShowPanelMainImageSlot({ ...afterRun, ...patch })
+  );
+}
+
+{
+  const data = simNode({
+    selectedModel: 'Nano Banana 2.0',
+    imagePreview: 'https://cos/mountain.png',
+    referenceImages: [],
+    prompt: '水墨风',
+  });
+  const ctx = buildPromptMediaRefContextFromNode(data);
+  const plan = collectReferencedMediaFromPrompt(data.prompt!, data, ctx, new Map());
+  const previewPatch = buildPanelImagePreviewPatchAfterRun(plan.images, new Map(), {
+    nodeData: data,
+  });
+  ok('无@时备份主图 URL', previewPatch.panelMainImageUrl === 'https://cos/mountain.png');
+  ok('无@时不覆盖 imagePreview', !Object.prototype.hasOwnProperty.call(previewPatch, 'imagePreview'));
+  ok(
+    '无@时仍展示主图格',
+    shouldShowPanelMainImageSlot({ ...data, ...previewPatch })
+  );
+  const restored = buildPanelMainImageRestorePatchForEditing({
+    ...data,
+    ...previewPatch,
+  });
+  ok('无@运行后主图格已可见无需 restore', restored === undefined);
+}
+
+console.log('\n=== 12a-prompt-main. hhhh.json：编辑态保留主图格，运行后仍保留 ===\n');
+
+{
+  const cat = 'https://cos.example.com/cat.png';
+  const deer = 'https://cos.example.com/deer.png';
+  const goat = 'https://cos.example.com/goat.png';
+  const prompt = '@图片1参考@图片2风格';
+  const data = simNode({
+    selectedModel: 'Nano Banana 2.0',
+    imagePreview: cat,
+    referenceImages: [deer, goat],
+    referenceImageLabels: ['图片1', '图片2'],
+    prompt,
+  });
+  ok('编辑态仍展示主图格', shouldShowPanelMainImageSlot(data));
+  const generated = 'https://cos.example.com/generated-deer-style.png';
+  const afterRun = {
+    ...data,
+    panelMainImageUrl: cat,
+    imagePreview: deer,
+    generationParams: { outputUrl: generated, taskId: 't-hhhh' },
+    generatedThumbnails: [
+      { id: 'out-hhhh', url: generated, type: 'image' as const, nodeId: 'out-hhhh', name: 'Generated.png' },
+    ],
+  };
+  ok('运行后画布=图片1参考', afterRun.imagePreview === deer);
+  ok('生成结果仅在 thumbnails', afterRun.generatedThumbnails?.[0]?.url === generated);
+  ok('运行后仍展示主图格', shouldShowPanelMainImageSlot(afterRun));
+  ok('运行后重新选中无需 restore', buildPanelMainImageRestorePatchForEditing(afterRun) === undefined);
+  ok(
+    'image2 编辑态仍展示主图格',
+    shouldShowPanelMainImageSlot({
+      ...data,
+      selectedModel: 'image 2',
+    })
+  );
+  ok(
+    'image2 运行后仍展示主图格',
+    shouldShowPanelMainImageSlot({
+      ...data,
+      selectedModel: 'image 2',
+      panelMainImageUrl: cat,
+      imagePreview: deer,
+    })
+  );
+  ok(
+    '可灵 Omni 编辑态仍展示主图格',
+    shouldShowPanelMainImageSlot({
+      ...data,
+      selectedModel: '可灵3.0 Omni',
+      klingOmniTab: 'multi',
+      klingOmniMultiPrompt: prompt,
+      klingOmniMultiReferenceImages: [deer, goat],
+    })
+  );
+  ok(
+    '可灵 Omni 运行后仍展示主图格',
+    shouldShowPanelMainImageSlot({
+      ...data,
+      selectedModel: '可灵3.0 Omni',
+      klingOmniTab: 'multi',
+      klingOmniMultiPrompt: prompt,
+      klingOmniMultiReferenceImages: [deer, goat],
+      panelMainImageUrl: cat,
+      imagePreview: deer,
+    })
+  );
+  ok(
+    '@主图 时仍展示主图格',
+    shouldShowPanelMainImageSlot({
+      ...data,
+      prompt: '@主图 @图片2风格',
+    })
+  );
+}
+
+console.log('\n=== 12a-ref-swap. hhhh：换参考图不换画布参考预览 ===\n');
+
+{
+  const cat = 'https://cos.example.com/cat.png';
+  const deer = 'https://cos.example.com/deer.png';
+  const goat = 'https://cos.example.com/goat.png';
+  const newRef1 = 'https://cos.example.com/new-ref1.png';
+  const generated = 'https://cos.example.com/generated-output.png';
+  const prompt = '@图片1参考@图片2风格';
+  const afterRun = simNode({
+    selectedModel: 'Nano Banana 2.0',
+    imagePreview: deer,
+    panelMainSlotVisible: false,
+    panelMainImageUrl: cat,
+    referenceImages: [deer, goat],
+    referenceImageLabels: ['图片1', '图片2'],
+    prompt,
+    generationParams: { outputUrl: generated, taskId: 't-swap' },
+    generatedThumbnails: [
+      { id: 'out-swap', url: generated, type: 'image', nodeId: 'out-swap', name: 'Generated.png' },
+    ],
+  });
+  ok('画布预览=图片1参考', afterRun.imagePreview === deer);
+  ok('生成结果在 thumbnails', afterRun.generatedThumbnails?.[0]?.url === generated);
+  const swapped = {
+    ...afterRun,
+    referenceImages: [newRef1, goat],
+  };
+  ok('换参考图后 imagePreview 仍为原参考 URL', swapped.imagePreview === deer);
+  ok('换参考图后 imagePreview 不是生成图', swapped.imagePreview !== generated);
+  const hero = resolveNodeSelectionPreviewUrl(swapped, []);
+  ok('选中预览不跟新参考槽', hero === deer, hero);
+}
+
+console.log('\n=== 12a-swap. 面板换图后运行：勿恢复旧 @资产 库图 ===\n');
+
+function simulatePanelSwapAfterRun(
+  data: NodeData,
+  panelBefore: string[],
+  prompt: string,
+  assets: Array<{ slug: string; name: string; url: string }>,
+  slugMap: Map<string, string>
+) {
+  const ctx = buildPromptMediaRefContextForRun(data, assets);
+  const plan = collectReferencedMediaFromPrompt(prompt, data, ctx, slugMap, assets);
+  const uploaded = mockUploadedByToken(plan);
+  const panelAfter = mergeAndPrunePanelReferenceImagesAfterUpload(
+    panelBefore,
+    plan.images,
+    uploaded,
+    panelMergeOptionsForReferencedUpload(
+      plan.images,
+      uploaded,
+      data.imagePreview,
+      slugMap,
+      data.referenceImageLabels
+    )
+  );
+  return { plan, uploaded, panelAfter };
+}
+
+{
+  const proj = 'proj-swap';
+  const oldA = `/flowgen-api/projects/${proj}/assets/old-a/file`;
+  const oldB = `/flowgen-api/projects/${proj}/assets/old-b/file`;
+  const newA = `/flowgen-api/projects/${proj}/assets/new-a/file`;
+  const newB = `/flowgen-api/projects/${proj}/assets/new-b/file`;
+  const assets = [
+    { slug: '旧图A', name: '旧图A', url: oldA },
+    { slug: '旧图B', name: '旧图B', url: oldB },
+    { slug: '新图A', name: '新图A', url: newA },
+    { slug: '新图B', name: '新图B', url: newB },
+  ];
+  const slugMap = new Map(assets.map((a) => [a.slug, a.url]));
+  const panelBefore = [newA, newB];
+  const prompt = '@资产:旧图A 融合 @资产:旧图B 风格';
+  const base = {
+    imagePreview: 'https://cos/main.png',
+    referenceImages: panelBefore,
+    referenceImageLabels: ['旧图A', '旧图B'],
+    prompt,
+  };
+  for (const modelName of [
+    'Nano Banana 2.0',
+    'image 2',
+    'seedance2.0 (急速版)',
+    '可灵3.0 Omni',
+  ] as const) {
+    const data =
+      modelName === '可灵3.0 Omni'
+        ? simNode({
+            selectedModel: modelName,
+            klingOmniTab: 'multi',
+            klingOmniMultiReferenceImages: panelBefore,
+            referenceImageLabels: ['旧图A', '旧图B'],
+            klingOmniMultiPrompt: prompt,
+            ...base,
+          })
+        : modelName === 'seedance2.0 (急速版)'
+          ? simNode({
+              selectedModel: modelName,
+              seedanceGenerationMode: 'reference',
+              seedanceTabConfigs: { reference: { prompt } },
+              ...base,
+            })
+          : simNode({ selectedModel: modelName, ...base });
+    const { plan, panelAfter } = simulatePanelSwapAfterRun(
+      data,
+      panelBefore,
+      prompt,
+      assets,
+      slugMap
+    );
+    ok(`${modelName}: plan 用面板新图A`, plan.images.find((e) => e.token.includes('旧图A'))?.url === newA);
+    ok(`${modelName}: plan 用面板新图B`, plan.images.find((e) => e.token.includes('旧图B'))?.url === newB);
+    ok(`${modelName}: 运行写回仍为新图A`, panelAfter[0]?.replace(/\|UP$/, '') === newA);
+    ok(`${modelName}: 运行写回仍为新图B`, panelAfter[1]?.replace(/\|UP$/, '') === newB);
+  }
+}
+
+{
+  const prompt = '@图片1 与 @图片2 合成';
+  const panelBefore = ['https://cos/new-fox.png', 'https://cos/new-wolf.png'];
+  const data = simNode({
+    selectedModel: 'image 2',
+    imagePreview: 'https://cos/main.png',
+    referenceImages: panelBefore,
+    referenceImageLabels: ['', ''],
+    prompt,
+  });
+  const ctx = buildPromptMediaRefContextFromNode(data);
+  const plan = collectReferencedMediaFromPrompt(prompt, data, ctx, new Map());
+  ok('image2 @图片1=面板槽0', plan.images.find((e) => e.token === '@图片1')?.url === panelBefore[0]);
+  ok('image2 @图片2=面板槽1', plan.images.find((e) => e.token === '@图片2')?.url === panelBefore[1]);
+  const uploaded = mockUploadedByToken(plan);
+  const panelAfter = simulatePanelAfterRun(panelBefore, plan, uploaded, data.imagePreview);
+  ok('image2 运行后面板0仍是新狐', panelAfter[0] === 'https://cos/new-fox.png|UP');
+  ok('image2 运行后面板1仍是新狼', panelAfter[1] === 'https://cos/new-wolf.png|UP');
 }
 
 console.log('\n=== 12a-main. Nano 仅 @主图：勿出现重复「图片1」槽 ===\n');
@@ -988,13 +1319,8 @@ console.log('\n=== 12a-main. Nano 仅 @主图：勿出现重复「图片1」槽 
     uploaded,
     panelMergeOptionsForReferencedUpload(plan.images, uploaded, data.imagePreview)
   );
-  ok('运行合并后参考槽为空', merged.length === 0, JSON.stringify(merged));
-  const pruned = prunePanelReferenceImagesToPromptRefs(
-    data.referenceImages,
-    plan.images,
-    merged
-  );
-  ok('prune 后参考槽为空', pruned.length === 0);
+  ok('运行合并后参考槽仍保留', merged.length === 1 && merged[0] === dupRef, JSON.stringify(merged));
+  ok('仅@主图时 gp 仅 1 张', plan.images.length === 1);
   const display = buildPanelReferenceDisplayEntries(data.referenceImages, {
     imagePreview: main,
     dedupeAgainstMain: true,
@@ -1054,8 +1380,8 @@ console.log('\n=== 15. 全模型参考格底栏：不与 @ 槽位错位、不重
   const omniGapped = ['', a, b];
   const omniGapLabels = [1, 2].map((i) => omniMixedRefSlotCaption(i, omniGapped, main));
   assertDistinctImageNumberLabels('Omni 前置空槽 origIdx', omniGapLabels, { allowMain: true });
-  ok('Omni origIdx1=图片2', omniGapLabels[0] === '图片2');
-  ok('Omni origIdx2=图片3', omniGapLabels[1] === '图片3');
+  ok('Omni origIdx1=图片1', omniGapLabels[0] === '图片1');
+  ok('Omni origIdx2=图片2', omniGapLabels[1] === '图片2');
 
   const omniAfterRun = [a, b];
   const omniRunLabels = [0, 1].map((i) =>
@@ -1106,7 +1432,7 @@ console.log('\n=== 16. Seedance 参考生：运行后保留 @ 到的参考图槽
   ok('plan 含 @图片1/@图片2', slots.has(1) && slots.has(2), [...slots].join(','));
   ok('槽1 龙保留上传 URL', panelAfter[1]?.endsWith('|UP'), panelAfter[1]);
   ok('槽2 街景保留上传 URL', panelAfter[2]?.endsWith('|UP'), panelAfter[2]);
-  ok('未@槽0 已清空', !String(panelAfter[0] || '').trim());
+  ok('槽0 主图缩略图仍保留', String(panelAfter[0] || '').trim() === thumb);
   const previewPatch = buildPanelImagePreviewPatchAfterRun(plan.images, uploaded);
   const nodeAfter = {
     ...data,
@@ -1139,7 +1465,7 @@ runPruneScenario(
     ],
   }),
   '@图片1 主体 @图片2 细节',
-  { empty: [1], kept: [0, 2] }
+  { preserved: [], kept: [0, 2] }
 );
 
 {
@@ -1250,9 +1576,9 @@ console.log('\n=== 18. Seedance 参考生：仅 @资产 按 assetId 保留槽（
   ok('槽0 萧道保留', after[0]?.endsWith('|UP'), after[0]);
   ok('槽1 鸱吻保留', after[1]?.endsWith('|UP'), after[1]);
   ok('槽2 夏茉保留', after[2]?.endsWith('|UP'), after[2]);
-  ok('槽3 街景未@已清空', !String(after[3] || '').trim());
-  ok('槽4 白泽未@已清空', !String(after[4] || '').trim());
-  ok('未@资产尾部已弹', after.length === 3, `len=${after.length}`);
+  ok('槽3 街景未@仍保留', String(after[3] || '').trim() === panel[3]);
+  ok('槽4 白泽未@仍保留', String(after[4] || '').trim() === panel[4]);
+  ok('面板长度不变', after.length === panel.length, `len=${after.length}`);
 }
 
 console.log('\n=== 18b. Seedance 运行：@资产: 萧逍（冒号后空格）按底栏标签保留槽 ===\n');
@@ -1925,7 +2251,7 @@ console.log('\n=== 14. Seedance 参考生：分镜下游参考格底栏不重复
   ok('分镜底栏保留图片2', spawned.referenceImageLabels?.[2] === '图片2');
 }
 
-console.log('\n=== 12a-image2. image 2 未 @主图：主预览=首个 @ 参考图（对齐 Nano）===\n');
+console.log('\n=== 12a-image2. image 2 未 @主图：运行后画布=首个@ ===\n');
 
 {
   const data = simNode({
@@ -1938,14 +2264,14 @@ console.log('\n=== 12a-image2. image 2 未 @主图：主预览=首个 @ 参考�
   const plan = collectReferencedMediaFromPrompt(data.prompt!, data, ctx, new Map());
   const uploaded = mockUploadedByToken(plan);
   ok('image2 文案未 @主图', !promptMentionsMainImageInText(data.prompt!));
-  const previewPatch = buildPanelImagePreviewPatchAfterRun(plan.images, uploaded);
-  ok('image2 imagePreview=首个 @ 图', previewPatch.imagePreview === 'https://cos/fox.png|UP');
-  ok('image2 运行后隐藏面板主图格', previewPatch.panelMainSlotVisible === false);
+  const previewPatch = buildPanelImagePreviewPatchAfterRun(plan.images, uploaded, { nodeData: data });
+  ok('image2 运行后 imagePreview=首个@参考图', previewPatch.imagePreview === 'https://cos/fox.png|UP' && previewPatch.panelMainImageUrl === 'https://cos/mountain.png');
+  ok('image2 运行后备份主图', previewPatch.panelMainImageUrl === 'https://cos/mountain.png');
   const merged = mergeAndPrunePanelReferenceImagesAfterUpload(
     data.referenceImages || [],
     plan.images,
     uploaded,
-    panelMergeOptionsForReferencedUpload(plan.images, uploaded, previewPatch.imagePreview)
+    panelMergeOptionsForReferencedUpload(plan.images, uploaded, data.imagePreview)
   );
   ok('image2 参考槽仍保留狐狸', merged[0] === 'https://cos/fox.png|UP');
   const nodeAfter = {
@@ -1953,8 +2279,9 @@ console.log('\n=== 12a-image2. image 2 未 @主图：主预览=首个 @ 参考�
     ...previewPatch,
     referenceImages: merged,
   };
-  ok('image2 未@主图时不按主预览去重参考格', !shouldDedupePanelRefsAgainstMainPreview(nodeAfter));
-  ok('image2 画布主预览=上传后狐狸', nodeAfter.imagePreview === 'https://cos/fox.png|UP');
+  ok('image2 未@主图时仍展示主图格', shouldShowPanelMainImageSlot(nodeAfter));
+  ok('image2 展示主图格时按主图去重参考格', shouldDedupePanelRefsAgainstMainPreview(nodeAfter));
+  ok('image2 画布预览=首个@参考图', nodeAfter.imagePreview === 'https://cos/fox.png|UP');
 }
 
 console.log('\n=== 12c-image2. image 2 @图片2+@图片1 未@主图：画布=首个@ ===\n');
@@ -1975,13 +2302,83 @@ console.log('\n=== 12c-image2. image 2 @图片2+@图片1 未@主图：画布=首
     ['@图片2', 'https://cos/misty-photo.png|UP'],
     ['@图片1', 'https://cos/ink-village.png|UP'],
   ]);
-  const previewPatch = buildPanelImagePreviewPatchAfterRun(plan.images, uploaded);
+  const previewPatch = buildPanelImagePreviewPatchAfterRun(plan.images, uploaded, { nodeData: data });
   ok('image2 plan 顺序=文案出现顺序', plan.images[0]?.token === '@图片2' && plan.images[1]?.token === '@图片1');
-  ok('image2 画布大图=首个@图片2', previewPatch.imagePreview === 'https://cos/misty-photo.png|UP');
-  ok('image2 运行后隐藏主图格', previewPatch.panelMainSlotVisible === false);
+  ok('image2 画布大图=首个@参考图(@图片2)', previewPatch.imagePreview === 'https://cos/misty-photo.png|UP' && previewPatch.panelMainImageUrl === mountain);
+  ok('image2 运行后仍展示主图格', shouldShowPanelMainImageSlot({ ...data, ...previewPatch }));
 }
 
-console.log('\n=== 12c. Nano @图片2+@图片1 未@主图：画布=首个@，面板两格都显示 ===\n');
+console.log('\n=== 12d-image2-778990. @图片3+@图片1 稀疏槽：面板保教堂不跟 API 顺序错位 ===\n');
+
+{
+  const animals = 'https://cos/openApi/212508/animals-main.png';
+  const church = 'https://cos/openApi/212508/church-scene.png';
+  const character = 'https://cos/openApi/212508/character.png';
+  const prompt = '@图片3的角色出现再@图片1中';
+  const panelBefore = [church, '', character];
+  const data = simNode({
+    selectedModel: 'image 2',
+    imagePreview: animals,
+    referenceImages: panelBefore,
+    referenceImageLabels: ['图片1', '', '图片3'],
+    prompt,
+  });
+  const ctx = buildPromptMediaRefContextFromNode(data);
+  const plan = collectReferencedMediaFromPrompt(prompt, data, ctx, new Map());
+  ok('778990 plan @图片1=教堂', plan.images.find((e) => e.token === '@图片1')?.url === church);
+  ok('778990 plan @图片3=角色', plan.images.find((e) => e.token === '@图片3')?.url === character);
+  const uploaded = new Map<string, string>([
+    ['@图片3', `${character}|UP`],
+    ['@图片1', `${church}|UP`],
+  ]);
+  const panelAfter = simulatePanelAfterRun(panelBefore, plan, uploaded, animals);
+  ok('778990 面板槽0仍=教堂', panelAfter[0] === `${church}|UP`, JSON.stringify(panelAfter));
+  ok('778990 面板槽2仍=角色', panelAfter[2] === `${character}|UP`, JSON.stringify(panelAfter));
+  ok('778990 面板槽1仍空', panelAfter[1] === '');
+  const apiSnapshot = apiImageUrlsFromPlan(plan, uploaded);
+  ok('778990 API 顺序=文案(@图片3先)', apiSnapshot[0] === `${character}|UP`);
+  ok('778990 面板≠API顺序', panelAfter[0] !== apiSnapshot[0]);
+  const panelLabels = resolveReferenceImageLabelsAfterPanelRun({
+    panelBefore,
+    labelsBefore: data.referenceImageLabels,
+    panelAfter,
+    plan,
+  });
+  ok('778990 面板标签0=图片1', panelLabels[0] === '图片1');
+  ok('778990 面板标签2=图片3', panelLabels[2] === '图片3');
+  const gpLabels = plan.images.map((e) => e.label?.trim() || '');
+  ok('778990 gp 标签跟 API 顺序', gpLabels[0] === '图片3' && gpLabels[1] === '图片1');
+  ok('778990 勿把 API 顺序写进面板', panelAfter[0] !== apiSnapshot[0] && panelAfter[2] !== apiSnapshot[1]);
+}
+
+console.log('\n=== 12e-image2-778990. 主图误写入 ref[0]：@图片1 仍绑猫 ===\n');
+
+{
+  const city = 'https://cos/city-night.png';
+  const cat = 'https://cos/cat-forest.png';
+  const gtq = 'https://cos/guangtouqiang.png';
+  const church = 'https://cos/church-gold.png';
+  const prompt = '@图片1的角色出现在@图片3中';
+  const data = simNode({
+    selectedModel: 'image 2',
+    imagePreview: city,
+    referenceImages: [city, cat, gtq, church],
+    referenceImageLabels: ['', '图片1', '光头强', '图片3'],
+    prompt,
+  });
+  const ctx = buildPromptMediaRefContextFromNode(data);
+  const plan = collectReferencedMediaFromPrompt(prompt, data, ctx, new Map());
+  ok('778990e @图片1=猫', plan.images.find((e) => e.token === '@图片1')?.url === cat);
+  const uploaded = mockUploadedByToken(plan);
+  const panelBefore = panelReferenceImagesForUpload(data) || [];
+  ok('778990e upload 保留 ref[0] 主图重复槽', panelBefore[0] === city, JSON.stringify(panelBefore));
+  const panelAfter = simulatePanelAfterRun(panelBefore, plan, uploaded, city);
+  ok('778990e 运行后槽1=猫', panelAfter[1]?.replace(/\|UP$/, '') === cat, JSON.stringify(panelAfter));
+  ok('778990e 运行后槽3=教堂', panelAfter[3]?.replace(/\|UP$/, '') === church, JSON.stringify(panelAfter));
+  ok('778990e 运行后保留城市槽', panelAfter[0]?.replace(/\|UP$/, '') === city);
+}
+
+console.log('\n=== 12c. Nano @图片2+@图片1 未@主图：画布=首个@ ===\n');
 
 {
   const mountain = 'https://cos/mountain-main.png';
@@ -1999,10 +2396,10 @@ console.log('\n=== 12c. Nano @图片2+@图片1 未@主图：画布=首个@，面
     ['@图片2', 'https://cos/misty-photo.png|UP'],
     ['@图片1', 'https://cos/ink-village.png|UP'],
   ]);
+  const previewPatch = buildPanelImagePreviewPatchAfterRun(plan.images, uploaded, { nodeData: data });
   ok('plan 顺序=文案出现顺序', plan.images[0]?.token === '@图片2' && plan.images[1]?.token === '@图片1');
-  const previewPatch = buildPanelImagePreviewPatchAfterRun(plan.images, uploaded);
-  ok('画布大图=首个@图片2', previewPatch.imagePreview === 'https://cos/misty-photo.png|UP');
-  ok('运行后隐藏主图格', previewPatch.panelMainSlotVisible === false);
+  ok('画布大图=首个@参考图(@图片2)', previewPatch.imagePreview === 'https://cos/misty-photo.png|UP' && previewPatch.panelMainImageUrl === mountain);
+  ok('运行后仍展示主图格', shouldShowPanelMainImageSlot({ ...data, ...previewPatch }));
   const merged = mergeAndPrunePanelReferenceImagesAfterUpload(
     data.referenceImages || [],
     plan.images,
@@ -2012,26 +2409,26 @@ console.log('\n=== 12c. Nano @图片2+@图片1 未@主图：画布=首个@，面
   ok('prune 后保留槽0/1', merged[0] === 'https://cos/ink-village.png|UP' && merged[1] === 'https://cos/misty-photo.png|UP');
   const nodeAfter = {
     ...data,
-    imagePreview: previewPatch.imagePreview,
-    panelMainSlotVisible: previewPatch.panelMainSlotVisible,
+    ...previewPatch,
     referenceImages: merged,
   };
-  ok('未@主图时不按主预览去重参考格', !shouldDedupePanelRefsAgainstMainPreview(nodeAfter));
+  ok('展示主图格时按主图去重参考格', shouldDedupePanelRefsAgainstMainPreview(nodeAfter));
+  const mainForLabel = panelReferenceLabelImagePreview(nodeAfter);
   const display = panelReferenceDisplaySlots(merged).filter(
     ({ url }) =>
       !shouldDedupePanelRefsAgainstMainPreview(nodeAfter) ||
-      !isDuplicateOfMainImagePreview(url, nodeAfter.imagePreview)
+      !isDuplicateOfMainImagePreview(url, mainForLabel)
   );
   ok('面板展示 2 张', display.length === 2, `len=${display.length}`);
   ok('槽0 仍为图片1', panelReferenceSlotLabel(0, merged, undefined) === '图片1');
   ok(
     '槽1 仍为图片2（非主图）',
-    panelReferenceSlotLabel(1, merged, panelReferenceLabelImagePreview(nodeAfter)) === '图片2'
+    panelReferenceSlotLabel(1, merged, mainForLabel) === '图片2'
   );
   ok(
     '槽1 URL 与画布预览相同也不标主图',
     panelReferenceSlotLabel(1, merged, nodeAfter.imagePreview) !== '主图' ||
-      panelReferenceSlotLabel(1, merged, panelReferenceLabelImagePreview(nodeAfter)) === '图片2'
+      panelReferenceSlotLabel(1, merged, mainForLabel) === '图片2'
   );
 }
 
@@ -2042,7 +2439,7 @@ console.log('\n=== 12b. 面板展示：prune 空槽不渲染 ===\n');
   const display = panelReferenceDisplaySlots(pruned);
   ok('空槽不进入展示列表', display.length === 1, JSON.stringify(display));
   ok('保留原槽下标 1', display[0]?.slotIndex === 1);
-  ok('底栏仍为图片2', panelReferenceSlotLabel(1, pruned, undefined, 'panelSlot') === '图片2');
+  ok('底栏为图片1', panelReferenceSlotLabel(1, pruned, undefined, 'panelSlot') === '图片1');
 }
 
 console.log('\n=== 13. 交付矩阵：剩余 tab / 模型 prune + @ 精准 ===\n');
@@ -2055,7 +2452,7 @@ runPruneScenario(
     klingOmniVideoReferenceImages: ['https://v0.png', '', 'https://v2.png'],
   }),
   '@图片1 续镜 @图片2 风格',
-  { empty: [1], kept: [0, 2] }
+  { preserved: [], kept: [0, 2] }
 );
 
 runPruneScenario(
@@ -2067,7 +2464,7 @@ runPruneScenario(
     lastFrameImage: 'https://s15/b.png',
   }),
   '@首帧图 推进',
-  { empty: [], kept: [] }
+  { preserved: [], kept: [] }
 );
 
 {
@@ -2824,9 +3221,9 @@ console.log('\n=== 40. 42356.json：空槽误拖 File 不得参与 @资产 上�
   );
   const img3Entry = enriched.find((e) => e.token === '@图片3');
   ok(
-    '42356：有槽 URL 时允许槽位 File',
+    '42356：槽已是远程 COS 时不用槽位 File（防换图后 originals 过期）',
     img3Entry != null &&
-      shouldUseSlotOriginalFileForUpload(img3Entry, streetCos, { name: 'street.png' } as File)
+      !shouldUseSlotOriginalFileForUpload(img3Entry, streetCos, { name: 'street.png' } as File)
   );
   const uploadedByToken = new Map<string, string>();
   for (const e of enriched) {
@@ -2876,6 +3273,155 @@ console.log('\n=== 38b. 拖入 @图片3 选中节点时不应变成 @资产:鸱�
   const ctx = buildPromptMediaRefContextForRun(data, assets);
   const plan = collectReferencedMediaFromPrompt(canon, data, ctx, slugMap, assets);
   ok('@图片3 解析到拖入街景 URL', plan.images.find((e) => e.token === '@图片3')?.url === img3, JSON.stringify(plan.images));
+}
+
+console.log('\n=== 38c. Nano Banana 2.0：两格参考 + 失效 @图片4 与底栏一致 ===\n');
+
+{
+  const road = 'https://cos.example.com/nano-road.jpg';
+  const goat = 'https://cos.example.com/nano-goat.jpg';
+  const data = simNode({
+    selectedModel: MODEL_NANO_BANANA_2,
+    referenceImages: [road, goat],
+    referenceImageLabels: ['图片1', '图片2'],
+    prompt: '@图片1参考@图片4风格',
+  });
+  const ctx = buildPromptMediaRefContextForRun(data);
+  ok(
+    '底栏槽1显示图片2',
+    resolveReferenceSlotDisplayLabel(1, data.referenceImages, data.referenceImageLabels, data.imagePreview) ===
+      '图片2'
+  );
+  const labels = buildPromptMediaRefLabels(data, ctx);
+  ok(
+    '槽1 @ 为 @图片2',
+    labels.some((it) => it.refImageIndex === 1 && it.insertText === '@图片2'),
+    labels.map((it) => it.insertText).join(',')
+  );
+  ok(
+    '不含 @图片4',
+    !labels.some((it) => it.insertText === '@图片4')
+  );
+  const mentions = buildInspectorPromptMentionItems(data, ctx);
+  ok('@下拉含@图片2', mentions.some((m) => m.insertText === '@图片2'));
+  ok('@下拉不含@图片4', !mentions.some((m) => m.insertText === '@图片4'));
+  const repaired = repairPromptPictureOrdinalMismatch(data.prompt, data, ctx);
+  ok('创意描述@图片4→@图片2', repaired === '@图片1参考@图片2风格', repaired);
+  ok(
+    'buildPromptPictureOrdinalRepairPatch 写回',
+    buildPromptPictureOrdinalRepairPatch(data)?.prompt === '@图片1参考@图片2风格'
+  );
+  const staleLabelData = simNode({
+    selectedModel: MODEL_NANO_BANANA_2,
+    referenceImages: [road, goat],
+    referenceImageLabels: ['图片1', '图片4'],
+    prompt: '@图片1参考@图片4风格',
+  });
+  const staleCtx = buildPromptMediaRefContextForRun(staleLabelData);
+  ok(
+    '跳号标签同步后仍修正 prompt',
+    repairPromptPictureOrdinalMismatch(staleLabelData.prompt, staleLabelData, staleCtx) ===
+      '@图片1参考@图片2风格'
+  );
+  const patch = referenceImagesDedupePatchIfNeeded(staleLabelData, { dedupeAgainstMain: false });
+  ok('跳号标签同步为图片2', patch?.referenceImageLabels?.[1] === '图片2', JSON.stringify(patch?.referenceImageLabels));
+  const slotSync = buildPanelRefSlotSyncPatch(staleLabelData, { dedupeAgainstMain: false });
+  ok(
+    '跳号 buildPanelRefSlotSyncPatch 标签=图片2',
+    slotSync?.referenceImageLabels?.[1] === '图片2',
+    JSON.stringify(slotSync?.referenceImageLabels)
+  );
+}
+
+console.log('\n=== 38d. 全模型：失效 @图片n 序号修正 ===\n');
+
+{
+  const refA = 'https://cos.example.com/a.png';
+  const refB = 'https://cos.example.com/b.png';
+  const cases: Array<{ model: string; extra?: Partial<NodeData> }> = [
+    { model: MODEL_NANO_BANANA_2 },
+    { model: MODEL_IMAGE_2, extra: { imagePreview: 'https://cos.example.com/main.png' } },
+    {
+      model: 'seedance2.0 (急速版)',
+      extra: { seedanceGenerationMode: 'reference' as const },
+    },
+    {
+      model: '可灵3.0 Omni',
+      extra: { klingOmniTab: 'multi' as const, klingOmniMultiReferenceImages: [refA, refB] },
+    },
+  ];
+  for (const c of cases) {
+    const row = simNode({
+      selectedModel: c.model,
+      referenceImages: [refA, refB],
+      referenceImageLabels: ['图片1', '图片2'],
+      prompt: '@图片1 参考 @图片5 风格',
+      ...c.extra,
+    });
+    const ctx = buildPromptMediaRefContextForRun(row);
+    const fixed = repairPromptPictureOrdinalMismatch(row.prompt, row, ctx);
+    ok(`${c.model}: @图片5→@图片2`, fixed.includes('@图片2') && !fixed.includes('@图片5'), fixed);
+    ok(`${c.model}: 保留@图片1`, fixed.includes('@图片1'), fixed);
+  }
+}
+
+console.log('\n=== 38e. 拖入4张仅@1+4：稀疏槽 @ 与底栏一致 ===\n');
+
+{
+  const u1 = 'https://cos.example.com/drag-r1.jpg';
+  const u2 = 'https://cos.example.com/drag-r2.jpg';
+  const u3 = 'https://cos.example.com/drag-r3.jpg';
+  const u4 = 'https://cos.example.com/drag-r4.jpg';
+  const panelBefore = [u1, u2, u3, u4];
+  const labelsBefore = ['图片1', '图片2', '图片3', '图片4'];
+  const prompt = '@图片1参考@图片4风格';
+  const base = simNode({
+    selectedModel: MODEL_NANO_BANANA_2,
+    referenceImages: panelBefore,
+    referenceImageLabels: labelsBefore,
+    prompt,
+  });
+  const ctx = buildPromptMediaRefContextForRun(base);
+  const plan = collectReferencedMediaFromPrompt(prompt, base, ctx, new Map());
+  const uploaded = mockUploadedByToken(plan);
+  const panelAfter = mergeAndPrunePanelReferenceImagesAfterUpload(
+    panelBefore,
+    plan.images,
+    uploaded,
+    panelMergeOptionsForReferencedUpload(plan.images, uploaded, base.imagePreview)
+  );
+  const normUrl = (u: string | undefined) => String(u || '').replace(/\|UP$/i, '');
+  ok(
+    '运行后保留全部槽含未@',
+    normUrl(panelAfter[0]) === u1 && panelAfter[1] === u2 && normUrl(panelAfter[3]) === u4,
+    JSON.stringify(panelAfter)
+  );
+  ok('未@槽2仍保留', panelAfter[2] === u3, String(panelAfter[2]));
+  const data = simNode({
+    selectedModel: MODEL_NANO_BANANA_2,
+    referenceImages: panelAfter,
+    referenceImageLabels: resolveReferenceImageLabelsAfterPanelRun({
+      panelBefore,
+      labelsBefore,
+      panelAfter,
+      plan,
+    }),
+    prompt,
+  });
+  const ctxAfter = buildPromptMediaRefContextForRun(data);
+  ok(
+    '稀疏槽 index3 底栏=图片4',
+    resolveReferenceSlotDisplayLabel(3, panelAfter, data.referenceImageLabels, data.imagePreview) === '图片4'
+  );
+  const mentionLabels = buildPromptMediaRefLabels(data, ctxAfter);
+  ok(
+    '稀疏槽 @=图片4',
+    mentionLabels.some((it) => it.refImageIndex === 3 && it.insertText === '@图片4'),
+    mentionLabels.map((it) => `${it.refImageIndex}:${it.insertText}`).join(',')
+  );
+  ok('仍含@图片1', mentionLabels.some((it) => it.insertText === '@图片1'));
+  const syncPatch = buildPanelRefSlotSyncPatch(data, { dedupeAgainstMain: false });
+  ok('buildPanelRefSlotSyncPatch 不强制改 prompt', syncPatch?.prompt == null || syncPatch?.prompt === prompt, syncPatch?.prompt);
 }
 
 console.log('\n=== 38. 9999.json：错槽标签 + 资产库解析时勿用槽位本地 File ===\n');
@@ -3092,8 +3638,8 @@ console.log('\n=== 41. 全模型：误拖主预览 / 空槽 File / 选中预览 
       mergedPanelLabels: labels,
       projectAssets: assets,
     });
-    ok(`${modelName}: 运行后预览=鸱吻库`, patch.imagePreview === libCw, patch.imagePreview);
-    ok(`${modelName}: 运行后隐藏主图格`, patch.panelMainSlotVisible === false);
+    ok(`${modelName}: 运行后预览=首个@参考图(鸱吻库)`, patch.imagePreview === libCw, patch.imagePreview);
+    ok(`${modelName}: 运行后备份误拖主图`, patch.panelMainImageUrl === wrongMain);
   }
 }
 
@@ -3353,6 +3899,475 @@ console.log('\n=== 42. 无空格扫描 + 各模型 token 解析/展开 ===\n');
     ok(`${selectedModel}: 展开后无裸 @资产:白泽`, !expanded.includes('@资产:白泽'));
     ok(`${selectedModel}: 展开保留走向`, expanded.includes('走向镜头'));
   }
+}
+
+console.log('\n=== 12d-image2-to-video. 图生图后切视频：@图片 走 generationParams ===\n');
+
+{
+  const refUrl = 'https://cos/image2-ref-fox.png';
+  const resultUrl = 'https://cos/image2-output.png';
+  const data = simNode({
+    selectedModel: 'seedance2.0 (高质量版)',
+    seedanceGenerationMode: 'image',
+    imagePreview: resultUrl,
+    referenceImages: [],
+    generationParams: {
+      referenceImages: [refUrl],
+      prompt: '让 @图片1 动起来',
+    },
+    prompt: '让 @图片1 动起来',
+  });
+  const ctx = buildPromptMediaRefContextForRun(data);
+  const plan = collectReferencedMediaFromPrompt(data.prompt!, data, ctx, new Map());
+  ok(
+    'image2→seedance-image @图片1 解析到 gp 参考图',
+    plan.images.some((e) => e.token === '@图片1' && e.url === refUrl)
+  );
+  const uploadSlots = panelReferenceImagesForUpload(data) || [];
+  ok('image2→seedance-image 上传槽含 gp 参考图', uploadSlots.includes(refUrl));
+}
+
+{
+  const refUrl = 'https://cos/image2-ref-wolf.png';
+  const data = simNode({
+    selectedModel: '可灵 2.5 Turbo',
+    imagePreview: 'https://cos/output.png',
+    referenceImages: [],
+    generationParams: { referenceImages: [refUrl] },
+    prompt: '参考 @图片1 生成视频',
+  });
+  const ctx = buildPromptMediaRefContextForRun(data);
+  const plan = collectReferencedMediaFromPrompt(data.prompt!, data, ctx, new Map());
+  ok(
+    'image2→可灵2.5 @图片1 解析到 gp 参考图',
+    plan.images.some((e) => e.token === '@图片1' && e.url === refUrl)
+  );
+}
+
+console.log('\n=== 12e-seedance-ref. 参考生视频仅 @主图：API 须含 referenceImages ===\n');
+
+{
+  const mainUrl = 'https://cos/piano-main.png';
+  const uploaded = 'https://cos/piano-main-up.png';
+  const data = simNode({
+    selectedModel: 'seedance2.0 (急速版)',
+    seedanceGenerationMode: 'reference',
+    imagePreview: mainUrl,
+    referenceImages: [],
+    prompt: '@主图 运动起来',
+  });
+  const ctx = buildPromptMediaRefContextForRun(data);
+  const plan = collectReferencedMediaFromPrompt(data.prompt!, data, ctx, new Map());
+  ok('plan 含 @主图', plan.images.some((e) => e.token === '@主图'));
+  const uploadedByToken = new Map([['@主图', uploaded]]);
+  const apiRefsOnly = buildReferenceOnlyImagesForApiPayload(plan.images, uploadedByToken);
+  ok('旧逻辑不含 @主图', apiRefsOnly.length === 0);
+  const apiRefs = buildSeedanceReferenceImagesApiPayload(plan.images, uploadedByToken);
+  ok('参考生 API 含 @主图 上传 URL', apiRefs.length === 1 && apiRefs[0] === uploaded);
+  const opts = buildReferenceIndexOptionsFromPlan(plan, { projectAssets: [] });
+  const expanded = resolvePromptPlaceholders(data.prompt!, data, ctx, opts);
+  ok('展开含 referenceImages 第1张', expanded.includes('referenceImages 第1张'), expanded);
+}
+
+console.log('\n=== 12f. 仅 @主图 + gp 历史参考：勿灌面板/上下文 ===\n');
+
+{
+  const gpRefs = [
+    'https://cos/old-bear1.png',
+    'https://cos/old-bear2.png',
+    'https://cos/old-bear3.png',
+  ];
+  const data = simNode({
+    selectedModel: 'seedance2.0 (急速版)',
+    seedanceGenerationMode: 'reference',
+    imagePreview: 'https://cos/main-bear.png',
+    referenceImages: [],
+    generationParams: { referenceImages: gpRefs },
+    prompt: '@主图 运动起来',
+  });
+  const ctx = buildPromptMediaRefContextForRun(data);
+  const ctxUrls = referenceImageUrlsForContext(data, ctx);
+  ok('仅@主图: 上下文不含 gp 历史', ctxUrls.length === 0, JSON.stringify(ctxUrls));
+  const uploadSlots = panelReferenceImagesForUpload(data) || [];
+  ok('仅@主图: 上传槽为空', uploadSlots.length === 0);
+  const plan = collectReferencedMediaFromPrompt(data.prompt!, data, ctx, new Map());
+  const uploaded = new Map([['@主图', 'https://cos/main-bear-up.png']]);
+  const merged = mergeAndPrunePanelReferenceImagesAfterUpload([], plan.images, uploaded, {
+    imagePreview: data.imagePreview,
+  });
+  ok('仅@主图: 运行后面板参考槽为空', merged.length === 0, JSON.stringify(merged));
+  const api = buildSeedanceReferenceImagesApiPayload(plan.images, uploaded);
+  ok('仅@主图: API 仍含主图', api.length === 1 && api[0].includes('main-bear-up'));
+  const details = buildSeedanceReferenceDetailsFromSnapshot({
+    snapshotRefs: api,
+    snapshotLabels: ['主图'],
+  });
+  ok('Node Details 快照仅 1 张', details.referenceImages.length === 1);
+  ok('Node Details 标签为主图', details.referenceImageDetailItems[0]?.label === '主图');
+  const apiLabels = buildSeedanceReferenceApiLabelsFromPlan(plan.images, uploaded);
+  ok('API 标签与 plan 一致', apiLabels[0] === '主图');
+  const legacyDetails = buildSeedanceReferenceDetailsFromSnapshot({
+    snapshotRefs: api,
+    prompt: '@主图 运动起来',
+  });
+  ok('旧快照无 labels 时从 prompt 推断主图', legacyDetails.referenceImageDetailItems[0]?.label === '主图');
+}
+
+console.log('\n=== 12g. 仅 @主图 + 节点残留 referenceImages：勿回退脏槽 ===\n');
+
+{
+  const staleRef = 'https://cos/stale-grass-skirt.png';
+  const data = simNode({
+    selectedModel: 'seedance2.0 (急速版)',
+    seedanceGenerationMode: 'reference',
+    imagePreview: 'https://cos/main-jacket-bear.png',
+    referenceImages: [staleRef],
+    referenceImageLabels: ['图片1'],
+    prompt: '@主图 运动起来',
+  });
+  const ctx = buildPromptMediaRefContextForRun(data);
+  const plan = collectReferencedMediaFromPrompt(data.prompt!, data, ctx, new Map());
+  const panelRaw = panelReferenceImagesForUpload(data) || [];
+  const panelBefore =
+    promptPlanReferencesMainImage(plan.images) && !promptPlanReferencesPanelImages(plan.images)
+      ? []
+      : panelRaw;
+  ok('仅@主图: 上传前忽略残留参考', panelBefore.length === 0, JSON.stringify(panelBefore));
+  const uploaded = new Map([['@主图', 'https://cos/main-jacket-up.png']]);
+  const merged = mergeAndPrunePanelReferenceImagesAfterUpload([], plan.images, uploaded, {
+    imagePreview: data.imagePreview,
+  });
+  ok('仅@主图: 合并后参考槽为空', merged.length === 0, JSON.stringify(merged));
+  const snapshotPanel = [...merged];
+  ok('仅@主图: 快照 panelReferenceImages 不含残留', !snapshotPanel.includes(staleRef));
+  const api = buildSeedanceReferenceImagesApiPayload(plan.images, uploaded);
+  ok('仅@主图: API 仍 1 张', api.length === 1);
+}
+
+console.log('\n=== 12h. OUTPUT/MOV：侧栏勿用 gp API 参考当「图片1」===\n');
+
+{
+  const apiMain = 'https://cos/api-main-upload.png';
+  const movData = simNode({
+    selectedModel: 'seedance2.0 (急速版)',
+    seedanceGenerationMode: 'reference',
+    imagePreview: 'https://cos/output-video.mp4',
+    referenceImages: [apiMain],
+    prompt: '@主图 运动起来',
+    generationParams: {
+      model: 'seedance2.0 (急速版)',
+      referenceImages: [apiMain],
+      prompt: '@主图 运动起来',
+    },
+  });
+  const sanitized = sanitizeOutputNodePanelReferenceImages(movData, NodeType.MOV);
+  ok('MOV 仅@主图: 侧栏参考为空', sanitized.length === 0, JSON.stringify(sanitized));
+
+  const spawnedRefs = outputNodePanelReferenceImagesFromRun({
+    isImage2Run: false,
+    isVideoModel: true,
+    isSeedance20RefOutput: true,
+    seedancePanelSnapshot: [],
+    snapPanelRefs: [],
+    inheritedRefs: [apiMain],
+  });
+  ok('spawn Seedance 参考生: 面板参考格为空', (spawnedRefs || []).length === 0);
+
+  const klingRefs = outputNodePanelReferenceImagesFromRun({
+    isImage2Run: false,
+    isVideoModel: true,
+    isSeedance20RefOutput: false,
+    snapPanelRefs: [],
+    inheritedRefs: ['https://cos/gp-first.png'],
+  });
+  ok('spawn 可灵2.5: 面板参考格为空', (klingRefs || []).length === 0);
+
+  const withPic1 = outputNodePanelReferenceImagesFromRun({
+    isImage2Run: false,
+    isVideoModel: true,
+    isSeedance20RefOutput: true,
+    seedancePanelSnapshot: ['https://cos/ref-fox.png'],
+    snapPanelRefs: ['https://cos/ref-fox.png'],
+  });
+  ok('spawn @图片1: 面板参考格仍为空（新规则）', (withPic1 || []).length === 0);
+}
+
+{
+  const apiMain = 'https://cos/i2-main-up.png';
+  const apiRef = 'https://cos/i2-ref-up.png';
+  const i2Out = simNode({
+    selectedModel: 'image 2',
+    imagePreview: apiMain,
+    referenceImages: [apiRef],
+    prompt: '@主图 生成',
+    generationParams: {
+      model: 'image 2',
+      referenceImages: [apiMain, apiRef],
+      prompt: '@主图 生成',
+    },
+  });
+  ok(
+    'image2 OUTPUT 仅@主图: 侧栏无参考',
+    sanitizeOutputNodePanelReferenceImages(i2Out, NodeType.OUTPUT).length === 0
+  );
+  const i2Spawn = outputNodePanelReferenceImagesFromRun({
+    isImage2Run: true,
+    isVideoModel: false,
+    isSeedance20RefOutput: false,
+    snapPanelRefs: [],
+    inheritedRefs: [apiRef],
+  });
+  ok('image2 spawn: 用面板快照非 inherited', (i2Spawn || []).length === 0);
+}
+
+{
+  const ff = 'https://cos/kling-first.png';
+  const lf = 'https://cos/kling-last.png';
+  const klingMov = simNode({
+    selectedModel: '可灵 2.5 Turbo',
+    imagePreview: 'https://cos/out-video.mp4',
+    firstFrameImageUrl: ff,
+    lastFrameImageUrl: lf,
+    referenceImages: [ff, lf],
+    prompt: '@首帧图 运动',
+    generationParams: {
+      model: '可灵 2.5 Turbo',
+      referenceImages: [ff, lf],
+      firstFrameImageUrl: ff,
+      lastFrameImageUrl: lf,
+      prompt: '@首帧图 运动',
+    },
+  });
+  ok(
+    '可灵2.5 MOV: referenceImages 不含首尾帧',
+    sanitizeOutputNodePanelReferenceImages(klingMov, NodeType.MOV).length === 0
+  );
+  const framePatch = sanitizeOutputNodeFramePanelPatch(klingMov, NodeType.MOV);
+  ok(
+    '可灵2.5 MOV: 清空面板首/尾帧',
+    framePatch?.firstFrameImageUrl === undefined &&
+      framePatch?.lastFrameImageUrl === undefined &&
+      framePatch?.firstFrameImage === undefined
+  );
+
+  const klingOut = simNode({
+    selectedModel: '可灵 2.5 Turbo',
+    imagePreview: 'https://cos/poster.jpg',
+    firstFrameImageUrl: ff,
+    generationParams: {
+      model: '可灵 2.5 Turbo',
+      firstFrameImageUrl: ff,
+      prompt: '@首帧图 运动',
+    },
+  });
+  ok(
+    '可灵2.5 OUTPUT(非视频预览): 仍清空首帧槽',
+    sanitizeOutputNodeFramePanelPatch(klingOut, NodeType.OUTPUT)?.firstFrameImageUrl === undefined
+  );
+}
+
+{
+  const mainUrl = 'https://cos/nano-out-main.png';
+  const refA = 'https://cos/ref-a.png';
+  const refB = 'https://cos/ref-b.png';
+  const seedanceModel = 'seedance2.0 (高质量版)';
+  const nanoOutput = simNode({
+    selectedModel: seedanceModel,
+    seedanceGenerationMode: 'reference',
+    imagePreview: mainUrl,
+    referenceImages: [refA, refB],
+    referenceImageLabels: ['图片1', '图片2'],
+    prompt: '',
+    generationParams: {
+      model: 'Nano Banana Pro',
+      referenceImages: [mainUrl],
+      prompt: 'nano prompt',
+    },
+  });
+  ok(
+    '§128 seedance参考生 OUTPUT(生图gp): prompt无@仍保留参考格（编辑态 helper 仍 true）',
+    shouldPreserveSeedanceReferencePanelBeforePromptRefs(nanoOutput, seedanceModel)
+  );
+  // 新规则：OUTPUT 面板参考格一律为空（即便编辑态切模型）；参考仅存 generationParams / Node Details
+  const sanitized = sanitizeOutputNodePanelReferenceImages(nanoOutput, NodeType.OUTPUT);
+  ok(
+    '§128 seedance参考生 OUTPUT: sanitize 面板参考格为空（新规则）',
+    sanitized.length === 0
+  );
+
+  const promptAtOnly = { ...nanoOutput, prompt: '@' };
+  const sanitizedAt = sanitizeOutputNodePanelReferenceImages(promptAtOnly, NodeType.OUTPUT);
+  ok('§128 seedance参考生 OUTPUT: prompt仅@ 面板参考格仍为空', sanitizedAt.length === 0);
+
+  const afterSeedanceRun = simNode({
+    selectedModel: seedanceModel,
+    seedanceGenerationMode: 'reference',
+    imagePreview: mainUrl,
+    referenceImages: [refA],
+    prompt: '@主图 运动',
+    generationParams: {
+      model: seedanceModel,
+      seedanceGenerationMode: 'reference',
+      referenceImages: [mainUrl, refA],
+      prompt: '@主图 运动',
+    },
+  });
+  ok(
+    '§128 seedance跑完后: 面板参考格为空',
+    sanitizeOutputNodePanelReferenceImages(afterSeedanceRun, NodeType.OUTPUT).length === 0
+  );
+}
+
+// §129 OUTPUT/MOV 用户手动拖入参考图/首尾帧：运行时与刷新后均不丢失（2026-06 修复）
+// 根因：此前 sanitizeOutputLikeNodeDataOnLoad + NodeInspector 面板 effect 对 OUTPUT/MOV
+// 一律清空 referenceImages / 首尾帧，导致用户拖入后立即被清掉、刷新后也丢失。
+// 修复后：继承仅在 spawn 时为空；运行时/加载时保留用户手动添加的内容。
+{
+  const sdModel = 'seedance2.0 (高质量版)';
+  const mainUrl = 'https://cos.example.com/main.png';
+  const userRefA = 'https://cos.example.com/user-drag-a.png';
+  const userRefB = 'https://cos.example.com/user-drag-b.png';
+  const userLastFrame = 'https://cos.example.com/user-last-frame.png';
+  const inheritedFrame = 'https://cos.example.com/inherited-first-frame.png';
+
+  // 1) sanitizeOutputLikeNodeDataOnLoad 不再清空用户参考图与尾帧
+  const outputWithUserRefs = {
+    type: NodeType.OUTPUT,
+    data: {
+      selectedModel: sdModel,
+      seedanceGenerationMode: 'reference',
+      imagePreview: mainUrl,
+      referenceImages: [userRefA, userRefB],
+      referenceImageLabels: ['图片1', '图片2'],
+      lastFrameImageUrl: userLastFrame,
+      lastFrameImage: userLastFrame,
+      firstFrameImageUrl: inheritedFrame,
+      firstFrameImage: inheritedFrame,
+      generationParams: {
+        model: sdModel,
+        referenceImages: [mainUrl],
+        prompt: '@主图 运动',
+      },
+    } as Partial<NodeData>,
+  };
+  const loaded = sanitizeOutputLikeNodeDataOnLoad(outputWithUserRefs);
+  const loadedRefs = loaded.data?.referenceImages || [];
+  ok(
+    '§129 OUTPUT 加载后保留用户拖入参考图（不清空）',
+    loadedRefs.length === 2 && loadedRefs[0] === userRefA && loadedRefs[1] === userRefB,
+    JSON.stringify(loadedRefs)
+  );
+  ok(
+    '§129 OUTPUT 加载后保留用户拖入尾帧（seedance 图生视频）',
+    loaded.data?.lastFrameImageUrl === userLastFrame &&
+      loaded.data?.lastFrameImage === userLastFrame,
+    String(loaded.data?.lastFrameImageUrl)
+  );
+  ok(
+    '§129 OUTPUT 加载后保留用户设置的首帧（不再 load-time 清空）',
+    loaded.data?.firstFrameImageUrl === inheritedFrame,
+    String(loaded.data?.firstFrameImageUrl)
+  );
+
+  // 2) MOV 同理
+  const movWithUserRefs = {
+    type: NodeType.MOV,
+    data: {
+      selectedModel: sdModel,
+      seedanceGenerationMode: 'image',
+      imagePreview: mainUrl,
+      referenceImages: [userRefA],
+      referenceImageLabels: ['图片1'],
+      lastFrameImageUrl: userLastFrame,
+      lastFrameImage: userLastFrame,
+    } as Partial<NodeData>,
+  };
+  const loadedMov = sanitizeOutputLikeNodeDataOnLoad(movWithUserRefs);
+  ok(
+    '§129 MOV 加载后保留用户拖入参考图',
+    (loadedMov.data?.referenceImages || []).length === 1 &&
+      loadedMov.data?.referenceImages?.[0] === userRefA,
+    JSON.stringify(loadedMov.data?.referenceImages)
+  );
+  ok(
+    '§129 MOV 加载后保留用户拖入尾帧',
+    loadedMov.data?.lastFrameImageUrl === userLastFrame
+  );
+
+  // 3) spawn 路径仍可通过 sanitizeOutputNodeFramePanelPatch 清继承帧（契约/helper）
+  const inheritedOnlyOutput = {
+    selectedModel: '可灵 2.5 Turbo',
+    imagePreview: mainUrl,
+    firstFrameImageUrl: inheritedFrame,
+    lastFrameImageUrl: userLastFrame,
+  } as Partial<NodeData>;
+  const spawnFramePatch = sanitizeOutputNodeFramePanelPatch(inheritedOnlyOutput, NodeType.OUTPUT);
+  ok(
+    '§129 spawn/helper：sanitizeOutputNodeFramePanelPatch 仍可清首尾帧',
+    spawnFramePatch != null &&
+      spawnFramePatch.firstFrameImageUrl === undefined &&
+      spawnFramePatch.lastFrameImageUrl === undefined
+  );
+}
+
+console.log('\n=== §130 Omni 视频参考 @资产:主图 + COS 上传勿重复展示 ===\n');
+{
+  const mainUrl =
+    '/flowgen-api/projects/14/assets/62803dee-e53e-4f51-b0c7-b297829bea54/file';
+  const uploadedRef =
+    'https://aitop100app-1251510006.cos.ap-shanghai.myqcloud.com/openApi/212508/12dd3de1-7212-47bb-aece-e1fbf05205dc.png';
+  const data: Partial<NodeData> = {
+    selectedModel: '可灵3.0 Omni',
+    klingOmniTab: 'video',
+    klingOmniVideoPrompt: '把@资产:美女中的角色按照@视频1中的角色运动起来',
+    prompt: '把@资产:美女中的角色按照@视频1中的角色运动起来',
+    imagePreview: mainUrl,
+    imageName: '美女',
+    projectAssetId: '62803dee-e53e-4f51-b0c7-b297829bea54',
+    klingOmniVideoReferenceImages: [uploadedRef],
+  };
+  ok(
+    '§130 isOmniAssetMainUploadRefDuplicate',
+    isOmniAssetMainUploadRefDuplicate(uploadedRef, data)
+  );
+  ok(
+    '§130 isPanelRefDuplicateOfMainImageSlot',
+    isPanelRefDuplicateOfMainImageSlot(uploadedRef, data)
+  );
+  const entries = filterPanelReferenceDisplayEntriesExcludingMainPreview(
+    [{ url: uploadedRef, slotIndex: 0 }],
+    mainUrl,
+    '美女',
+    undefined,
+    undefined,
+    data
+  );
+  ok('§130 面板参考格去重后为空', entries.length === 0, String(entries.length));
+}
+
+console.log('\n=== §131 运行后 gp 恢复不得压缩面板槽位 ===\n');
+
+{
+  const panel = ['https://ex/a.png', 'https://ex/b.png', 'https://ex/c.png', 'https://ex/d.png'];
+  const data = simNode({
+    selectedModel: MODEL_NANO_BANANA_2,
+    referenceImages: panel,
+    prompt: '@主图 @图片2',
+    generationParams: {
+      referenceImages: ['https://ex/main-up.png', 'https://ex/b-up.png'],
+      referenceImageLabels: ['主图', '图片2'],
+    },
+    imagePreview: 'https://ex/main.png',
+  });
+  const restored = buildPanelReferenceImagesRestorePatchForEditing(data);
+  ok('§131 gp 恢复不缩小面板', !restored, JSON.stringify(restored?.referenceImages));
+  const merged = mergePanelWithPersistedRefsIfPromptNeeds(
+    panel,
+    data.generationParams!.referenceImages!,
+    data.prompt!,
+    data.imagePreview
+  );
+  ok('§131 merge 保留 4 槽', merged.length === 4 && merged[2] === panel[2], JSON.stringify(merged));
 }
 
 console.log('\n=== 汇总 ===\n');

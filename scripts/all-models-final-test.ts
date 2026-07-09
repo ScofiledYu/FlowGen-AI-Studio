@@ -110,7 +110,6 @@ function runPanelAndAtScenario(s: Scenario) {
   ok(`${s.id}: 解析出@素材`, plan.images.length + plan.videos.length >= 1);
 
   const uploaded = mockUploaded(plan);
-  const shouldPrunePanel = promptPlanReferencesPanelImages(plan.images);
   const panelAfter = mergeAndPrunePanelReferenceImagesAfterUpload(
     panelBefore,
     plan.images,
@@ -132,9 +131,14 @@ function runPanelAndAtScenario(s: Scenario) {
         !['@主图', '@主体'].includes(e.token) &&
         uploaded.has(e.token)
     );
-    if (!inPlan && shouldPrunePanel) {
-      ok(`${s.id}: 槽${i}未@已清空`, !String(panelAfter[i] || '').trim(), `${panelAfter[i]}`);
-    } else if (inPlan) {
+    if (!inPlan) {
+      ok(
+        `${s.id}: 槽${i}未@仍保留`,
+        String(panelAfter[i] || '').trim() === String(panelBefore[i] || '').trim() ||
+          panelAfter[i]?.replace(/\|UP$/i, '') === panelBefore[i],
+        `${panelAfter[i]}`
+      );
+    } else {
       ok(
         `${s.id}: 槽${i}已@写回`,
         String(panelAfter[i] || '').endsWith('|UP'),

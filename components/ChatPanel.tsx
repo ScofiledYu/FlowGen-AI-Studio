@@ -30,8 +30,9 @@ import { validateStoryboardTableSpawn } from '../utils/storyboardTableSpawn';
 import { DIRECTOR_STORYBOARD_ADVANCED_MD, DIRECTOR_STORYBOARD_CORE_MD } from '../utils/storyboardPresets';
 import { resolveNodeSelectionPreviewUrl } from '../utils/nodeDetailsPreview';
 import type { ProjectAssetLabelRow } from '../utils/referenceImageSlotLabels';
+import { buildNodePromptUpdatePatch } from '../utils/promptMediaRefs';
 import { profileSync } from '../utils/runtimeProfile';
-import { resolveWebSearchProbeQuery } from '../utils/webSearchProbe';
+import { isAssistantIdentityQuestion, isNonSearchableChatUtterance, resolveWebSearchProbeQuery } from '../utils/webSearchProbe';
 import {
   ASSISTANT_MARKER_THINKING,
   ASSISTANT_MARKER_WEB_SEARCH,
@@ -61,6 +62,19 @@ import {
   sanitizeAssistantDisplayText,
   isLikelyMainOnlySearchDump,
 } from '../utils/assistantMessageLayout';
+import {
+  AITOP_LLM_API,
+  AITOP_CHAT_MODELS,
+  QWEN_CHAT_UI_ID,
+  buildChatAiModelsForUi,
+  chatModelDisplayLabel,
+  chatModelFallbackChain,
+  getAitopChatModel,
+  isAitopLlmUiModel,
+  isQwenChatUiModel,
+  normalizeChatModelId,
+} from '../utils/aitopChatModels';
+import { logChatLlmPreload, isChatQwenDebugEnabled } from '../utils/chatRequestLog';
 
 // Qwen 经同源代理（与 1225 版一致：统一 /api/v1 → models.fangte.com/v1/chat/completions）
 const QWEN_API_CONFIG = {
@@ -74,22 +88,22 @@ const QWEN_API_CONFIG = {
   MAX_TOKENS_SKILL_CHAT: 32_768,
 };
 
-// Gemini?AITop?API ??
+/** @deprecated 使用 AITOP_LLM_API */
 const GEMINI_API_CONFIG = {
-  BASE_URL: 'https://aitop100-api.hytch.com',
-  URL: '/aitop-llm-see',
-  API_KEY: 'aitop-key-4MGEBAFEArM3HRaJ0P77EkhEAtxseJma',
-  MODEL_NAME: 'gemini-3.1-pro-preview:streamGenerateContent',
-  USER_ID: '297409' // ????? userID
+  BASE_URL: AITOP_LLM_API.BASE_URL,
+  URL: AITOP_LLM_API.URL,
+  API_KEY: AITOP_LLM_API.API_KEY,
+  MODEL_NAME: AITOP_CHAT_MODELS[0].apiModelName,
+  USER_ID: AITOP_LLM_API.USER_ID,
 };
 
-// Claude?AITop?API ??
+/** @deprecated 使用 AITOP_LLM_API + getAitopChatModel */
 const CLAUDE_API_CONFIG = {
-  BASE_URL: 'https://aitop100-api.hytch.com',
-  URL: '/aitop-llm-see',
-  API_KEY: 'aitop-key-4MGEBAFEArM3HRaJ0P77EkhEAtxseJma',
-  MODEL_NAME: 'claude-sonnet-4-6',
-  USER_ID: '297409' // ????? userID
+  BASE_URL: AITOP_LLM_API.BASE_URL,
+  URL: AITOP_LLM_API.URL,
+  API_KEY: AITOP_LLM_API.API_KEY,
+  MODEL_NAME: AITOP_CHAT_MODELS[1].apiModelName,
+  USER_ID: AITOP_LLM_API.USER_ID,
 };
 
 // ????
@@ -741,11 +755,7 @@ function ChatTableHtml({ rows }: { rows: string[][] }) {
 }
 
                 // ??????
-const AI_MODELS = [
-  { id: 'gemini-3-pro', name: 'Gemini 3.1 Pro', icon: '💎' },
-  { id: 'claude-4.5', name: 'Claude 4.6', icon: '🎯' },
-  { id: 'qwen', name: 'Qwen', icon: '🤖' },
-];
+const AI_MODELS = buildChatAiModelsForUi();
 
 /** ????????setState ???????????? OOM / ????*/
 const CHAT_STREAM_UI_INTERVAL_MS = 48;
@@ -1120,6 +1130,7 @@ function extractQwenAxiosErrorDiag(error: unknown): Record<string, unknown> {
 }
 
 function logQwenDebug(event: string, data: Record<string, unknown>): void {
+  if (!isChatQwenDebugEnabled()) return;
   const bundle = {
     tag: 'chat-qwen-debug',
     event,
@@ -1324,17 +1335,34 @@ const AITOP_PROCESS_EXTRA_TIP_ZH =
 const AITOP_THINKING_ZH_TIP =
   '若启用思考，思考过程必须全程使用简体中文（含小标题与每一段说明），禁止使用英文。';
 
+/**
+ * 仅在用户问「你是谁/哪个模型」时注入（多模型路由必要约束）。
+ * 普通问答不注入，避免过度约束、让上游按 API 自然回复。
+ */
+function buildAitopIdentityTip(modelLabel: string): string {
+  const name = (modelLabel || '').trim();
+  if (!name) return '';
+  return `当前会话选用模型为「${name}」。请据此自我介绍，勿因对话历史或检索结果改称其他模型产品名。`;
+}
+
 function buildAitopTip(opts?: {
   thinking?: boolean;
   webSearch?: boolean;
   webSearchFirstPass?: boolean;
   skillTip?: string;
+  modelLabel?: string;
+  /** 仅身份元问题时注入模型名 tip */
+  identityQuestion?: boolean;
 }): string {
-  // ???????? tool-search ????? tip ??????????????
+  // 联网首轮 tip 置空，避免干扰 tool-search
   if (opts?.webSearchFirstPass) {
     return ' ';
   }
   const parts = [AITOP_BASE_TIP_ZH];
+  if (opts?.identityQuestion) {
+    const identity = buildAitopIdentityTip(opts?.modelLabel || '');
+    if (identity) parts.push(identity);
+  }
   const skillTip = (opts?.skillTip || '').trim();
   if (skillTip) parts.push(skillTip);
   if (opts?.thinking) parts.push(AITOP_THINKING_ZH_TIP);
@@ -1851,10 +1879,9 @@ function buildSearchDumpSummarizePrompt(
   return skillPrefix ? `${skillPrefix}\n\n${body}` : body;
 }
 
+/** 问候 / 自我介绍 / 致谢等短句：不开联网首轮，避免历史话题污染检索词 */
 function isLightweightPrompt(text: string): boolean {
-  const t = (text || '').trim().toLowerCase();
-  if (!t || t.length > 80) return false;
-  return /^(你好|嗨|hi|hello|嘿|在吗|你是谁|测试|test|ok)[\s!,.，。!?？]*$/i.test(t);
+  return isNonSearchableChatUtterance(text);
 }
 
 function toLogError(err: unknown): string {
@@ -2185,12 +2212,7 @@ const ChatMessageRow = memo(function ChatMessageRow({
 });
 
 function normalizeModelId(modelId: string): string {
-  // ?????/?????
-  if (modelId === 'gemini3pro') return 'gemini-3-pro';
-  if (modelId === 'claude45') return 'claude-4.5';
-  if (modelId === 'qwen') return 'qwen';
-  if (AI_MODELS.some((m) => m.id === modelId)) return modelId;
-  return 'claude-4.5';
+  return normalizeChatModelId(modelId);
 }
 
 /** ????AI ????????localStorage ??????????*/
@@ -2821,18 +2843,9 @@ export const ChatPanel = React.forwardRef<ChatPanelHandle, ChatPanelProps>(
     return chatIdRef.current;
   };
 
-  const modelLabelById = (modelId: string): string => {
-    if (modelId === 'gemini-3-pro') return 'Gemini 3.1 Pro';
-    if (modelId === 'claude-4.5') return 'Claude 4.6';
-    if (modelId === 'qwen') return 'Qwen';
-    return modelId;
-  };
+  const modelLabelById = (modelId: string): string => chatModelDisplayLabel(modelId);
 
-  const fallbackChainByPrimary = (modelId: string): string[] => {
-    if (modelId === 'claude-4.5') return ['gemini-3-pro', 'qwen'];
-    if (modelId === 'gemini-3-pro') return ['claude-4.5', 'qwen'];
-    return [];
-  };
+  const fallbackChainByPrimary = (modelId: string): string[] => chatModelFallbackChain(modelId);
 
   const sendByModel = async (
     modelId: string,
@@ -2841,15 +2854,11 @@ export const ChatPanel = React.forwardRef<ChatPanelHandle, ChatPanelProps>(
     chatIdForActivity?: string,
     sendOpts?: { fromFallback?: boolean }
   ) => {
-    if (modelId === 'gemini-3-pro') {
-      await handleGeminiSend(text, images, chatIdForActivity);
+    if (isAitopLlmUiModel(modelId)) {
+      await handleAitopLlmSend(modelId, text, images, chatIdForActivity);
       return;
     }
-    if (modelId === 'claude-4.5') {
-      await handleClaudeSend(text, images, chatIdForActivity);
-      return;
-    }
-    if (modelId === 'qwen') {
+    if (modelId === QWEN_CHAT_UI_ID) {
       logQwenDebug('routed_from_send', {
         chatId: chatIdForActivity,
         textLen: (text || '').length,
@@ -2862,7 +2871,7 @@ export const ChatPanel = React.forwardRef<ChatPanelHandle, ChatPanelProps>(
       await handleQwenSend(text, images, chatIdForActivity, 0, sendOpts);
       return;
     }
-    throw new Error('?????????? Gemini 3.1 Pro?Claude 4.6 ? Qwen ????');
+    throw new Error('未支持的聊天模型，请选择 Gemini / Claude / DeepSeek / DouBao / Qwen');
   };
 
   /**
@@ -2891,26 +2900,10 @@ export const ChatPanel = React.forwardRef<ChatPanelHandle, ChatPanelProps>(
     };
 
     lastFailedStreamCharsRef.current = 0;
-    const startedAt = Date.now();
-    console.warn('[chat] primary attempt', {
-      model: modelLabelById(modelId),
-      chatId: chatIdForActivity || chatIdRef.current,
-      textLen: (text || '').length,
-      imageCount: images.length,
-    });
     try {
       await sendByModel(modelId, text, images, chatIdForActivity);
-      console.warn('[chat] primary success', {
-        model: modelLabelById(modelId),
-        elapsedMs: Date.now() - startedAt,
-      });
       return finishTurn(modelId);
     } catch (primaryError) {
-      console.warn('[chat] primary failed', {
-        model: modelLabelById(modelId),
-        elapsedMs: Date.now() - startedAt,
-        error: toLogError(primaryError),
-      });
       const primaryLabel = modelLabelById(modelId);
       const fallbackChain = fallbackChainByPrimary(modelId);
       if (fallbackChain.length === 0) throw primaryError;
@@ -2921,27 +2914,10 @@ export const ChatPanel = React.forwardRef<ChatPanelHandle, ChatPanelProps>(
         isLikelyRetryablePrimaryModelError(primaryError)
       ) {
         const retryChatId = createEphemeralChatId();
-        console.warn('[chat] primary same-model retry', {
-          model: primaryLabel,
-          retryChatId,
-          sessionChatId: chatIdRef.current || chatIdForActivity,
-          error: toLogError(primaryError),
-        });
         try {
           await sendByModel(modelId, text, images, retryChatId);
-          console.warn('[chat] primary same-model retry success', {
-            model: primaryLabel,
-            retryChatId,
-            elapsedMs: Date.now() - startedAt,
-          });
           return finishTurn(modelId);
         } catch (retryErr) {
-          console.warn('[chat] primary same-model retry failed', {
-            model: primaryLabel,
-            retryChatId,
-            elapsedMs: Date.now() - startedAt,
-            error: toLogError(retryErr),
-          });
           effectivePrimaryError = retryErr;
         }
       }
@@ -2975,30 +2951,13 @@ export const ChatPanel = React.forwardRef<ChatPanelHandle, ChatPanelProps>(
 
         try {
           const fallbackApiChatId = createEphemeralChatId();
-          console.warn('[chat] fallback attempt', {
-            fromModel: failedLabel,
-            toModel: fallbackLabel,
-            fallbackApiChatId,
-            sessionChatId: chatIdRef.current || chatIdForActivity,
-            partialChars: lastFailedStreamCharsRef.current,
-          });
           const hadThinkingOrWeb = thinkingMode !== 'off' || useWebSearch;
           if (fallbackModel === 'qwen' && hadThinkingOrWeb) {
             beginDegradedUiForModelSwitch(hadThinkingOrWeb);
           }
           await sendByModel(fallbackModel, text, images, fallbackApiChatId, { fromFallback: true });
-          console.warn('[chat] fallback success', {
-            model: fallbackLabel,
-            elapsedMs: Date.now() - startedAt,
-            sessionChatId: chatIdRef.current,
-          });
           return finishTurn(fallbackModel);
         } catch (fallbackError) {
-          console.warn('[chat] fallback failed', {
-            model: fallbackLabel,
-            elapsedMs: Date.now() - startedAt,
-            error: toLogError(fallbackError),
-          });
           const fallbackErrContent = formatModelFailureContent(fallbackLabel, fallbackError);
           errorSections.push(fallbackErrContent);
           failedLabel = fallbackLabel;
@@ -3354,7 +3313,7 @@ export const ChatPanel = React.forwardRef<ChatPanelHandle, ChatPanelProps>(
         method: 'GET',
         headers: {
           'Content-Type': 'application/json',
-          'api-key': GEMINI_API_CONFIG.API_KEY,
+          'api-key': AITOP_LLM_API.API_KEY,
         },
       });
       if (!res.ok) {
@@ -3665,28 +3624,6 @@ export const ChatPanel = React.forwardRef<ChatPanelHandle, ChatPanelProps>(
     setAttachedImages([]);
     setInput('');
     setIsLoading(true);
-    let sendWatchdog: number | undefined;
-    const sendStartedAt = Date.now();
-    const sendWatchdogMs = useWebSearch ? 120_000 : 15_000;
-    const skillBlockForSend = resolveProjectSkillBlock();
-    console.warn('[chat] send start', {
-      model: selectedModel,
-      hasImages: currentImages.length > 0,
-      textLen: currentInput.length,
-      webSearchEnabled: useWebSearch,
-      thinkingMode,
-      lightweight: currentImages.length === 0 && isLightweightPrompt(currentInput),
-      chatId: currentChatIdForActivity || chatIdRef.current,
-      projectSkillActive: isProjectSkillActive(projectSkillRef.current),
-      projectSkillBlockLen: skillBlockForSend.length,
-    });
-    sendWatchdog = window.setTimeout(() => {
-      console.warn('[chat] send watchdog warning (still running)', {
-        model: selectedModel,
-        chatId: currentChatIdForActivity || chatIdRef.current,
-        elapsedMs: Date.now() - sendStartedAt,
-      });
-    }, sendWatchdogMs);
 
     try {
       const usedModel = await attemptSendWithFallback(
@@ -3700,18 +3637,7 @@ export const ChatPanel = React.forwardRef<ChatPanelHandle, ChatPanelProps>(
         setSelectedModel(usedModel);
       }
       commitTurnSession(currentChatIdForActivity, currentInput, usedModel);
-      console.warn('[chat] send done', {
-        model: modelLabelById(usedModel),
-        elapsedMs: Date.now() - sendStartedAt,
-        chatId: currentChatIdForActivity || chatIdRef.current,
-      });
     } catch (error) {
-      console.error('[chat] send failed', {
-        model: modelLabelById(selectedModel),
-        elapsedMs: Date.now() - sendStartedAt,
-        chatId: currentChatIdForActivity || chatIdRef.current,
-        error: toLogError(error),
-      });
       let errorMessage = '**❌ API 调用失败**\n\n抱歉，分析过程中出现错误。';
       let derivedRequestId: string | undefined;
 
@@ -3815,7 +3741,6 @@ export const ChatPanel = React.forwardRef<ChatPanelHandle, ChatPanelProps>(
       });
       commitTurnSession(currentChatIdForActivity, currentInput);
     } finally {
-      if (sendWatchdog) window.clearTimeout(sendWatchdog);
       setIsLoading(false);
     }
   };
@@ -3902,15 +3827,23 @@ export const ChatPanel = React.forwardRef<ChatPanelHandle, ChatPanelProps>(
     }
   };
 
-  // Gemini API????
-  const handleGeminiSend = async (
+  // AiTop llm/see（Gemini / Claude / DeepSeek / DouBao 共用）
+  const handleAitopLlmSend = async (
+    uiModelId: string,
     currentInput: string,
     currentImages: string[],
     forcedChatId?: string,
     retryCount = 0,
     retryOptions?: LlmSendRetryOptions
   ) => {
-    const modelStartedAt = Date.now();
+    const modelDef = getAitopChatModel(uiModelId);
+    if (!modelDef) {
+      throw new Error(`未注册的 AiTop 聊天模型: ${uiModelId}`);
+    }
+    const modelLabel = modelDef.displayLabel;
+    const apiModelName = modelDef.apiModelName;
+    const timeoutFamily = modelDef.timeoutFamily;
+    const modelSlug = modelDef.logSlug;
     const degradedAfterSwitch =
       degradedOnceAfterModelSwitchRef.current && retryOptions?.degraded !== true;
     const useDegraded = retryOptions?.degraded === true || degradedAfterSwitch;
@@ -3918,21 +3851,13 @@ export const ChatPanel = React.forwardRef<ChatPanelHandle, ChatPanelProps>(
     if (currentImages.length > 6) {
       throw new Error(
         formatAitopLlmFailure(
-          'Gemini 3.1 Pro',
+          modelLabel,
           '**参数校验：** 图片最多支持 6 张，请减少后重试。'
         )
       );
     }
     
     const forcedWebSearchOffGemini = retryOptions?.forceWebSearchOff === true;
-    const isGeminiWebSearchFirstPass =
-      useWebSearch && !retryOptions?.summarizeSearchDumpText && !forcedWebSearchOffGemini;
-    // ???????? chatId??? AiTop ????????
-    let currentChatId = forcedChatId || generateChatId();
-    if (isGeminiWebSearchFirstPass) {
-      currentChatId = createEphemeralChatId();
-    }
-    
     // ?????Gemini API ?? message ??? markdown ??
     let imageTail = '';
     if (currentImages.length > 0) {
@@ -3961,11 +3886,19 @@ export const ChatPanel = React.forwardRef<ChatPanelHandle, ChatPanelProps>(
     const forcedWebSearchOff = forcedWebSearchOffGemini;
     const keepWebSearchOnDegradedRetry =
       retryOptions?.degraded === true && useWebSearch && !forcedWebSearchOff;
+    // 轻量问候等：即使 UI 开着联网，本轮也不走检索首轮（避免历史话题污染）
     const effectiveWebSearch = forcedWebSearchOff
       ? false
       : keepWebSearchOnDegradedRetry
         ? true
         : (useDegraded || lightweight ? false : useWebSearch);
+    const isGeminiWebSearchFirstPass =
+      !!effectiveWebSearch && !retryOptions?.summarizeSearchDumpText;
+    // ???????? chatId??? AiTop ????????
+    let currentChatId = forcedChatId || generateChatId();
+    if (isGeminiWebSearchFirstPass) {
+      currentChatId = createEphemeralChatId();
+    }
     const baseMessage = buildAitopMessageWithHistory(
       persistSnapshotRef.current.messages,
       currentInput || '',
@@ -3988,9 +3921,9 @@ export const ChatPanel = React.forwardRef<ChatPanelHandle, ChatPanelProps>(
       const probeRewriteChatId = createEphemeralChatId();
       const probeQuery = await resolveWebSearchProbeMessageForAitop(
         {
-          url: GEMINI_API_CONFIG.URL,
-          apiKey: GEMINI_API_CONFIG.API_KEY,
-          model: GEMINI_API_CONFIG.MODEL_NAME,
+          url: AITOP_LLM_API.URL,
+          apiKey: AITOP_LLM_API.API_KEY,
+          model: apiModelName,
         },
         persistSnapshotRef.current.messages,
         currentInput || '',
@@ -4005,7 +3938,7 @@ export const ChatPanel = React.forwardRef<ChatPanelHandle, ChatPanelProps>(
     
                 // ??????
     const headers = {
-      'api-key': GEMINI_API_CONFIG.API_KEY,
+      'api-key': AITOP_LLM_API.API_KEY,
       'Content-Type': 'application/json'
     };
     
@@ -4013,7 +3946,7 @@ export const ChatPanel = React.forwardRef<ChatPanelHandle, ChatPanelProps>(
     const payload: any = {
       id: normalizeAitopChatId(currentChatId),
       message: message,
-      model: GEMINI_API_CONFIG.MODEL_NAME,
+      model: apiModelName,
       tip: ' ',
       webSearch: effectiveWebSearch
     };
@@ -4033,6 +3966,8 @@ export const ChatPanel = React.forwardRef<ChatPanelHandle, ChatPanelProps>(
       webSearch: !!effectiveWebSearch,
       webSearchFirstPass: isGeminiWebSearchFirstPass,
       skillTip: buildProjectSkillAitopTip(projectSkillRef.current),
+      modelLabel,
+      identityQuestion: isAssistantIdentityQuestion(currentInput || ''),
     });
     const aitopTimeoutOpts = {
       useDegraded,
@@ -4040,24 +3975,18 @@ export const ChatPanel = React.forwardRef<ChatPanelHandle, ChatPanelProps>(
       effectiveWebSearch,
       payloadCharLen: String(message).length,
     };
-    const geminiFetchTimeoutMs = resolveAitopFetchTimeoutMs('gemini', aitopTimeoutOpts);
+    const geminiFetchTimeoutMs = resolveAitopFetchTimeoutMs(timeoutFamily, aitopTimeoutOpts);
     const geminiStreamIdleTimeoutMs = resolveAitopStreamIdleTimeoutMs(thinkingMode, aitopTimeoutOpts);
-    console.warn('[chat][Gemini 3.1 Pro] request', {
-      chatId: currentChatId,
-      sessionChatId: chatIdRef.current || undefined,
-      retryCount,
-      degraded: useDegraded,
-      userWebSearchEnabled: useWebSearch,
-      webSearch: effectiveWebSearch,
-      webSearchFirstPass: isGeminiWebSearchFirstPass,
-      webSearchQuery: isGeminiWebSearchFirstPass ? String(message).slice(0, 160) : undefined,
-      thinkingLevel: payload.thinkingLevel,
-      thinking: payload.thinking,
-      textLen: (currentInput || '').length,
-      imageCount: currentImages.length,
-      modelName: payload.model,
-      fetchTimeoutMs: geminiFetchTimeoutMs,
-      streamIdleTimeoutMs: geminiStreamIdleTimeoutMs,
+    const aitopRequestUrl =
+      typeof window !== 'undefined'
+        ? new URL(AITOP_LLM_API.URL, window.location.origin).href
+        : AITOP_LLM_API.URL;
+    logChatLlmPreload({
+      model: modelLabel,
+      url: aitopRequestUrl,
+      upstreamUrl: `${AITOP_LLM_API.BASE_URL}/api/v1/llm/see`,
+      headers,
+      body: payload,
     });
     
     
@@ -4081,7 +4010,7 @@ export const ChatPanel = React.forwardRef<ChatPanelHandle, ChatPanelProps>(
       const fetchTimer = window.setTimeout(() => ac.abort(), geminiFetchTimeoutMs);
       let response: Response;
       try {
-        response = await fetch(GEMINI_API_CONFIG.URL, {
+        response = await fetch(AITOP_LLM_API.URL, {
           method: 'POST',
           headers: headers,
           body: JSON.stringify(payload),
@@ -4092,7 +4021,7 @@ export const ChatPanel = React.forwardRef<ChatPanelHandle, ChatPanelProps>(
         if (e instanceof DOMException && e.name === 'AbortError') {
           throw new Error(
             formatAitopErr(
-              'Gemini 3.1 Pro',
+              modelLabel,
               `**原因：** ${geminiFetchTimeoutMs / 1000} 秒内未完成连接或首包（请求已中止）。请稍后重试。`,
               { chatId: currentChatId }
             )
@@ -4100,7 +4029,7 @@ export const ChatPanel = React.forwardRef<ChatPanelHandle, ChatPanelProps>(
         }
         throw new Error(
           formatAitopErr(
-            'Gemini 3.1 Pro',
+            modelLabel,
             `**问题：** ${e instanceof Error ? e.message : String(e)}`,
             { chatId: currentChatId }
           )
@@ -4112,7 +4041,7 @@ export const ChatPanel = React.forwardRef<ChatPanelHandle, ChatPanelProps>(
       const jsonErrGemini = await readAitopJsonErrorIfAny(response);
       if (jsonErrGemini) {
         throw new Error(
-          formatAitopErr('Gemini 3.1 Pro', `**问题：** ${jsonErrGemini}`, {
+          formatAitopErr(modelLabel, `**问题：** ${jsonErrGemini}`, {
             chatId: currentChatId,
             requestId: upstreamRequestId,
           })
@@ -4155,7 +4084,7 @@ export const ChatPanel = React.forwardRef<ChatPanelHandle, ChatPanelProps>(
         }
         throw new Error(
           formatAitopErr(
-            'Gemini 3.1 Pro',
+            modelLabel,
             `**HTTP状态：** ${response.status} ${response.statusText}${errorDetail}`,
             { chatId: currentChatId, requestId, taskId: responseTaskId }
           )
@@ -4164,7 +4093,7 @@ export const ChatPanel = React.forwardRef<ChatPanelHandle, ChatPanelProps>(
 
       if (!response.body) {
         throw new Error(
-          formatAitopErr('Gemini 3.1 Pro', '**问题：** 响应体为空，服务器未返回任何数据', {
+          formatAitopErr(modelLabel, '**问题：** 响应体为空，服务器未返回任何数据', {
             chatId: currentChatId,
             requestId: upstreamRequestId,
           })
@@ -4178,7 +4107,7 @@ export const ChatPanel = React.forwardRef<ChatPanelHandle, ChatPanelProps>(
       let buffer = '';
       let lastStreamUiAt = 0;
 
-      const geminiCollectApiReasoning = thinkingMode !== 'off' || isSummarizeRetry;
+      const collectApiReasoning = thinkingMode !== 'off' || isSummarizeRetry;
       const flushStreamUiIfDue = () => {
         const t = Date.now();
         if (t - lastStreamUiAt < CHAT_STREAM_UI_INTERVAL_MS) return;
@@ -4187,7 +4116,7 @@ export const ChatPanel = React.forwardRef<ChatPanelHandle, ChatPanelProps>(
           composeStreamedAssistantMessage(
             fullContent,
             fullReasoning,
-            geminiCollectApiReasoning,
+            collectApiReasoning,
             geminiWebSearchQuery,
             effectiveWebSearch
           )
@@ -4213,8 +4142,8 @@ export const ChatPanel = React.forwardRef<ChatPanelHandle, ChatPanelProps>(
         if (apiErr) {
           throw new Error(
             formatAitopErr(
-              'Gemini 3.1 Pro',
-              `**问题：** ${apiErr}${aitopGeminiUnavailableHint(data)}`,
+              modelLabel,
+              `**问题：** ${apiErr}${modelDef.useGeminiUnavailableHint ? aitopGeminiUnavailableHint(data) : ''}`,
               { chatId: currentChatId, requestId: upstreamRequestId }
             )
           );
@@ -4225,7 +4154,7 @@ export const ChatPanel = React.forwardRef<ChatPanelHandle, ChatPanelProps>(
         );
         const contentChunk = getStreamContentChunk(data);
         if (contentChunk) fullContent += contentChunk;
-        if (geminiCollectApiReasoning) {
+        if (collectApiReasoning) {
           const reasoningChunk = getStreamReasoningChunk(data);
           if (reasoningChunk) fullReasoning += reasoningChunk;
         }
@@ -4236,7 +4165,7 @@ export const ChatPanel = React.forwardRef<ChatPanelHandle, ChatPanelProps>(
             errorMsg += `\n**错误代码：** ${data.error.code}`;
           }
           throw new Error(
-            formatAitopErr('Gemini 3.1 Pro', errorMsg, {
+            formatAitopErr(modelLabel, errorMsg, {
               chatId: currentChatId,
               requestId: upstreamRequestId,
             })
@@ -4252,7 +4181,7 @@ export const ChatPanel = React.forwardRef<ChatPanelHandle, ChatPanelProps>(
           () =>
             new Error(
               formatAitopErr(
-                'Gemini 3.1 Pro',
+                modelLabel,
                 `**问题：** ????${geminiStreamIdleTimeoutMs / 1000} ???????????????????????????????????`,
                 { chatId: currentChatId, requestId: upstreamRequestId }
               )
@@ -4280,7 +4209,7 @@ export const ChatPanel = React.forwardRef<ChatPanelHandle, ChatPanelProps>(
             if (isAitopFormattedStreamError(e)) {
               throw e;
             }
-            warnChatSseLineParseSkipped('Gemini 3.1 Pro', payloadLine, e);
+            warnChatSseLineParseSkipped(modelLabel, payloadLine, e);
           }
         }
         if (geminiDoneByFlag) break;
@@ -4296,14 +4225,14 @@ export const ChatPanel = React.forwardRef<ChatPanelHandle, ChatPanelProps>(
           if (isAitopFormattedStreamError(e)) {
             throw e;
           }
-          warnChatSseLineParseSkipped('Gemini 3.1 Pro', geminiTailPayload, e);
+          warnChatSseLineParseSkipped(modelLabel, geminiTailPayload, e);
         }
       }
       
       let composedGemini = composeStreamedAssistantMessage(
         fullContent,
         fullReasoning,
-        geminiCollectApiReasoning,
+        collectApiReasoning,
         geminiWebSearchQuery,
         effectiveWebSearch
       );
@@ -4312,7 +4241,7 @@ export const ChatPanel = React.forwardRef<ChatPanelHandle, ChatPanelProps>(
           composedGemini,
           retryOptions.summarizeSearchDumpText,
           fullReasoning,
-          geminiCollectApiReasoning,
+          collectApiReasoning,
           { userQuestion: currentInput || '' }
         );
       }
@@ -4329,7 +4258,7 @@ export const ChatPanel = React.forwardRef<ChatPanelHandle, ChatPanelProps>(
         synthesizedRaw: composedGemini,
         userQuestion: currentInput || '',
       });
-      warnIfLlmSeeLikelyUpstreamFallback('Gemini 3.1 Pro', finalContent);
+      warnIfLlmSeeLikelyUpstreamFallback(modelLabel, finalContent);
 
       const geminiUpstreamFallback = detectUpstreamFallback({
         content: fullContent,
@@ -4340,12 +4269,12 @@ export const ChatPanel = React.forwardRef<ChatPanelHandle, ChatPanelProps>(
         setMessages((prev) => prev.filter((m) => m.id !== assistantMessageId));
         if (!useDegraded && retryCount < 1) {
           const retryChatId = createEphemeralChatId();
-          console.warn('[chat][Gemini 3.1 Pro] fallback quick degraded retry once', {
+          console.warn(`[chat][${modelLabel}] fallback quick degraded retry once`, {
             chatId: currentChatId,
             retryChatId,
             fallbackText: finalContent.slice(0, 200),
           });
-          await handleGeminiSend(currentInput, currentImages, retryChatId, retryCount, {
+          await handleAitopLlmSend(uiModelId, currentInput, currentImages, retryChatId, retryCount, {
             degraded: true,
             forceWebSearchOff: true,
           });
@@ -4354,7 +4283,7 @@ export const ChatPanel = React.forwardRef<ChatPanelHandle, ChatPanelProps>(
         if (FAST_SWITCH_ON_UPSTREAM_FALLBACK) {
           throw new Error(
             formatAitopErr(
-              'Gemini 3.1 Pro',
+              modelLabel,
               `**原因：** ${clipMessageContent(fullContent || finalContent).slice(0, 200)}\n**说明：** 检测到上游临时兜底文案，将自动尝试切换其他模型继续回答。`,
               { chatId: currentChatId, requestId: upstreamRequestId }
             )
@@ -4362,7 +4291,7 @@ export const ChatPanel = React.forwardRef<ChatPanelHandle, ChatPanelProps>(
         }
         throw new Error(
           formatAitopErr(
-            'Gemini 3.1 Pro',
+            modelLabel,
             `**原因：** ${clipMessageContent(fullContent || finalContent).slice(0, 200)}\n**说明：** 检测到上游临时兜底文案，建议改选 Qwen 或稍后重试。`,
             { chatId: currentChatId, requestId: upstreamRequestId }
           )
@@ -4382,13 +4311,13 @@ export const ChatPanel = React.forwardRef<ChatPanelHandle, ChatPanelProps>(
         const dumpText = geminiWebFirstPass.content;
         const runGeminiSummarize = async (compact: boolean) => {
           const retryChatId = createEphemeralChatId();
-          console.warn('[chat][Gemini 3.1 Pro] web search answer unstable/too short, retry summarize-only', {
+          console.warn(`[chat][${modelLabel}] web search answer unstable/too short, retry summarize-only`, {
             chatId: currentChatId,
             retryChatId,
             compact,
             preview: dumpText.slice(0, 200),
           });
-          await handleGeminiSend(currentInput, currentImages, retryChatId, retryCount + 1, {
+          await handleAitopLlmSend(uiModelId, currentInput, currentImages, retryChatId, retryCount + 1, {
             degraded: false,
             forceWebSearchOff: true,
             summarizeSearchDumpText: dumpText,
@@ -4402,7 +4331,7 @@ export const ChatPanel = React.forwardRef<ChatPanelHandle, ChatPanelProps>(
           const summarizeMsg =
             summarizeErr instanceof Error ? summarizeErr.message : String(summarizeErr);
           if (/首包|abort|AbortError/i.test(summarizeMsg) && !retryOptions?.summarizeCompact) {
-            console.warn('[chat][Gemini 3.1 Pro] summarize timeout, retry compact', {
+            console.warn(`[chat][${modelLabel}] summarize timeout, retry compact`, {
               chatId: currentChatId,
               preview: summarizeMsg.slice(0, 120),
             });
@@ -4425,7 +4354,7 @@ export const ChatPanel = React.forwardRef<ChatPanelHandle, ChatPanelProps>(
       if (!geminiHasVisibleMain) {
         throw new Error(
           formatAitopErr(
-            'Gemini 3.1 Pro',
+            modelLabel,
             '**问题：** 模型未返回有效正文或表格内容。',
             { chatId: currentChatId, requestId: upstreamRequestId }
           )
@@ -4444,23 +4373,11 @@ export const ChatPanel = React.forwardRef<ChatPanelHandle, ChatPanelProps>(
         )
       );
 
-      console.warn('[chat][Gemini 3.1 Pro] success', {
-        chatId: currentChatId,
-        elapsedMs: Date.now() - modelStartedAt,
-      });
       
     } catch (error) {
-      console.error('[chat][Gemini 3.1 Pro] failed', {
-        chatId: currentChatId,
-        requestId: upstreamRequestId,
-        elapsedMs: Date.now() - modelStartedAt,
-        retryCount,
-        error: toLogError(error),
-        partialChars: fullContent.trim().length,
-      });
       const partialChars = preserveIncompleteStreamOnError({
-        modelLabel: 'Gemini 3.1 Pro',
-        modelSlug: 'gemini',
+        modelLabel,
+        modelSlug,
         fullContent,
         fullReasoning,
         collectReasoning: thinkingMode !== 'off' || !!retryOptions?.summarizeSearchDumpText,
@@ -4478,7 +4395,7 @@ export const ChatPanel = React.forwardRef<ChatPanelHandle, ChatPanelProps>(
         throw error;
       }
       throw new Error(
-        formatAitopErr('Gemini 3.1 Pro', `**问题：** ${String(error)}`, {
+        formatAitopErr(modelLabel, `**问题：** ${String(error)}`, {
           chatId: currentChatId,
           requestId: upstreamRequestId,
         })
@@ -4583,48 +4500,15 @@ export const ChatPanel = React.forwardRef<ChatPanelHandle, ChatPanelProps>(
       stream: true,
     };
 
-    // Qwen API ????thinking ??????deepThinking ???
-    const qwenConfigSnapshot = {
-      url: QWEN_API_CONFIG.URL,
-      model: QWEN_API_CONFIG.MODEL_NAME,
-      apiKeyMasked: maskQwenApiKey(QWEN_API_CONFIG.API_KEY),
-      maxTokensChat: QWEN_API_CONFIG.MAX_TOKENS_CHAT,
-      maxTokensSkillChat: QWEN_API_CONFIG.MAX_TOKENS_SKILL_CHAT,
-      maxTokensVision: QWEN_API_CONFIG.MAX_TOKENS,
-    };
-
-    logQwenDebug('send_start', {
-      chatId: currentChatId,
-      retryCount,
-      requestUrl: qwenApiUrl,
-      fullUrl: qwenApiUrl,
-      config: qwenConfigSnapshot,
-      userTextLen: userText.length,
-      imageCount: currentImages.length,
-      contentFormat: hasImages ? 'multimodal' : 'text',
-      lightweight,
-      historyMessageCount: qwenMessages.length,
-      messagesSummary: summarizeQwenMessagesForLog(qwenMessages),
-      payloadSummary: {
-        model: payload.model,
-        max_tokens: payload.max_tokens,
-        timeoutMs: lightweight ? QWEN_AXIOS_TIMEOUT_LIGHT_MS : QWEN_AXIOS_TIMEOUT_MS,
-      },
-      note: 'Qwen SSE 流式；不含 webSearch/thinking 参数',
-    });
-
-    console.warn('[chat][Qwen] request', {
-      chatId: currentChatId,
-      retryCount,
-      url: qwenApiUrl,
-      historyCount: qwenMessages.length,
-      textLen: userText.length,
-      imageCount: currentImages.length,
-      contentFormat: hasImages ? 'multimodal' : 'text',
-      maxTokens: payload.max_tokens,
-      stream: true,
-      timeoutMs: lightweight ? QWEN_AXIOS_TIMEOUT_LIGHT_MS : QWEN_AXIOS_TIMEOUT_MS,
-      lightweight,
+    logChatLlmPreload({
+      model: 'Qwen',
+      url:
+        typeof window !== 'undefined'
+          ? new URL(qwenApiUrl, window.location.origin).href
+          : qwenApiUrl,
+      upstreamUrl: 'https://models.fangte.com/v1/chat/completions',
+      headers: headers as Record<string, string>,
+      body: payload,
     });
 
     const assistantMessageId = 'assistant-' + Date.now();
@@ -4758,7 +4642,7 @@ export const ChatPanel = React.forwardRef<ChatPanelHandle, ChatPanelProps>(
         });
         throw new Error(
           formatQwenFailure(
-            '**问题：** 流式接口未返回有效正文。\n详见 `[chat][Qwen][debug][json]`。'
+            '**问题：** 流式接口未返回有效正文。\n可执行 localStorage.setItem(\'flowgen:debugChatQwen\',\'1\') 后重试以查看详细 debug。'
           )
         );
       }
@@ -4801,11 +4685,6 @@ export const ChatPanel = React.forwardRef<ChatPanelHandle, ChatPanelProps>(
         void upsertServerHistory(persistChatId, 'qwen', next);
         return next;
       });
-      console.warn('[chat][Qwen] success', {
-        chatId: currentChatId,
-        elapsedMs: Date.now() - modelStartedAt,
-        stream: true,
-      });
     } catch (error) {
       logQwenDebug('send_failed', {
         chatId: currentChatId,
@@ -4817,11 +4696,6 @@ export const ChatPanel = React.forwardRef<ChatPanelHandle, ChatPanelProps>(
       });
       if (retryCount < 1 && isLikelyTransientNetworkError(error)) {
         setMessages((prev) => prev.filter((m) => m.id !== assistantMessageId));
-        console.warn('[chat][Qwen] transient network error, retry once', {
-          chatId: currentChatId,
-          retryCount,
-          error: toLogError(error),
-        });
         logQwenDebug('retry_once', { chatId: currentChatId, reason: 'transient_network' });
         await handleQwenSend(currentInput, currentImages, forcedChatId, retryCount + 1, sendOpts);
         return;
@@ -4841,11 +4715,6 @@ export const ChatPanel = React.forwardRef<ChatPanelHandle, ChatPanelProps>(
         lastFailedStreamCharsRef.current,
         partialChars
       );
-      console.error('[chat][Qwen] failed', {
-        chatId: currentChatId,
-        elapsedMs: Date.now() - modelStartedAt,
-        error: toLogError(error),
-      });
       const detail =
         error instanceof Error
           ? error.message.includes('**❌') || error.message.includes('**原因：**')
@@ -4853,588 +4722,6 @@ export const ChatPanel = React.forwardRef<ChatPanelHandle, ChatPanelProps>(
             : formatQwenFailure(error.message)
           : formatQwenFailure(String(error));
       throw new Error(detail);
-    } finally {
-      if (degradedAfterSwitch) endDegradedModelSwitch();
-    }
-  };
-
-  // Claude API????
-  const handleClaudeSend = async (
-    currentInput: string,
-    currentImages: string[],
-    forcedChatId?: string,
-    retryCount = 0,
-    retryOptions?: LlmSendRetryOptions
-  ) => {
-    const modelStartedAt = Date.now();
-    const degradedAfterSwitch =
-      degradedOnceAfterModelSwitchRef.current && retryOptions?.degraded !== true;
-    const useDegraded = retryOptions?.degraded === true || degradedAfterSwitch;
-    const lightweight = currentImages.length === 0 && isLightweightPrompt(currentInput || '');
-    if (currentImages.length > 6) {
-      throw new Error(
-        formatAitopLlmFailure(
-          'Claude 4.6',
-          '**参数校验：** 图片最多支持 6 张，请减少后重试。'
-        )
-      );
-    }
-    
-    const forcedWebSearchOff = retryOptions?.forceWebSearchOff === true;
-    const isWebSearchSummarizePass = !!retryOptions?.summarizeSearchDumpText;
-    // ??Gemini ???????????? + webSearch???? Search results ?????
-    const isClaudeWebSearchFirstPass =
-      useWebSearch && !isWebSearchSummarizePass && !forcedWebSearchOff;
-    let currentChatId = forcedChatId || generateChatId();
-    if (isClaudeWebSearchFirstPass) {
-      currentChatId = createEphemeralChatId();
-    }
-    
-    let imageTail = '';
-    if (currentImages.length > 0) {
-      try {
-        const processedImageUrls = await Promise.all(
-          currentImages.map(async (imageUrl, index) => {
-            try {
-              return await processImageUrl(imageUrl);
-            } catch (error) {
-              throw new Error(`?? ${index + 1} ????: ${error instanceof Error ? error.message : String(error)}`);
-            }
-          })
-        );
-        processedImageUrls.forEach((imageUrl) => {
-          imageTail += `<p>![](${imageUrl})</p>`;
-        });
-      } catch (error) {
-        const errorMessage = error instanceof Error ? error.message : String(error);
-        throw new Error(`??????: ${errorMessage}`);
-      }
-    }
-    const keepWebSearchOnDegradedRetry =
-      retryOptions?.degraded === true && useWebSearch && !forcedWebSearchOff;
-    const effectiveWebSearch = forcedWebSearchOff
-      ? false
-      : keepWebSearchOnDegradedRetry
-        ? true
-        : useDegraded || lightweight
-          ? false
-          : useWebSearch;
-    const webDialogueCtxClaude = buildWebSearchDialogueContext(
-      persistSnapshotRef.current.messages,
-      currentInput || ''
-    );
-    const baseMessage = buildAitopMessageWithHistory(
-      persistSnapshotRef.current.messages,
-      currentInput || '',
-      imageTail,
-      { webSearch: effectiveWebSearch, skillBlock: resolveProjectSkillBlock() }
-    );
-    let claudeWebSearchQuery = '';
-    if (isClaudeWebSearchFirstPass) {
-      const probeRewriteChatId = createEphemeralChatId();
-      const probeQuery = await resolveWebSearchProbeMessageForAitop(
-        {
-          url: CLAUDE_API_CONFIG.URL,
-          apiKey: CLAUDE_API_CONFIG.API_KEY,
-          model: CLAUDE_API_CONFIG.MODEL_NAME,
-        },
-        persistSnapshotRef.current.messages,
-        currentInput || '',
-        imageTail,
-        probeRewriteChatId
-      );
-      claudeWebSearchQuery = probeQuery;
-    }
-    const message =
-      isWebSearchSummarizePass && retryOptions?.summarizeSearchDumpText
-        ? buildSearchDumpSummarizePrompt(currentInput || '', retryOptions.summarizeSearchDumpText, {
-            compact: !!retryOptions.summarizeCompact,
-            dialogueContext: webDialogueCtxClaude,
-            skillBlock: resolveProjectSkillBlock(),
-          })
-        : isClaudeWebSearchFirstPass
-          ? claudeWebSearchQuery
-          : baseMessage;
-    
-                // ??????
-    const headers = {
-      'api-key': CLAUDE_API_CONFIG.API_KEY,
-      'Content-Type': 'application/json'
-    };
-    
-                // ??????
-    const payload: any = {
-      id: normalizeAitopChatId(currentChatId),
-      message: message,
-      model: CLAUDE_API_CONFIG.MODEL_NAME,
-      tip: ' ',
-      webSearch: effectiveWebSearch
-    };
-    
-    const isSummarizeRetryClaude = !!retryOptions?.summarizeSearchDumpText;
-    if (isSummarizeRetryClaude) {
-      payload.thinkingLevel = 'high';
-      payload.thinking = true;
-    } else {
-      payload.thinkingLevel =
-        !useDegraded && !lightweight && thinkingMode === 'deep' ? 'high' : 'low';
-      payload.thinking = thinkingMode !== 'off';
-    }
-    payload.tip = buildAitopTip({
-      thinking: !!payload.thinking,
-      webSearch: !!effectiveWebSearch,
-      webSearchFirstPass: isClaudeWebSearchFirstPass,
-      skillTip: buildProjectSkillAitopTip(projectSkillRef.current),
-    });
-    const claudeTimeoutOpts = {
-      useDegraded,
-      isSummarize: isSummarizeRetryClaude,
-      effectiveWebSearch,
-      payloadCharLen: String(message).length,
-    };
-    const claudeFetchTimeoutMs = resolveAitopFetchTimeoutMs('claude', claudeTimeoutOpts);
-    const claudeStreamIdleTimeoutMs = resolveAitopStreamIdleTimeoutMs(thinkingMode, claudeTimeoutOpts);
-    console.warn('[chat][Claude 4.6] request', {
-      chatId: currentChatId,
-      sessionChatId: chatIdRef.current || undefined,
-      retryCount,
-      degraded: useDegraded,
-      userWebSearchEnabled: useWebSearch,
-      webSearch: effectiveWebSearch,
-      webSearchFirstPass: isClaudeWebSearchFirstPass,
-      webSearchSummarize: isWebSearchSummarizePass,
-      webSearchQuery: isClaudeWebSearchFirstPass ? claudeWebSearchQuery.slice(0, 160) : undefined,
-      thinking: payload.thinking,
-      thinkingLevel: payload.thinkingLevel,
-      textLen: (currentInput || '').length,
-      imageCount: currentImages.length,
-      modelName: payload.model,
-      fetchTimeoutMs: claudeFetchTimeoutMs,
-      streamIdleTimeoutMs: claudeStreamIdleTimeoutMs,
-    });
-    
-    
-    // ?? Assistant ?????????????
-    const assistantMessageId = 'assistant-' + Date.now();
-    const assistantMessage: ChatMessage = {
-      id: assistantMessageId,
-      role: 'assistant',
-      content: '',
-      timestamp: new Date(),
-      isStreaming: true,
-    };
-    
-    setMessages(prev => [...prev, assistantMessage]);
-    
-    let upstreamRequestId: string | undefined;
-    let fullContent = '';
-    let fullReasoning = '';
-    try {
-      const ac = new AbortController();
-      const fetchTimer = window.setTimeout(() => ac.abort(), claudeFetchTimeoutMs);
-      let response: Response;
-      try {
-        response = await fetch(CLAUDE_API_CONFIG.URL, {
-          method: 'POST',
-          headers: headers,
-          body: JSON.stringify(payload),
-          signal: ac.signal,
-        });
-        upstreamRequestId = pickRequestIdFromHeaders(response.headers);
-      } catch (e) {
-        if (e instanceof DOMException && e.name === 'AbortError') {
-          throw new Error(
-            formatAitopErr(
-              'Claude 4.6',
-              `**原因：** ${claudeFetchTimeoutMs / 1000} 秒内未完成连接或首包（请求已中止）。请稍后重试。`,
-              { chatId: currentChatId }
-            )
-          );
-        }
-        throw new Error(
-          formatAitopErr(
-            'Claude 4.6',
-            `**问题：** ${e instanceof Error ? e.message : String(e)}`,
-            { chatId: currentChatId }
-          )
-        );
-      } finally {
-        window.clearTimeout(fetchTimer);
-      }
-
-      const jsonErrClaude = await readAitopJsonErrorIfAny(response);
-      if (jsonErrClaude) {
-        throw new Error(
-          formatAitopErr('Claude 4.6', `**问题：** ${jsonErrClaude}`, {
-            chatId: currentChatId,
-            requestId: upstreamRequestId,
-          })
-        );
-      }
-
-      if (!response.ok) {
-        const requestId = mergeAitopRequestId(upstreamRequestId, pickRequestIdFromHeaders(response.headers));
-        upstreamRequestId = requestId;
-        let responseTaskId: string | undefined;
-        let errorDetail = '';
-        try {
-          const errorData = await response.json();
-          responseTaskId =
-            errorData?.taskId ||
-            errorData?.requestId ||
-            errorData?.request_id ||
-            errorData?.data?.taskId ||
-            errorData?.data?.requestId ||
-            errorData?.data?.request_id;
-          if (errorData.error) {
-            errorDetail = `\n**错误类型：** ${errorData.error.type || '未知'}\n**错误消息：** ${errorData.error.message || '无详细错误信息'}`;
-            if (errorData.error.code) {
-              errorDetail += `\n**错误代码：** ${errorData.error.code}`;
-            }
-          } else if (errorData.message) {
-            errorDetail = `\n**错误消息：** ${errorData.message}`;
-          } else if (errorData.msg) {
-            errorDetail = `\n**错误消息：** ${errorData.msg}`;
-          } else {
-            errorDetail = `\n**错误详情：** ${JSON.stringify(errorData, null, 2)}`;
-          }
-        } catch {
-          try {
-            const errorText = await response.text();
-            errorDetail = `\n**错误详情：** ${errorText}`;
-          } catch {
-            errorDetail = `\n**状态码：** ${response.status}\n**状态文本：** ${response.statusText}`;
-          }
-        }
-        throw new Error(
-          formatAitopErr(
-            'Claude 4.6',
-            `**HTTP状态：** ${response.status} ${response.statusText}${errorDetail}`,
-            { chatId: currentChatId, requestId, taskId: responseTaskId }
-          )
-        );
-      }
-
-      if (!response.body) {
-        throw new Error(
-          formatAitopErr('Claude 4.6', '**问题：** 响应体为空，服务器未返回任何数据', {
-            chatId: currentChatId,
-            requestId: upstreamRequestId,
-          })
-        );
-      }
-      
-      const reader = response.body.getReader();
-      const decoder = new TextDecoder('utf-8');
-      fullContent = '';
-      fullReasoning = '';
-      let buffer = '';
-      let lastStreamUiAtClaude = 0;
-
-      const flushStreamUiIfDueClaude = () => {
-        const t = Date.now();
-        if (t - lastStreamUiAtClaude < CHAT_STREAM_UI_INTERVAL_MS) return;
-        lastStreamUiAtClaude = t;
-        const streamed = clipMessageContent(
-          composeStreamedAssistantMessage(
-            fullContent,
-            fullReasoning,
-            thinkingMode !== 'off' || isSummarizeRetryClaude,
-            claudeWebSearchQuery,
-            effectiveWebSearch
-          )
-        );
-        const finalized = finalizeAssistantMessageContent(streamed);
-        setMessages((prev) =>
-          prev.map((msg) =>
-            msg.id === assistantMessageId
-              ? {
-                  ...msg,
-                  content: finalized.content,
-                  tableRows: finalized.tableRows,
-                  isStreaming: true,
-                }
-              : msg
-          )
-        );
-      };
-
-      let claudeDoneByFlag = false;
-      const handleClaudeStreamData = (data: any) => {
-        const apiErr = extractAitopApiErrorFromPayload(data);
-        if (apiErr) {
-          throw new Error(
-            formatAitopErr('Claude 4.6', `**问题：** ${apiErr}`, {
-              chatId: currentChatId,
-              requestId: upstreamRequestId,
-            })
-          );
-        }
-        upstreamRequestId = mergeAitopRequestId(
-          upstreamRequestId,
-          pickRequestIdFromStreamPayload(data)
-        );
-        const contentChunk = getStreamContentChunk(data);
-        if (contentChunk) fullContent += contentChunk;
-        // AiTop spec?Claude ???? reasoning_content
-        if (thinkingMode !== 'off') {
-          const reasoningChunk = getStreamReasoningChunk(data);
-          if (reasoningChunk) fullReasoning += reasoningChunk;
-        }
-        flushStreamUiIfDueClaude();
-        if (data.error) {
-          let errorMsg = `**错误类型：** ${data.error.type || '未知'}\n**错误消息：** ${data.error.message || '无详细错误信息'}`;
-          if (data.error.code) {
-            errorMsg += `\n**错误代码：** ${data.error.code}`;
-          }
-          throw new Error(
-            formatAitopErr('Claude 4.6', errorMsg, {
-              chatId: currentChatId,
-              requestId: upstreamRequestId,
-            })
-          );
-        }
-        if (data.isDone) claudeDoneByFlag = true;
-      };
-
-      while (true) {
-        const { done, value } = await readStreamChunkWithIdle(
-          reader,
-          claudeStreamIdleTimeoutMs,
-          () =>
-            new Error(
-              formatAitopErr(
-                'Claude 4.6',
-                `**问题：** ????${claudeStreamIdleTimeoutMs / 1000} ???????????????????????????????????`,
-                { chatId: currentChatId, requestId: upstreamRequestId }
-              )
-            )
-        );
-
-        if (done) {
-          break;
-        }
-
-        buffer += decoder.decode(value, { stream: true });
-
-        // ????SSE????
-        const lines = buffer.split('\n');
-        buffer = lines.pop() || ''; // ?????????
-
-        for (const line of lines) {
-          const payloadLine = parseStreamPayloadLine(line);
-          if (!payloadLine) continue;
-          try {
-            const data = JSON.parse(payloadLine);
-            handleClaudeStreamData(data);
-            if (claudeDoneByFlag) break;
-          } catch (e) {
-            if (isAitopFormattedStreamError(e)) {
-              throw e;
-            }
-            warnChatSseLineParseSkipped('Claude 4.6', payloadLine, e);
-          }
-        }
-        if (claudeDoneByFlag) break;
-      }
-
-                // ??????
-      const claudeTailPayload = parseStreamPayloadLine(buffer);
-      if (claudeTailPayload) {
-        try {
-          const data = JSON.parse(claudeTailPayload);
-          handleClaudeStreamData(data);
-        } catch (e) {
-          if (isAitopFormattedStreamError(e)) {
-            throw e;
-          }
-          warnChatSseLineParseSkipped('Claude 4.6', claudeTailPayload, e);
-        }
-      }
-      
-      let composedClaude = composeStreamedAssistantMessage(
-        fullContent,
-        fullReasoning,
-        thinkingMode !== 'off' || isSummarizeRetryClaude,
-        claudeWebSearchQuery,
-        effectiveWebSearch
-      );
-      if (retryOptions?.summarizeSearchDumpText) {
-        composedClaude = mergeWithWebSearchProcess(
-          composedClaude,
-          retryOptions.summarizeSearchDumpText,
-          fullReasoning,
-          thinkingMode !== 'off' || isSummarizeRetryClaude,
-          { userQuestion: currentInput || '' }
-        );
-      }
-      const finalClaudeRaw = clipMessageContent(composedClaude);
-      const claudeWebFirstPass =
-        effectiveWebSearch && !retryOptions?.summarizeSearchDumpText
-          ? prepareWebSearchFirstPassContent(finalClaudeRaw, currentInput || '')
-          : {
-              content: finalClaudeRaw,
-              sections: parseAssistantMessage(finalClaudeRaw),
-              needsSummarize: false,
-            };
-      let finalClaudeContent = guardAssistantReplyContent(claudeWebFirstPass.content, {
-        synthesizedRaw: composedClaude,
-        userQuestion: currentInput || '',
-      });
-      warnIfLlmSeeLikelyUpstreamFallback('Claude 4.6', finalClaudeContent);
-
-      const claudeUpstreamFallback = detectUpstreamFallback({
-        content: fullContent,
-        reasoning: fullReasoning,
-        combined: finalClaudeContent,
-      });
-      if (claudeUpstreamFallback) {
-        setMessages((prev) => prev.filter((m) => m.id !== assistantMessageId));
-        if (!useDegraded && retryCount < 1) {
-          const retryChatId = createEphemeralChatId();
-          console.warn('[chat][Claude 4.6] fallback quick degraded retry once', {
-            chatId: currentChatId,
-            retryChatId,
-            fallbackText: finalClaudeContent.slice(0, 200),
-          });
-          await handleClaudeSend(currentInput, currentImages, retryChatId, retryCount, {
-            degraded: true,
-            forceWebSearchOff: true,
-          });
-          return;
-        }
-        if (FAST_SWITCH_ON_UPSTREAM_FALLBACK) {
-          throw new Error(
-            formatAitopErr(
-              'Claude 4.6',
-              `**原因：** ${clipMessageContent(fullContent || finalClaudeContent).slice(0, 200)}\n**说明：** 检测到上游临时兜底文案，将自动尝试切换其他模型继续回答。`,
-              { chatId: currentChatId, requestId: upstreamRequestId }
-            )
-          );
-        }
-        throw new Error(
-          formatAitopErr(
-            'Claude 4.6',
-            `**原因：** ${clipMessageContent(fullContent || finalClaudeContent).slice(0, 200)}\n**说明：** 检测到上游临时兜底文案，建议改选 Qwen 或稍后重试。`,
-            { chatId: currentChatId, requestId: upstreamRequestId }
-          )
-        );
-      }
-
-      const claudePostSections = parseAssistantMessage(finalClaudeContent);
-      const shouldRetrySummarizeClaude =
-        !retryOptions?.summarizeSearchDumpText &&
-        (retryOptions?.summarizeRetryCount ?? 0) < 1 &&
-        effectiveWebSearch &&
-        (claudeWebFirstPass.needsSummarize ||
-          needsWebSearchSynthesisPass(claudePostSections, currentInput || '') ||
-          isLikelyMainOnlySearchDump(claudePostSections.main));
-      if (shouldRetrySummarizeClaude) {
-        setMessages((prev) => prev.filter((m) => m.id !== assistantMessageId));
-        const dumpText = claudeWebFirstPass.content;
-        const runClaudeSummarize = async (compact: boolean) => {
-          const retryChatId = createEphemeralChatId();
-          console.warn('[chat][Claude 4.6] web search answer unstable/too short, retry summarize-only', {
-            chatId: currentChatId,
-            retryChatId,
-            compact,
-            preview: dumpText.slice(0, 200),
-          });
-          await handleClaudeSend(currentInput, currentImages, retryChatId, retryCount + 1, {
-            degraded: false,
-            forceWebSearchOff: true,
-            summarizeSearchDumpText: dumpText,
-            summarizeRetryCount: (retryOptions?.summarizeRetryCount ?? 0) + 1,
-            summarizeCompact: compact,
-          });
-        };
-        try {
-          await runClaudeSummarize(false);
-        } catch (summarizeErr) {
-          const summarizeMsg =
-            summarizeErr instanceof Error ? summarizeErr.message : String(summarizeErr);
-          if (/首包|abort|AbortError/i.test(summarizeMsg) && !retryOptions?.summarizeCompact) {
-            console.warn('[chat][Claude 4.6] summarize timeout, retry compact', {
-              chatId: currentChatId,
-              preview: summarizeMsg.slice(0, 120),
-            });
-            await runClaudeSummarize(true);
-          } else {
-            throw summarizeErr;
-          }
-        }
-        return;
-      }
-
-      finalClaudeContent = guardAssistantReplyContent(finalClaudeContent, {
-        synthesizedRaw: composedClaude,
-        userQuestion: currentInput || '',
-      });
-      const finalizedClaude = finalizeAssistantMessageContent(finalClaudeContent);
-      const claudeHasVisibleMain =
-        assistantReplyHasVisibleMain(finalizedClaude.content) ||
-        !!(finalizedClaude.tableRows && finalizedClaude.tableRows.length > 0);
-      if (!claudeHasVisibleMain) {
-        throw new Error(
-          formatAitopErr(
-            'Claude 4.6',
-            '**问题：** 模型未返回有效正文或表格内容。',
-            { chatId: currentChatId, requestId: upstreamRequestId }
-          )
-        );
-      }
-      setMessages((prev) =>
-        prev.map((msg) =>
-          msg.id === assistantMessageId
-            ? {
-                ...msg,
-                content: finalizedClaude.content,
-                tableRows: finalizedClaude.tableRows,
-                isStreaming: false,
-              }
-            : msg
-        )
-      );
-
-      console.warn('[chat][Claude 4.6] success', {
-        chatId: currentChatId,
-        elapsedMs: Date.now() - modelStartedAt,
-      });
-      
-    } catch (error) {
-      console.error('[chat][Claude 4.6] failed', {
-        chatId: currentChatId,
-        requestId: upstreamRequestId,
-        elapsedMs: Date.now() - modelStartedAt,
-        retryCount,
-        error: toLogError(error),
-        partialChars: fullContent.trim().length,
-      });
-      const partialChars = preserveIncompleteStreamOnError({
-        modelLabel: 'Claude 4.6',
-        modelSlug: 'claude',
-        fullContent,
-        fullReasoning,
-        collectReasoning: thinkingMode !== 'off' || !!retryOptions?.summarizeSearchDumpText,
-        allowWebSearchExtractFromMain: effectiveWebSearch,
-        userQuestion: currentInput || '',
-        assistantMessageId,
-        setMessages,
-        error,
-      });
-      lastFailedStreamCharsRef.current = Math.max(
-        lastFailedStreamCharsRef.current,
-        partialChars
-      );
-      if (error instanceof Error) {
-        throw error;
-      }
-      throw new Error(
-        formatAitopErr('Claude 4.6', `**问题：** ${String(error)}`, {
-          chatId: currentChatId,
-          requestId: upstreamRequestId,
-        })
-      );
     } finally {
       if (degradedAfterSwitch) endDegradedModelSwitch();
     }
@@ -5600,8 +4887,9 @@ export const ChatPanel = React.forwardRef<ChatPanelHandle, ChatPanelProps>(
       return;
     }
 
-    // ??????????prompt
-    updateSelectedNodesData({ prompt: selectedText });
+    updateSelectedNodesData((node) =>
+      buildNodePromptUpdatePatch(node.data as NodeData, selectedText)
+    );
 
                 // ??????
     window.getSelection()?.removeAllRanges();
@@ -6525,18 +5813,18 @@ export const ChatPanel = React.forwardRef<ChatPanelHandle, ChatPanelProps>(
               <button
                 onClick={() => setUseWebSearch(!useWebSearch)}
                 className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-all duration-200 flex items-center gap-2 ${
-                  selectedModel === 'qwen'
+                  isQwenChatUiModel(selectedModel)
                     ? 'bg-gray-800/40 text-gray-500 cursor-not-allowed border border-gray-700/30'
                     : useWebSearch
                     ? 'bg-gradient-to-r from-cyan-600/30 to-sky-600/30 text-cyan-200 border border-cyan-500/50 shadow-lg shadow-cyan-500/20'
                       : 'bg-gray-800/60 text-gray-400 hover:text-gray-300 border border-gray-700/50 hover:border-gray-600/50'
                 }`}
-                title={selectedModel === 'qwen' ? 'Qwen 暂不支持联网搜索' : '是否允许模型联网检索（仅 Gemini / Claude 生效）'}
-                disabled={selectedModel === 'qwen'}
+                title={isQwenChatUiModel(selectedModel) ? 'Qwen 暂不支持联网搜索' : '是否允许模型联网检索（AiTop 模型生效）'}
+                disabled={isQwenChatUiModel(selectedModel)}
               >
-                <Link2 size={14} className={useWebSearch && selectedModel !== 'qwen' ? 'text-cyan-300' : 'text-gray-500'} strokeWidth={2} />
+                <Link2 size={14} className={useWebSearch && !isQwenChatUiModel(selectedModel) ? 'text-cyan-300' : 'text-gray-500'} strokeWidth={2} />
                 <span>联网搜索</span>
-                {useWebSearch && selectedModel !== 'qwen' && (
+                {useWebSearch && !isQwenChatUiModel(selectedModel) && (
                   <div className="w-1.5 h-1.5 rounded-full bg-cyan-300 animate-pulse"></div>
                 )}
               </button>
@@ -6547,7 +5835,7 @@ export const ChatPanel = React.forwardRef<ChatPanelHandle, ChatPanelProps>(
                   )
                 }
                 className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-all duration-200 flex items-center gap-2 ${
-                  selectedModel === 'qwen'
+                  isQwenChatUiModel(selectedModel)
                     ? 'bg-gray-800/40 text-gray-500 cursor-not-allowed border border-gray-700/30'
                     : thinkingMode === 'deep'
                     ? 'bg-gradient-to-r from-purple-600/30 to-blue-600/30 text-purple-300 border border-purple-500/50 shadow-lg shadow-purple-500/20'
@@ -6556,16 +5844,16 @@ export const ChatPanel = React.forwardRef<ChatPanelHandle, ChatPanelProps>(
                         : 'bg-gray-800/60 text-gray-400 hover:text-gray-300 border border-gray-700/50 hover:border-gray-600/50'
                 }`}
                 title={
-                  selectedModel === 'qwen'
+                  isQwenChatUiModel(selectedModel)
                     ? 'Qwen 暂不支持深度思考'
                     : '思考：关 → 浅 → 深（循环切换）'
                 }
-                disabled={selectedModel === 'qwen'}
+                disabled={isQwenChatUiModel(selectedModel)}
               >
                 <Brain
                   size={14}
                   className={
-                    selectedModel !== 'qwen' && thinkingMode !== 'off'
+                    !isQwenChatUiModel(selectedModel) && thinkingMode !== 'off'
                       ? thinkingMode === 'deep'
                         ? 'text-purple-400'
                         : 'text-indigo-300'
@@ -6574,10 +5862,10 @@ export const ChatPanel = React.forwardRef<ChatPanelHandle, ChatPanelProps>(
                   strokeWidth={2}
                 />
               <span>{thinkingMode === 'deep' ? '深度思考' : thinkingMode === 'light' ? '浅思考' : '思考'}</span>
-                {selectedModel !== 'qwen' && thinkingMode !== 'off' && (
+                {!isQwenChatUiModel(selectedModel) && thinkingMode !== 'off' && (
                   <div
                     className={`w-1.5 h-1.5 rounded-full animate-pulse ${
-              <span>{thinkingMode === 'deep' ? '深度思考' : thinkingMode === 'light' ? '浅思考' : '思考'}</span>
+                      thinkingMode === 'deep' ? 'bg-purple-400' : 'bg-indigo-300'
                     }`}
                   ></div>
                 )}

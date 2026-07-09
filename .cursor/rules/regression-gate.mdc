@@ -1,0 +1,182 @@
+---
+description: 改面板/引用/Details/运行链路后必须跑 test:gate；用户说发版时必须跑全套并汇报
+alwaysApply: true
+---
+
+# 回归门禁（test:gate）
+
+> 四大验收域（模型 UI 面板 / 生成结果 / 拖拽 / Node Details）见根目录 `skill.md` **§5.9**；S 级勿改见 **§5.8**；Chat 身份/联网见 **§5.10**。
+
+## 何时必须跑
+
+修改以下任一区域后，**完成前必须执行 `npm run test:gate` 且全部通过**；失败则继续修，**不得**声称任务已完成：
+
+- `components/FlowEditor.tsx`
+- `components/NodeInspector.tsx`
+- `utils/panelRefPersistence.ts`
+- `utils/nodeDetailsPreview.ts`
+- `utils/referencedMediaRun.ts`
+- `utils/batchRunQueue.ts`
+- `utils/generatedOutputUrl.ts`
+- `utils/promptMediaRefs.ts`
+- `utils/firstFramePanel.ts`
+- `utils/referenceImageSlotLabels.ts`
+- `utils/backdropLabel.ts`（Backdrop 组名编辑/缩放防误触）
+- `components/nodes/BackdropNode.tsx`
+- `utils/image2Model.ts`（image2 比例↔尺寸表 / legacy 迁移）
+- `utils/taskStatusImageUrl.ts` / `utils/taskStatusMediaUrl.mjs`（任务状态结果 URL 选取）
+- `utils/probeRemoteImageDimensions.ts`（运行后探测成品 PNG 尺寸）
+- `services/aitop.ts` 中 `createImage2Task` / image2 size 字段相关改动
+- `types.ts` 中与 `NodeData` / `generationParams` / 面板参考字段相关的改动
+- `utils/klingOmniTabPanelIsolation.ts`（Omni 四 tab 面板隔离，**§5.8.1 已验收**）
+- `utils/image2PanelRefs.ts`（image2 切模型主图，**§5.8.2 已验收**）
+- `utils/localNodeMediaStore.ts`（各模型/Omni tab IDB 键，**§5.8.1/§5.8.3 已验收**）
+- `utils/inspectorReferenceDropQueue.ts`（Inspector 参考拖入串行队列，**§5.8.4 已验收**）
+- `utils/seedance20ModelSwitch.ts`（Seedance tab 快照含 `referenceElementIds`，**§5.8.4**）
+- `utils/persistSanitize.mjs`（`referenceElementIds` / Omni eids 槽位数组，**§5.8.4**）
+- `utils/middleButtonMediaDrag.ts` / `utils/canvasMiddleDrag.ts` / `utils/inspectorMediaDrop.ts`（画布/Inspector 拖拽）
+
+## 改 bug 时的范围约束
+
+- **已验收勿改**：改面板/切模型/tab 前必读根目录 `skill.md` **§5.8** + **§5.9**；禁止顺手改 Omni 主图共用、image2 切模型主图保留、per-model IDB 隔离逻辑、**§5.8.4 Inspector 中键/Shift 框选拖入去重**（`referenceElementIds` / `klingOmni*ReferenceElementIds`、`nodeDataRef` 读 eids、单次 `onUpdate`、拖入串行队列）。
+- **一次只修一类问题**；用户未要求时不要顺手 refactor 其它模型/ tab。
+- 先对照 skill 决策树确认：改的是「面板态 / 运行快照 / Node Details 展示」中的哪一种；**只动对应文件**。
+- 每个用户报告的 bug，优先在对应脚本 **加一条命名回归用例**（fixture 放 `scripts/fixtures/`，见 §5.9.3）：
+  - 面板保留未@ / Details 仅@ / 运行后新图可@ → `panel-partial-ref-matrix-test.ts` + `model-media-contract-test.ts`
+  - 面板/OUTPUT/prune（历史）→ `panel-ref-media-simulation-test.ts` §12x
+  - 面板主图格 × 创意描述 / 运行后画布参考图 → `panel-main-slot-prompt-test.ts` + `scripts/ggggttt-panel-preview-test.ts`（fixture `scripts/fixtures/ggggttt.json`）
+  - Seedance 参考生 刷新后 gp stale / 面板重复主图 / Details 三态不一致（444444）→ `scripts/444444-panel-details-verify-test.ts`（fixture `scripts/fixtures/444444.json`）+ `src/test/utils/runRecovery.test.ts` + `panelMainSlotPrompt.test.ts`
+  - 定时批量角标 → `batch-run-schedule-test.ts` §8
+  - Details 标签 / Seedance 参考生模式·参考视频 → `node-details-simulation-test.ts` §11x + `src/test/utils/seedanceReferenceDetails.test.ts`
+  - 生成结果 Source URL / outputUrl → `src/test/utils/generatedOutputUrl.test.ts` + `node-details-simulation-test.ts` §12
+  - Omni 多图 Details 槽位 → `node-details-simulation-test.ts` §11j + `src/test/utils/omniMultiDetails.test.ts`
+  - Omni MOV/OUTPUT 刷新后 Details 与面板/gp 错位（99999966666）→ `node-details-simulation-test.ts` §11n；改 `FlowEditor` ancestor 或 `buildOmniPanelSourceForNodeDetails` 时必跑
+  - Omni **旧 MOV** taskId≠ancestor（0702 node_5 INPUT 污染）→ `node-details-simulation-test.ts` §11o
+  - 跨模型契约 → `model-media-contract-test.ts`
+  - 运行后 gp / 刷新 recovery → `src/test/utils/runRecovery.test.ts` + `referencedMediaRun.test.ts`
+  - Backdrop 组名 → `src/test/utils/backdropLabel.test.ts`
+  - image2 比例/尺寸 → `scripts/image2-model-aspect-size-test.ts`
+  - 下载成品 URL 优先级（imagesGenerations/videosGenerations vs openApi）→ `scripts/download-result-url-ranking-test.ts` + `src/test/utils/generatedOutputUrl.test.ts`
+  - Omni 视频 @资产-only 面板去重 / Details 标签 → `panel-ref-media-simulation-test.ts` §130 + `node-details-simulation-test.ts` §10d
+  - Omni 指令 @主视频（imagePreview=PNG 截帧，900788）→ `src/test/utils/omniMainVideoLabel.test.ts` + `node-details-simulation-test.ts` §11p + `model-media-contract-test.ts`
+  - Omni 视频参考 tab @视频1 Details 角标（990）→ `src/test/utils/referenceVideoDetail.test.ts` + `node-details-simulation-test.ts` §11q + `model-media-contract-test.ts`
+  - **Omni 四 tab 参考/首尾帧串数据或切 tab 丢主图（§5.8.1 已验收）** → `scripts/kling-omni-tab-isolation-test.ts` + `src/test/utils/klingOmniTabPanelIsolation.test.ts`；**禁止**按 tab 拆主图
+  - **image2 切模型主图消失（§5.8.2 已验收）** → `scripts/image2-panel-refs-test.ts` + `scripts/panel-switch-broken-urls-test.ts`
+  - **各模型尾帧/主图/参考被覆盖（§5.8.3 已验收）** → `scripts/frame-model-switch-isolation-test.ts`
+  - **Inspector 中键/Shift 框选重复拖入多槽 / 本地 1 张双槽 / 串行 batch 丢 eids（§5.8.4 已验收）** → `npm run test:2026070802-omni-panel-dedup` + `src/test/utils/omniPanelInspectorDropDedup.test.ts` + `test:panel-dedup-same-element`；**禁止**去掉 `canvas:{nodeId}` 或改回读 React `data` prop
+  - **Seedance @图片n 上传串图（槽 COS + 过期 originals File）** → `scripts/20260709-seedance-ref-images-verify-test.ts` + `referencedMediaRun.test.ts`
+  - **Seedance MOV @主视频 非 @视频1** → `scripts/20260709-seedance-video1-mention-test.ts` + `seedanceMainVideoLabel.test.ts`
+
+## test:gate 步骤（`scripts/test-gate.mjs`，33 步）
+
+1. vitest（含拖入去重、Details 标签 vitest）
+2. test:node-details
+3. test:panel-refs
+4. **test:panel-partial-ref** — 全模型：面板保留未@ + Details 仅 @ + 运行后新拖入可@
+5. **test:panel-main-slot** — 全模型主图格 × prompt
+6. **test:ggggttt-panel** — 未 @主图 画布=图片1
+7. **test:444444-panel** — Seedance 三态
+8. **test:oooopppp-panel** — 链式 OUTPUT hydrate
+9. **test:89908111222-omni-recovery**
+10. **test:batch-run-schedule**
+11. test:model-contract
+12. test:i2v-pipeline
+13. test:first-frame-panel
+14. **test:image2-panel-refs**
+15. **test:778990-cat-church**
+16. **test:image2-aspect-size**
+17. **test:download-task**
+18. **test:download-url-ranking**
+19. **test:panel-refresh-run-all**
+20. **test:banana-panel-clobber**
+21. **test:run-error-no-stuck**
+22. **test:at-mention-label-mismatch**
+23. **test:panel-dedup-same-element**
+24. **test:2026070802-omni-panel-dedup**（§5.8.4）
+25. **test:seedance-panel-slot0**
+26. **test:2026070802-seedance-panel**
+27. **test:2026070802-kling-omni-panel**
+28. **test:kling-omni-tab-isolation**（§5.8.1）
+29. **test:frame-model-switch-isolation**（§5.8.3）
+30. **test:panel-switch-broken-urls**（§5.8.2）
+31. **test:all-models-three-requirements**（§5.9 三诉求总矩阵）
+32. **test:20260709-seedance-ref-images**
+33. **test:20260709-seedance-video1-mention**
+
+**vitest 步**另含：`omniPanelInspectorDropDedup.test.ts`（§5.8.4）、`omniMainVideoLabel.test.ts`、`referenceVideoDetail.test.ts`、`runRecovery.test.ts`、`panelMainSlotPrompt.test.ts`、`referencedMediaRun.test.ts`（上传 File 规则）、`middleButtonMediaDrag` / `canvasMiddleDrag` / `inspectorMediaDrop`（拖拽）。
+
+修改 `utils/batchRunQueue.ts` 时须跑 gate（含 batch-run-schedule 步）。
+
+## 完成标准
+
+1. `npm run test:gate` 全绿（本地与 PR 上 GitHub Actions「Regression gate」须一致）
+2. 涉及 UI：`npm run build`（见 auto-build-and-run 规则）
+3. 向用户汇报时说明 gate 已通过；若某步跳过须写明原因
+
+## 改 @ / 面板 / API 入参时（第二层契约）
+
+`test:model-contract` **已并入 `test:gate`**（`scripts/test-gate.mjs` 的 model-contract 步），改 `promptMediaRefs.ts`、`referencedMediaRun.ts`、`panelRefPersistence.ts` 的 plan/upload/API 逻辑，或 FlowEditor run/spawn 写入 `generationParams` 时，`npm run test:gate` 会自动覆盖跨模型契约。
+
+表驱动覆盖各模型「面板槽 → @ → plan → API → gp → Details → OUTPUT sanitize」。失败则继续修，不得声称完成。
+
+> 新增/修改模型面板行为时，**必须**在 `scripts/model-media-contract-test.ts` 加一条代表用例，否则门禁无法防住回归。
+
+## 发版门禁（用户说「发布 / 发版 / 大版本 / 上线」时 **必须自动执行**）
+
+**触发词示例：** 发布、发版、大版本、上线、release、deploy 到生产……
+
+Agent **不得**在未跑完下列步骤前声称「可以发布」或「发版就绪」：
+
+```bash
+npm run test:gate # 已含 model-contract + §5.9 四大域
+npm run test:project-json-details
+npm run test:delivery-all
+npm run build
+```
+
+1. 按上表**顺序**执行；任一步失败则修复后从失败步重跑，直至全绿。
+2. 向用户汇报时**必须**列出：每步是否通过、关键汇总数字（如 contract 118/118、delivery-all 终检通过数）。
+3. 若用户随后要实际上线，提醒部署清单见 `服务器部署文件清单.md`；**不要**覆盖生产 `.env.local`、`data\`。
+4. 发版前若工作区有未提交改动，提醒用户 commit/tag；**仅**在用户明确要求时才 git commit / push。
+
+日常小改**不要**自动跑 `test:delivery-all`（太重）；只有发版场景或用户明确要求「全量回归」时才跑。
+
+## 改 Chat / 大语言模型时
+
+> 已验收勿改见根目录 `skill.md` **§5.10**（身份/问候关联网、probe 不串历史、身份 tip 按需、四模式）。
+
+修改 `ChatPanel.tsx`、`utils/assistantMessageLayout.ts`、`utils/webSearchProbe.ts`、`server.js` 的 `/aitop-llm-see` 或 Chat 相关代理时：
+
+```bash
+npm run test:chat-gate
+```
+
+`test:chat-gate` **已含**：layout、chat-pipeline、probe（离线）、**llm-chat-identity-contract（§5.10）**、llm-model-contract。
+
+**触碰 §5.10 时额外约束：**
+
+- 禁止问候/身份问仍走联网首轮（须 `effectiveWebSearch` 驱动）
+- 禁止每轮 tip 强制「禁止自称 Claude/GPT…」长约束；身份 tip **仅**身份问注入
+- 禁止 probe 对非检索句拼历史话题
+
+**新增/修改 LLM 注册**（`AI_MODELS`、`normalizeModelId`、`sendByModel`、fallback）时，**除 chat-gate 外必须跑**：
+
+```bash
+npm run test:llm-model-contract
+```
+
+规格见 `docs/LLM-CHAT-RULES-SPEC.md`。新模型须在 `llm-model-registry-contract-test.mjs` 加代表断言。
+
+## 发版门禁（扩展：媒体 + Chat 两套）
+
+媒体规则见上文；**发版时 Chat 还须跑**：
+
+```bash
+npm run test:chat-gate
+npm run test:llm-model-contract
+npm run test:chat-all
+npm run test:llm:four-mode
+npm run test:llm
+```
+
+`test:llm` / `test:llm:four-mode` / `test:llm:probe`（无 `CHAT_GATE_OFFLINE`）需 localhost:3001 + API key；离线发版检查至少 `test:chat-gate`（含 §5.10 identity-contract）全绿。

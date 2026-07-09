@@ -7,6 +7,8 @@ import {
   normalizeKlingOmniElementListForPayload,
   dedupeKlingOmniElementListAgainstImageList,
   mergeKlingOmniElementListDeduped,
+  shouldLogAitopModelPreloadBody,
+  compactAitopPreloadBodyForLog,
 } from '../../../services/aitop';
 
 // Mock fetch globally
@@ -157,6 +159,7 @@ describe('AiTop Service', () => {
             aspectRatio: '1:1',
             image: ['image1.png'],
             imageSize: '2K',
+            generateNum: 1,
           })
         })
       );
@@ -348,6 +351,58 @@ describe('AiTop Service', () => {
       const images = [{ image_url: 'https://x/a.png' }];
       const elements = [{ element_id: 'e1' }];
       expect(dedupeKlingOmniElementListAgainstImageList(images, elements)).toEqual([{ element_id: 'e1' }]);
+    });
+  });
+
+  describe('shouldLogAitopModelPreloadBody', () => {
+    it('logs first batch task only when clientBatchTotal > 1', () => {
+      expect(shouldLogAitopModelPreloadBody({ clientBatchIndex: 1, clientBatchTotal: 3 })).toBe(true);
+      expect(shouldLogAitopModelPreloadBody({ clientBatchIndex: 2, clientBatchTotal: 3 })).toBe(false);
+      expect(shouldLogAitopModelPreloadBody({ prompt: 'x' })).toBe(true);
+    });
+  });
+
+  describe('compactAitopPreloadBodyForLog', () => {
+    it('drops snake_case duplicates when camelCase sibling exists (Omni dual-write)', () => {
+      const imagePayload = [{ image_url: 'https://x/a.png' }];
+      const compact = compactAitopPreloadBodyForLog({
+        modelName: 'KLING_V3_OMNI',
+        model_name: 'KLING_V3_OMNI',
+        generateNum: 1,
+        generate_num: 1,
+        aspectRatio: '16:9',
+        aspect_ratio: '16:9',
+        imageList: imagePayload,
+        image_list: imagePayload,
+        scoreProjectId: '14',
+      }) as Record<string, unknown>;
+      expect(compact).toEqual({
+        modelName: 'KLING_V3_OMNI',
+        generateNum: 1,
+        aspectRatio: '16:9',
+        imageList: imagePayload,
+        scoreProjectId: '14',
+      });
+    });
+
+    it('keeps API-only snake_case fields (image_url, element_id)', () => {
+      expect(
+        compactAitopPreloadBodyForLog({
+          imageList: [{ image_url: 'https://x/a.png', element_id: 'e1' }],
+        })
+      ).toEqual({
+        imageList: [{ image_url: 'https://x/a.png', element_id: 'e1' }],
+      });
+    });
+
+    it('recursively compacts nested objects', () => {
+      expect(
+        compactAitopPreloadBodyForLog({
+          parameters: { aspect_ratio: '16:9', aspectRatio: '16:9', duration: 5 },
+        })
+      ).toEqual({
+        parameters: { aspectRatio: '16:9', duration: 5 },
+      });
     });
   });
 });

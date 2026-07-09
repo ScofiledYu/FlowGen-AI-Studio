@@ -3,6 +3,8 @@
 import type { PointerEvent as ReactPointerEvent } from 'react';
 
 export const FLOWGEN_MEDIA_URL_DROP = 'flowgen:media-url-drop';
+/** 画布节点中键拖放结束（含成功投放与取消），供 FlowEditor 恢复 Shift 框选态 */
+export const FLOWGEN_CANVAS_MIDDLE_DRAG_END = 'flowgen:canvas-middle-drag-end';
 
 export type FlowgenMediaUrlDropZone =
   | 'node-main'
@@ -56,6 +58,21 @@ let active: Active | null = null;
 
 const DRAG_THRESHOLD_PX = 6;
 
+export function isMiddleButtonMediaDragActive(): boolean {
+  return active != null;
+}
+
+/** 资产库中键拖出（asset:… / asset:multi） */
+export function isAssetLibraryMediaDragSource(sourceNodeId: string): boolean {
+  return sourceNodeId === 'asset:multi' || sourceNodeId.startsWith('asset:');
+}
+
+/** 画布节点中键拖出（节点 id 或 canvas:multi） */
+export function isCanvasNodeMediaDragSource(sourceNodeId: string): boolean {
+  if (!sourceNodeId || isAssetLibraryMediaDragSource(sourceNodeId)) return false;
+  return sourceNodeId === 'canvas:multi' || !sourceNodeId.includes(':');
+}
+
 const ALLOWED_DROP_ZONES: FlowgenMediaUrlDropZone[] = [
   'node-main',
   'reference',
@@ -90,23 +107,32 @@ export function resolveMediaDropZoneAtPoint(
   clientY: number
 ): { zone: HTMLElement; dropZone: FlowgenMediaUrlDropZone } | null {
   const stack = document.elementsFromPoint(clientX, clientY);
-  let best: { zone: HTMLElement; dropZone: FlowgenMediaUrlDropZone; rank: number } | null = null;
+  /** 取命中栈最上层元素的投放区，避免并排首/尾帧格因优先级误落首帧 */
   for (const node of stack) {
     if (!(node instanceof Element)) continue;
     const zone = node.closest('[data-flowgen-media-drop]') as HTMLElement | null;
     if (!zone) continue;
     const dropZone = normalizeDropZone(zone.getAttribute('data-flowgen-drop-zone'));
-    const rank = DROP_ZONE_HIT_PRIORITY.indexOf(dropZone);
-    const r = rank >= 0 ? rank : DROP_ZONE_HIT_PRIORITY.length;
-    if (!best || r < best.rank) best = { zone, dropZone, rank: r };
+    return { zone, dropZone };
   }
-  return best ? { zone: best.zone, dropZone: best.dropZone } : null;
+  return null;
+}
+
+function frameZonesConflict(
+  hinted: FlowgenMediaUrlDropZone | undefined,
+  candidate: FlowgenMediaUrlDropZone
+): boolean {
+  if (!hinted) return false;
+  if (hinted === 'first-frame' && candidate === 'last-frame') return true;
+  if (hinted === 'last-frame' && candidate === 'first-frame') return true;
+  return false;
 }
 
 /** 鼠标松手点可能落在边缘 1-6px 外，做近邻容错提升中键拖拽“手感” */
 function resolveMediaDropZoneWithTolerance(
   clientX: number,
-  clientY: number
+  clientY: number,
+  hint?: { dropZone: FlowgenMediaUrlDropZone } | null
 ): { zone: HTMLElement; dropZone: FlowgenMediaUrlDropZone } | null {
   const direct = resolveMediaDropZoneAtPoint(clientX, clientY);
   if (direct) return direct;
@@ -122,9 +148,18 @@ function resolveMediaDropZoneWithTolerance(
   ];
   for (const [dx, dy] of OFFSETS) {
     const hit = resolveMediaDropZoneAtPoint(clientX + dx, clientY + dy);
-    if (hit) return hit;
+    if (!hit) continue;
+    if (frameZonesConflict(hint?.dropZone, hit.dropZone)) continue;
+    return hit;
   }
   return null;
+}
+
+function notifyCanvasMiddleDragEnd(sourceNodeId: string, dropped: boolean) {
+  if (!isCanvasNodeMediaDragSource(sourceNodeId)) return;
+  window.dispatchEvent(
+    new CustomEvent(FLOWGEN_CANVAS_MIDDLE_DRAG_END, { detail: { dropped } })
+  );
 }
 
 function clearActiveDrag() {
@@ -133,6 +168,8 @@ function clearActiveDrag() {
   active = null;
   endListeners();
   releaseCapture(payload);
+  document.body.classList.remove('flowgen-middle-media-drag');
+  notifyCanvasMiddleDragEnd(payload.sourceNodeId, false);
 }
 
 function onWindowBlur() {
@@ -159,10 +196,13 @@ function endListeners() {
 function dispatchDropAt(clientX: number, clientY: number, payload: Active) {
   const dx = clientX - payload.startX;
   const dy = clientY - payload.startY;
-  if (Math.hypot(dx, dy) < DRAG_THRESHOLD_PX) return;
+  const dist = Math.hypot(dx, dy);
+  if (dist < DRAG_THRESHOLD_PX) return;
 
+  const releaseHit = resolveMediaDropZoneAtPoint(clientX, clientY);
   const hit =
-    resolveMediaDropZoneWithTolerance(clientX, clientY) ||
+    releaseHit ||
+    resolveMediaDropZoneWithTolerance(clientX, clientY, payload.lastHit) ||
     payload.lastHit ||
     null;
   if (!hit) return;
@@ -198,6 +238,7 @@ function dispatchDropAt(clientX: number, clientY: number, payload: Active) {
     dropZone,
     assetId: payload.assetId,
     assetName: payload.assetName,
+    assets: payload.assets,
   };
   window.dispatchEvent(new CustomEvent(FLOWGEN_MEDIA_URL_DROP, { detail }));
 }
@@ -208,7 +249,19 @@ function finishDrag(clientX: number, clientY: number) {
   active = null;
   endListeners();
   releaseCapture(payload);
+  document.body.classList.remove('flowgen-middle-media-drag');
+  const dx = clientX - payload.startX;
+  const dy = clientY - payload.startY;
+  const dist = Math.hypot(dx, dy);
+  const releaseHit = resolveMediaDropZoneAtPoint(clientX, clientY);
+  const hit =
+    releaseHit ||
+    resolveMediaDropZoneWithTolerance(clientX, clientY, payload.lastHit) ||
+    payload.lastHit ||
+    null;
+  const dropped = dist >= DRAG_THRESHOLD_PX && hit != null;
   dispatchDropAt(clientX, clientY, payload);
+  notifyCanvasMiddleDragEnd(payload.sourceNodeId, dropped);
 }
 
 function onPointerMove(_e: PointerEvent) {
@@ -216,17 +269,35 @@ function onPointerMove(_e: PointerEvent) {
   active.lastHit = resolveMediaDropZoneWithTolerance(_e.clientX, _e.clientY);
 }
 
+function pointerUpShouldFinish(e: PointerEvent, payload: Active): boolean {
+  if (e.pointerId === payload.pointerId) return true;
+  // mousedown 路径下 pointerId 可能与 pointerup 不一致；鼠标中键仍应完成投放
+  return e.pointerType === 'mouse' || payload.pointerId === 1;
+}
+
 function onPointerUp(e: PointerEvent) {
-  if (!active || e.pointerId !== active.pointerId) return;
+  if (!active) return;
+  const payload = active;
+  if (!pointerUpShouldFinish(e, payload)) return;
   // preventDefault 会抑制 mouseup；中键松开时 pointerup.button 常为 0
   // 左键按下时 onOtherMouseDown 已清除 active，此处 button=0 可安全视为中键结束
   if (e.button === 2) return;
+  payload.lastHit =
+    resolveMediaDropZoneAtPoint(e.clientX, e.clientY) ||
+    resolveMediaDropZoneWithTolerance(e.clientX, e.clientY, payload.lastHit) ||
+    payload.lastHit ||
+    null;
   finishDrag(e.clientX, e.clientY);
 }
 
 /** pointerup 在部分环境 button 为 0；用 mouseup 兜底完成投放 */
 function onMouseUp(e: MouseEvent) {
   if (!active || e.button !== 1) return;
+  active.lastHit =
+    resolveMediaDropZoneAtPoint(e.clientX, e.clientY) ||
+    resolveMediaDropZoneWithTolerance(e.clientX, e.clientY, active.lastHit) ||
+    active.lastHit ||
+    null;
   finishDrag(e.clientX, e.clientY);
 }
 
@@ -287,6 +358,7 @@ export function startMiddleButtonMediaDrag(
     assets: p.assets?.length ? p.assets : undefined,
     lastHit: null,
   };
+  document.body.classList.add('flowgen-middle-media-drag');
   window.addEventListener('pointermove', onPointerMove);
   window.addEventListener('pointerup', onPointerUp, true);
   window.addEventListener('pointercancel', onPointerUp, true);

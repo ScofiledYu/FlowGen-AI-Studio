@@ -1,6 +1,13 @@
 import type { Edge, Node as RFNode } from 'reactflow';
+import type { GenerationParams, NodeData } from '../types';
 import { NodeType } from '../types';
+import {
+  enrichPanelSourceFromGenerationSnapshot,
+  resolveNodeSelectionPreviewUrl,
+} from './nodeDetailsPreview';
 import { isEphemeralMediaUrl, isPersistableMediaUrl } from './workspaceMediaPersist';
+import { isDuplicateOfMainImagePreview } from './promptMediaRefs';
+import { runNodeShouldHydratePreviewFromGpRefs } from './referencedMediaRun';
 
 const FLOWGEN_NODE_MEDIA_FILE_RE =
   /\/flowgen-api\/projects\/[^/]+\/node-media\/[^/]+\/file$/i;
@@ -36,6 +43,76 @@ export function isLikelyVideoMediaUrl(
     if (/\.(mov|mp4|webm|avi|mkv|m4v)(\?|$)/i.test(name)) return true;
   }
   return false;
+}
+
+function normalizePreviewUrlKey(url: string): string {
+  const u = url.trim().split('?')[0].split('#')[0].replace(/\/+$/, '').toLowerCase();
+  const m = u.match(/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i);
+  return m ? m[0].toLowerCase() : u;
+}
+
+/** 生图 OUTPUT 在 modelConfigs 里保留的生成结果预览（image2 / Nano 运行快照） */
+export function getModelConfigOutputPreviewUrl(data: Record<string, unknown>): string | undefined {
+  const mc = data.modelConfigs;
+  if (!mc || typeof mc !== 'object') return undefined;
+  for (const cfg of Object.values(mc as Record<string, unknown>)) {
+    if (!cfg || typeof cfg !== 'object') continue;
+    const p = (cfg as { imagePreview?: unknown }).imagePreview;
+    if (typeof p !== 'string') continue;
+    const s = p.trim();
+    if (!s || isEphemeralMediaUrl(s, 'imagePreview') || !isPersistableMediaUrl(s)) continue;
+    if (isVideoPreviewUrl(s)) continue;
+    return s;
+  }
+  return undefined;
+}
+
+function collectPanelReferenceImageUrls(data: Record<string, unknown>, bucket: string[]): void {
+  collectReferenceImageUrls(data, bucket);
+}
+
+/** OUTPUT 主预览误为参考槽图（如 seedance 图片3），而 modelConfigs 仍有生图结果 */
+export function outputImagePreviewLooksLikePanelRefMismatch(
+  data: Record<string, unknown>
+): boolean {
+  const preview = String(data.imagePreview || '').trim();
+  const gen = getModelConfigOutputPreviewUrl(data);
+  if (!preview || !gen || preview === gen) return false;
+  if (normalizePreviewUrlKey(preview) === normalizePreviewUrlKey(gen)) return false;
+  const refs: string[] = [];
+  collectPanelReferenceImageUrls(data, refs);
+  const pk = normalizePreviewUrlKey(preview);
+  return refs.some((r) => r && normalizePreviewUrlKey(r) === pk);
+}
+
+function pushModelConfigOutputPreview(data: Record<string, unknown>, bucket: string[]): void {
+  const gen = getModelConfigOutputPreviewUrl(data);
+  if (gen) bucket.unshift(gen);
+}
+
+function pickUpstreamImageThumbForOutput(
+  nodeId: string,
+  nodes: RFNode[],
+  edges: Edge[]
+): string | undefined {
+  const byId = new Map(nodes.map((n) => [n.id, n]));
+  const inEdge = edges.find((e) => e.target === nodeId);
+  if (!inEdge) return undefined;
+  const src = byId.get(inEdge.source);
+  if (!src?.data) return undefined;
+  const thumbs = src.data.generatedThumbnails || [];
+  const linked = thumbs.find(
+    (t) =>
+      t?.type === 'image' &&
+      t.url &&
+      (t.nodeId === nodeId || t.id === nodeId) &&
+      isPersistableMediaUrl(String(t.url))
+  );
+  if (linked?.url) return String(linked.url).trim();
+  const lastImage = [...thumbs]
+    .reverse()
+    .find((t) => t?.type === 'image' && t?.url && isPersistableMediaUrl(String(t.url)));
+  return lastImage?.url ? String(lastImage.url).trim() : undefined;
 }
 
 function collectReferenceImageUrls(data: Record<string, unknown>, bucket: string[]): void {
@@ -80,12 +157,21 @@ export function pickPersistableMainPreviewUrl(
   nodeType?: string
 ): string | undefined {
   const preferVideo = nodeType === NodeType.MOV;
+  const isOutputPicture = nodeType === NodeType.OUTPUT;
+  const isRunNode = nodeType === NodeType.INPUT || nodeType === NodeType.PROCESSOR;
   const candidates: string[] = [];
+
+  if (!isRunNode) {
+    pushModelConfigOutputPreview(data, candidates);
+  }
 
   for (const k of NODE_FRAME_URL_KEYS) {
     pushPersistableUrl(candidates, data[k], k);
   }
-  collectReferenceImageUrls(data, candidates);
+  /** OUTPUT/MOV 的 referenceImages 是面板参考槽，不是生成结果，勿当作主预览 */
+  if (!isOutputPicture && nodeType !== NodeType.MOV && !isRunNode) {
+    collectPanelReferenceImageUrls(data, candidates);
+  }
 
   const gp = data.generationParams;
   if (gp && typeof gp === 'object') {
@@ -93,13 +179,15 @@ export function pickPersistableMainPreviewUrl(
     for (const k of NODE_FRAME_URL_KEYS) {
       pushPersistableUrl(candidates, g[k], k);
     }
-    for (const k of GP_EXTRA_URL_KEYS) {
-      pushPersistableUrl(candidates, g[k], k);
+    if (!isRunNode) {
+      for (const k of GP_EXTRA_URL_KEYS) {
+        pushPersistableUrl(candidates, g[k], k);
+      }
     }
   }
 
   const thumbs = data.generatedThumbnails;
-  if (Array.isArray(thumbs)) {
+  if (Array.isArray(thumbs) && !isRunNode) {
     for (let i = thumbs.length - 1; i >= 0; i--) {
       const row = thumbs[i];
       if (!row || typeof row !== 'object') continue;
@@ -129,13 +217,80 @@ export function pickPersistableMainPreviewUrl(
 }
 
 export function hydrateNodeImagePreviewFromPersisted<
-  N extends { type?: string; data?: Record<string, unknown> },
->(node: N): N {
+  N extends { id?: string; type?: string; data?: Record<string, unknown> },
+>(node: N, graph?: { nodes: RFNode[]; edges: Edge[] }): N {
   if (!node?.data || typeof node.data !== 'object') return node;
   if (node.type === NodeType.CHAIN_FOLDER || node.type === NodeType.BACKDROP) return node;
 
+  if (node.type === NodeType.OUTPUT && outputImagePreviewLooksLikePanelRefMismatch(node.data)) {
+    const gen = getModelConfigOutputPreviewUrl(node.data);
+    if (gen) {
+      return { ...node, data: { ...node.data, imagePreview: gen } };
+    }
+  }
+
   const preview = node.data.imagePreview;
   const previewStr = typeof preview === 'string' ? preview.trim() : '';
+  const isRunNode = node.type === NodeType.INPUT || node.type === NodeType.PROCESSOR;
+  const gp = node.data.generationParams as Partial<GenerationParams> | undefined;
+  const gpOut = String(gp?.outputUrl || '').trim();
+  const hasLocalMainRef = Boolean(
+    String((node.data as { imageLocalRef?: string }).imageLocalRef || '').trim()
+  );
+
+  /** INPUT/PROCESSOR：生成结果仅进 generatedThumbnails，勿用 outputUrl 覆盖画布主预览 */
+  if (
+    isRunNode &&
+    (!previewStr || isEphemeralMediaUrl(previewStr, 'imagePreview'))
+  ) {
+    const nodeData = node.data as Partial<NodeData>;
+    const useGpRefs = runNodeShouldHydratePreviewFromGpRefs(nodeData);
+    if (useGpRefs || !hasLocalMainRef) {
+      const enriched = enrichPanelSourceFromGenerationSnapshot(nodeData, gp);
+      const fromSelection = resolveNodeSelectionPreviewUrl(enriched);
+      if (fromSelection && isPersistableMediaUrl(fromSelection)) {
+        return { ...node, data: { ...node.data, imagePreview: fromSelection } };
+      }
+      const firstSnapRef = Array.isArray(gp?.referenceImages)
+        ? gp!.referenceImages!.map((u) => String(u || '').trim()).find(
+            (u) => u && isPersistableMediaUrl(u)
+          )
+        : undefined;
+      if (firstSnapRef) {
+        return { ...node, data: { ...node.data, imagePreview: firstSnapRef } };
+      }
+    }
+  }
+
+  // 如果当前 imagePreview 是 gp.referenceImages 中的 @参考图 signed URL，
+  // 且节点有 imageLocalRef（主图本地备份），则重置为 ''，让后续 hydrateLocalMediaPreviews 从 IDB 恢复主图
+  if (isRunNode && hasLocalMainRef && !runNodeShouldHydratePreviewFromGpRefs(node.data as Partial<NodeData>)) {
+    const current = String((node.data as { imagePreview?: string }).imagePreview || '').trim();
+    const panelRefs = ((node.data as { referenceImages?: string[] }).referenceImages || [])
+      .map((u) => String(u || '').trim())
+      .filter(Boolean);
+    const gpRefs = Array.isArray(gp?.referenceImages)
+      ? gp!.referenceImages!.map((u) => String(u || '').trim()).filter(Boolean)
+      : [];
+    const ref0 = String(panelRefs[0] || gpRefs[0] || '').trim();
+    if (
+      !current ||
+      gpRefs.some((r) => isDuplicateOfMainImagePreview(current, r)) ||
+      (ref0 && current === ref0)
+    ) {
+      return { ...node, data: { ...node.data, imagePreview: '' } };
+    }
+  }
+
+  if (
+    !isRunNode &&
+    gpOut &&
+    isPersistableMediaUrl(gpOut) &&
+    (!previewStr || isEphemeralMediaUrl(previewStr, 'imagePreview'))
+  ) {
+    return { ...node, data: { ...node.data, imagePreview: gpOut } };
+  }
+
   const previewOk =
     previewStr && !isEphemeralMediaUrl(previewStr, 'imagePreview');
   const previewIsVideoOnNonMov =
@@ -147,16 +302,26 @@ export function hydrateNodeImagePreviewFromPersisted<
     return node;
   }
 
-  const picked = pickPersistableMainPreviewUrl(node.data, node.type);
+  let picked = pickPersistableMainPreviewUrl(node.data, node.type);
+  if (
+    !picked &&
+    node.type === NodeType.OUTPUT &&
+    node.id &&
+    graph?.nodes?.length &&
+    graph.edges
+  ) {
+    picked = pickUpstreamImageThumbForOutput(node.id, graph.nodes, graph.edges);
+  }
   if (!picked) return node;
 
   return { ...node, data: { ...node.data, imagePreview: picked } };
 }
 
 export function hydrateNodesImagePreviewFromPersisted<
-  N extends { type?: string; data?: Record<string, unknown> },
->(nodes: N[]): N[] {
-  return nodes.map(hydrateNodeImagePreviewFromPersisted);
+  N extends { id?: string; type?: string; data?: Record<string, unknown> },
+>(nodes: N[], edges: Edge[] = []): N[] {
+  const graph = { nodes: nodes as unknown as RFNode[], edges };
+  return nodes.map((n) => hydrateNodeImagePreviewFromPersisted(n, graph));
 }
 
 /** 刷新后 videoPosterDataUrl（data:）已剥离时，用参考图 https 充当视频封面，避免黑屏直到截帧/播放 */
@@ -235,7 +400,7 @@ export function hydrateMovNodesFromUpstream(nodes: RFNode[], edges: Edge[]): RFN
 
 export function hydrateGraphMediaFromPersisted(nodes: RFNode[], edges: Edge[]): RFNode[] {
   return hydrateMovNodesFromUpstream(
-    nodes.map((n) => hydrateNodeImagePreviewFromPersisted(n)),
+    hydrateNodesImagePreviewFromPersisted(nodes, edges) as RFNode[],
     edges
   );
 }

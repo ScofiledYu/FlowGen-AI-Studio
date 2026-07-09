@@ -15,7 +15,36 @@ export function mysqlConfigFromEnv() {
     waitForConnections: true,
   connectionLimit: Number(process.env.MYSQL_POOL_SIZE || 50),
     charset: 'utf8mb4',
+    enableKeepAlive: true,
+    keepAliveInitialDelay: 0,
   };
+}
+
+export function isMysqlPacketTooLarge(err) {
+  return err?.code === 'ER_NET_PACKET_TOO_LARGE' || err?.errno === 1153;
+}
+
+export function isMysqlConnectionError(err) {
+  const msg = String(err?.message || err || '');
+  return (
+    err?.code === 'PROTOCOL_CONNECTION_LOST' ||
+    err?.code === 'ECONNRESET' ||
+    err?.code === 'ECONNABORTED' ||
+    msg.includes('closed state') ||
+    msg.includes('Connection lost') ||
+    msg.includes('Pool is closed')
+  );
+}
+
+export async function resetPool() {
+  if (!pool) return;
+  const old = pool;
+  pool = undefined;
+  try {
+    await old.end();
+  } catch {
+    /* ignore */
+  }
 }
 
 export function isMysqlConfigured() {
@@ -27,7 +56,11 @@ export function getPool() {
     throw new Error('MySQL not configured: set MYSQL_PASSWORD in environment');
   }
   if (!pool) {
-    pool = mysql.createPool(mysqlConfigFromEnv());
+    const p = mysql.createPool(mysqlConfigFromEnv());
+    p.on('connection', (conn) => {
+      conn.query('SET SESSION max_allowed_packet = 67108864', () => {});
+    });
+    pool = p;
   }
   return pool;
 }

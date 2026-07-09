@@ -1,4 +1,5 @@
 import { remoteMediaUrlPreferSameOriginProxy } from '../utils/remoteMediaFetch';
+import { IMAGE2_MAX_API_IMAGES, AITOP_PLATFORM_IMAGE_2 } from '../utils/image2Model';
 import { AITOP_PLATFORM_NANO_BANANA_2 } from '../types';
 import {
   getAitopBillingContext,
@@ -41,11 +42,11 @@ function withScoreProjectId(payload: object): object {
   return payload;
 }
 
-/** 生产与开发均默认输出 preload JSON；控制台可执行 `window.__FLOWGEN_DEBUG_PRELOAD__ = false` 关闭 */
+/** 默认关闭；控制台执行 `window.__FLOWGEN_DEBUG_PRELOAD__ = true` 开启 preload JSON 日志 */
 export function isPreloadDebugEnabled(): boolean {
   if (typeof window === 'undefined') return false;
   const w = window as Window & { __FLOWGEN_DEBUG_PRELOAD__?: boolean };
-  return w.__FLOWGEN_DEBUG_PRELOAD__ !== false;
+  return w.__FLOWGEN_DEBUG_PRELOAD__ === true;
 }
 
 /** 控制台打印 JSON preload（每次发往 AITOP 只打一条，含 domainAccount / scoreProjectId） */
@@ -69,6 +70,16 @@ function headersForLog(headers: Record<string, string>): Record<string, string> 
   return h;
 }
 
+/** 并行多任务时仅首条 clientBatchIndex 打印完整 preload（body 含 clientBatchTotal） */
+export function shouldLogAitopModelPreloadBody(body: unknown): boolean {
+  if (!body || typeof body !== 'object') return true;
+  const b = body as Record<string, unknown>;
+  const total = typeof b.clientBatchTotal === 'number' ? b.clientBatchTotal : undefined;
+  const idx = typeof b.clientBatchIndex === 'number' ? b.clientBatchIndex : undefined;
+  if (total != null && total > 1 && idx != null && idx > 1) return false;
+  return true;
+}
+
 /** 仅模型创建任务（生图/生视频等）打印一条 preload；上传、轮询等辅助请求不打 */
 function logAitopModelRequest(spec: {
   model: string;
@@ -89,6 +100,7 @@ function logAitopOutgoingRequest(spec: {
   query?: Record<string, string>;
 }) {
   if (!isPreloadDebugEnabled()) return;
+  if (spec.body !== undefined && !shouldLogAitopModelPreloadBody(spec.body)) return;
   logPreloadJson({
     debugType: 'preload',
     model: spec.model,
@@ -97,29 +109,32 @@ function logAitopOutgoingRequest(spec: {
     ...billingFieldsForLog(),
     headers: headersForLog(spec.headers),
     ...(spec.query && Object.keys(spec.query).length ? { query: spec.query } : {}),
-    ...(spec.body !== undefined ? { body: spec.body } : {}),
+    ...(spec.body !== undefined ? { body: compactAitopPreloadBodyForLog(spec.body) } : {}),
   });
 }
 
-function toCompactKlingOmniLogBody(body: Record<string, unknown>): Record<string, unknown> {
-  const compact: Record<string, unknown> = {};
-  // 仅保留一套可读字段用于日志展示；真实请求仍保留双写兼容
-  const keepKeys = [
-    'modelName',
-    'generateNum',
-    'mode',
-    'aspectRatio',
-    'duration',
-    'prompt',
-    'negativePrompt',
-    'imageList',
-    'elementList',
-    'videoList',
-  ];
-  for (const k of keepKeys) {
-    if (k in body) compact[k] = body[k];
+/** snake_case → camelCase（仅用于识别 AiTop 双写冗余键） */
+function snakeCaseKeyToCamelCase(key: string): string {
+  return key.replace(/_([a-z0-9])/g, (_, c: string) => c.toUpperCase());
+}
+
+/**
+ * preload 日志去重：同层已有 camelCase 时省略 snake_case 副本。
+ * 真实 HTTP 请求体仍双写；仅控制台 JSON 更干净。
+ */
+export function compactAitopPreloadBodyForLog(body: unknown): unknown {
+  if (body === null || typeof body !== 'object') return body;
+  if (Array.isArray(body)) return body.map(compactAitopPreloadBodyForLog);
+  const src = body as Record<string, unknown>;
+  const out: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(src)) {
+    if (key.includes('_')) {
+      const camel = snakeCaseKeyToCamelCase(key);
+      if (camel !== key && camel in src) continue;
+    }
+    out[key] = compactAitopPreloadBodyForLog(value);
   }
-  return compact;
+  return out;
 }
 
 // Helper to convert URL/Base64 to Blob for Upload
@@ -339,6 +354,10 @@ interface NanoTaskOptions {
   aspectRatio?: string;
   /** 仅 NANO_BANANA_2_FLASH：1K / 2K / 4K */
   imageSize?: '1K' | '2K' | '4K';
+  /** 客户端批量：第几个任务（1-based） */
+  clientBatchIndex?: number;
+  /** 客户端批量：总任务数（面板 numberOfImages） */
+  clientBatchTotal?: number;
 }
 
 /**
@@ -358,7 +377,11 @@ export async function createNanoTask(prompt: string, imageUrls: string[] = [], o
     if (sz === '1K' || sz === '2K' || sz === '4K') {
       payload.imageSize = sz;
     }
-
+    payload.generateNum = 1;
+    if (options.clientBatchTotal != null && options.clientBatchTotal > 1) {
+      payload.clientBatchIndex = options.clientBatchIndex ?? 1;
+      payload.clientBatchTotal = options.clientBatchTotal;
+    }
 
     const nanoUrl = `${BASE_URL}/api/v1/images/nanoBanana`;
     const nanoHeaders = aitopJsonHeaders();
@@ -437,15 +460,23 @@ export interface Image2TaskOptions {
   aspectRatio?: string;
   imageSize?: string;
   style?: 'vivid' | 'natural';
+  quality?: '1K' | '2K' | '4K';
+  qualityLevel?: 'low' | 'medium' | 'high';
+  /** 客户端批量：第几个任务（1-based） */
+  clientBatchIndex?: number;
+  /** 客户端批量：总任务数（面板 numberOfImages） */
+  clientBatchTotal?: number;
 }
 
 /**
  * image 2 图生任务（POST /api/v1/images/openAI）
  * 协议字段：
- * - platform: OPEN_AI_GPT_IMAGE_2
+ * - platform: OPEN_AI_GPT_IMAGE_2_QUALITY
  * - prompt: string
- * - size: 1024x1024 | 1536x1024 | 1024x1536 | 2048x2048 | 2048x1152 | 3840x2160 | 2160x3840 | auto
- * - image: string[] (最多 3 张，主图+参考图合计)
+ * - size: 各档位像素尺寸 | auto
+ * - quality: 1K | 2K | 4K
+ * - qualityLevel: low | medium | high
+ * - image: string[] (最多 4 张)
  * - style: vivid | natural
  */
 export async function createImage2Task(
@@ -455,14 +486,22 @@ export async function createImage2Task(
 ): Promise<string | null> {
   try {
     const payload: Record<string, unknown> = {
-      platform: 'OPEN_AI_GPT_IMAGE_2',
+      platform: AITOP_PLATFORM_IMAGE_2,
       prompt,
       size: options.imageSize || '1024x1024',
       style: options.style === 'natural' ? 'natural' : 'vivid',
+      quality: options.quality || '1K',
+      qualityLevel: options.qualityLevel || 'medium',
     };
+    const ar = String(options.aspectRatio || '').trim();
+    if (ar) payload.aspectRatio = ar;
     if (imageUrls.length > 0) {
-      // 与 image 2 面板规则保持一致：最多提交 3 张
-      payload.image = imageUrls.slice(0, 3);
+      payload.image = imageUrls.slice(0, IMAGE2_MAX_API_IMAGES);
+    }
+    payload.generateNum = 1;
+    if (options.clientBatchTotal != null && options.clientBatchTotal > 1) {
+      payload.clientBatchIndex = options.clientBatchIndex ?? 1;
+      payload.clientBatchTotal = options.clientBatchTotal;
     }
 
     const endpoint = '/api/v1/images/openAI';
@@ -643,6 +682,9 @@ interface KlingOmniVideoTaskOptions {
    * 用于验证 AiTop/可灵对「无 type」多图参考的解析；首尾帧等其它模式勿开。
    */
   omniMultiReferenceNoType?: boolean;
+  generateNum?: number;
+  clientBatchIndex?: number;
+  clientBatchTotal?: number;
 }
 
 /** 选项在 TS 侧用 camelCase；发往 AiTop/可灵 Omni 的请求体须与官方一致用 snake_case，否则 Java 反序列化得到 null 再 .trim() 会 NPE */
@@ -1137,8 +1179,8 @@ export async function createKlingOmniVideoTask(options: KlingOmniVideoTaskOption
     const omniBody: Record<string, unknown> = {
       modelName: modelName,
       model_name: modelName,
-      generateNum: 1,
-      generate_num: 1,
+      generateNum: options.generateNum ?? 1,
+      generate_num: options.generateNum ?? 1,
       mode,
       aspectRatio: aspectRatio,
       aspect_ratio: aspectRatio,
@@ -1160,6 +1202,10 @@ export async function createKlingOmniVideoTask(options: KlingOmniVideoTaskOption
     if (videoPayload) {
       omniBody.videoList = videoPayload;
       omniBody.video_list = videoPayload;
+    }
+    if (options.clientBatchTotal != null && options.clientBatchTotal > 1) {
+      omniBody.clientBatchIndex = options.clientBatchIndex ?? 1;
+      omniBody.clientBatchTotal = options.clientBatchTotal;
     }
 
     const omniBodyJson = JSON.stringify(withScoreProjectId(omniBody), klingOmniJsonReplacer);
@@ -1382,6 +1428,9 @@ export interface DoubaoSeedanceVideoTaskOptions {
   referenceVideos?: string[];
   /** Seedance 2.0 参考生视频：参考图片 URL（先上传） */
   referenceImages?: string[];
+  generateNum?: number;
+  clientBatchIndex?: number;
+  clientBatchTotal?: number;
 }
 
 /**
@@ -1404,6 +1453,9 @@ export async function createDoubaoSeedanceVideoTask(options: DoubaoSeedanceVideo
     referenceAudios,
     referenceVideos,
     referenceImages,
+    generateNum = 1,
+    clientBatchIndex,
+    clientBatchTotal,
   } = options;
   const modelLabel = model === 'DOUBAO_SEEDANCE_1_5_PRO' ? 'Seedance 1.5 Pro' : 'Seedance 2.0';
 
@@ -1422,7 +1474,7 @@ export async function createDoubaoSeedanceVideoTask(options: DoubaoSeedanceVideo
 
   const payload: Record<string, unknown> = {
     model,
-    generateNum: 1,
+    generateNum,
     prompt: prompt || '镜头缓缓推进，人物自然走动',
     parameters: {
       resolution,
@@ -1441,6 +1493,10 @@ export async function createDoubaoSeedanceVideoTask(options: DoubaoSeedanceVideo
   if (referenceAudios && referenceAudios.length > 0) payload.referenceAudios = referenceAudios;
   if (referenceVideos && referenceVideos.length > 0) payload.referenceVideos = referenceVideos;
   if (referenceImages && referenceImages.length > 0) payload.referenceImages = referenceImages;
+  if (clientBatchTotal != null && clientBatchTotal > 1) {
+    payload.clientBatchIndex = clientBatchIndex ?? 1;
+    payload.clientBatchTotal = clientBatchTotal;
+  }
 
   const endpoint = '/api/v1/video/doubao';
   const fullUrl = `${BASE_URL}${endpoint}`;

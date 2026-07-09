@@ -1,0 +1,265 @@
+{
+  "nodes": [
+    {
+      "id": "node_0_1782819006070",
+      "type": "processorNode",
+      "position": {
+        "x": 8738.064665937096,
+        "y": 17486.969868759497
+      },
+      "data": {
+        "label": "Input Picture Node",
+        "imagePreview": "https://aitop100app-1251510006.cos.ap-shanghai.myqcloud.com/imagesGenerations/b9164bbb-2b0f-4a19-a532-b6c493858117.png",
+        "imageLocalRef": "flowgen-local:a69d57e4-7ac9-4e78-8757-e5996cab184e_14:node_0_1782819006070:main",
+        "selectedModel": "image 2",
+        "imageName": "storme22k-fennec-fox-9846388_1920.jpg",
+        "modelConfigs": {
+          "Nano Banana 2.0": {},
+          "image2": {
+            "prompt": "@图片1参考@图片3风格",
+            "negativePrompt": "",
+            "referenceImages": [
+              "https://aitop100app-1251510006.cos.ap-shanghai.myqcloud.com/openApi/212508/a79e4d5c-61dc-4003-830c-c1023b3486aa.png",
+              "",
+              "https://aitop100app-1251510006.cos.ap-shanghai.myqcloud.com/openApi/212508/e6b0f01a-e56a-4a27-a56c-771031174f4a.png"
+            ],
+            "referenceImageLabels": [
+              "图片1",
+              "",
+              "图片3"
+            ],
+            "numberOfImages": "1张",
+            "image2Style": "vivid",
+            "image2AspectRatio": "1:1",
+            "image2ImageSize": "1024x1024",
+            "imagePreview": "https://aitop100app-1251510006.cos.ap-shanghai.myqcloud.com/imagesGenerations/b9164bbb-2b0f-4a19-a532-b6c493858117.png",
+            "panelMainSlotVisible": false
+          }
+        },
+        "prompt": "@图片1参考@图片3风格",
+        "negativePrompt": "",
+        "numberOfImages": "1张",
+        "referenceImages": [
+          "https://aitop100app-1251510006.cos.ap-shanghai.myqcloud.com/openApi/212508/a79e4d5c-61dc-4003-830c-c1023b3486aa.png",
+          "https://aitop100app-1251510006.cos.ap-shanghai.myqcloud.com/openApi/212508/e6b0f01a-e56a-4a27-a56c-771031174f4a.png"
+        ],
+        "referenceImageLabels": [
+          "图片1",
+          "图片3"
+        ],
+        "panelMainSlotVisible": false,
+        "image2AspectRatio": "1:1",
+        "image2ImageSize": "1024x1024",
+        "image2Style": "vivid",
+        "status": "completed",
+        "progress": 100,
+        "panelMainImageUrl": "blob:http://localhost:3001/d4ae531f-6775-402f-be34-e02ac6627c96",
+        "taskId": "1459368",
+        "generationParams": {
+          "taskId": "1459368",
+          "generatedAt": "2026-06-30T11:33:11.677Z",
+          "prompt": "@图片1参考@图片3风格",
+          "negativePrompt": "",
+          "numberOfImages": "1张",
+          "referenceImages": [
+            "https://aitop100app-1251510006.cos.ap-shanghai.myqcloud.com/openApi/212508/a79e4d5c-61dc-4003-830c-c1023b3486aa.png",
+            "https://aitop100app-1251510006.cos.ap-shanghai.myqcloud.com/openApi/212508/e6b0f01a-e56a-4a27-a56c-771031174f4a.png"
+          ],
+          "model": "image 2",
+          "image2AspectRatio": "1:1",
+          "image2ImageSize": "1024x1024",
+          "image2Style": "vivid",
+          "referenceImageLabels": [
+            "图片1",
+            "",
+            "图片3"
+          ],
+          "aspectRatio": "1:1",
+          "resolution": "1024x1024",
+          "outputUrl": "https://aitop100app-1251510006.cos.ap-shanghai.myqcloud.com/imagesGenerations/b9164bbb-2b0f-4a19-a532-b6c493858117.png"
+        },
+        "generatedAt": "2026-06-30T11:33:11.677Z",
+        "generatedThumbnails": [
+          {
+            "id": "node_3_1782819191308",
+            "url": "https://aitop100app-1251510006.cos.ap-shanghai.myqcloud.com/imagesGenerations/b9164bbb-2b0f-4a19-a532-b6c493858117.png",
+            "type": "image",
+            "nodeId": "node_3_1782819191308",
+            "name": "Generated_98.png",
+            "generationParams": {
+              "generatedAt": "2026-06-30T11:33:11.303Z",
+              "taskId": "1459368",
+              "prompt": "@图片1参考@图片3风格",
+              "negativePrompt": "",
+              "numberOfImages": "1张",
+              "referenceImages": [
+                "https://aitop100app-1251510006.cos.ap-shanghai.myqcloud.com/openApi/212508/a79e4d5c-61dc-4003-830c-c1023b3486aa.png",
+                "https://aitop100app-1251510006.cos.ap-shanghai.myqcloud.com/openApi/212508/e6b0f01a-e56a-4a27-a56c-771031174f4a.png"
+              ],
+              "model": "image 2",
+              "image2AspectRatio": "1:1",
+              "image2ImageSize": "1024x1024",
+              "image2Style": "vivid",
+              "referenceImageLabels": [
+                "图片1",
+                "",
+                "图片3"
+              ],
+              "aspectRatio": "1:1",
+              "resolution": "1024x1024",
+              "outputUrl": "https://aitop100app-1251510006.cos.ap-shanghai.myqcloud.com/imagesGenerations/b9164bbb-2b0f-4a19-a532-b6c493858117.png"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "id": "node_1_1782819039725",
+      "type": "processorNode",
+      "position": {
+        "x": 8730.589034858904,
+        "y": 17100.836368414813
+      },
+      "data": {
+        "label": "Input Picture Node",
+        "imagePreview": "blob:http://localhost:3001/918d3303-117c-44fe-ab5e-f953460c54d6",
+        "imageLocalRef": "flowgen-local:a69d57e4-7ac9-4e78-8757-e5996cab184e_14:node_1_1782819039725:main",
+        "selectedModel": "Nano Banana 2.0",
+        "imageName": "HEBeAJbaMAA-D7z.jpg",
+        "referenceImages": [
+          "https://aitop100app-1251510006.cos.ap-shanghai.myqcloud.com/openApi/212508/6fa5d78c-26df-4a3f-acc2-7da774d20717.png",
+          "",
+          "https://aitop100app-1251510006.cos.ap-shanghai.myqcloud.com/openApi/212508/1804446e-af2e-4228-86a4-ce1b90da02bc.png"
+        ],
+        "referenceImageLabels": [
+          "图片1",
+          "",
+          "图片3"
+        ],
+        "prompt": "@图片1参考生成@图片3",
+        "status": "completed",
+        "progress": 100,
+        "panelMainSlotVisible": false,
+        "panelMainImageUrl": "blob:http://localhost:3001/bd324a33-661d-475f-8deb-feebaca413e0",
+        "taskId": "1459357",
+        "generationParams": {
+          "taskId": "1459357",
+          "generatedAt": "2026-06-30T11:37:06.806Z",
+          "model": "Nano Banana 2.0",
+          "prompt": "@图片1参考生成@图片3"
+        },
+        "generatedAt": "2026-06-30T11:37:06.806Z",
+        "generatedThumbnails": [
+          {
+            "id": "node_5_1782819426806",
+            "url": "https://aitop100app-1251510006.cos.ap-shanghai.myqcloud.com/imagesGenerations/b810a3f7-bfc8-41ac-ba47-98bc5dc8a2f2.png",
+            "type": "image",
+            "nodeId": "node_5_1782819426806",
+            "name": "Generated_236.png",
+            "generationParams": {
+              "taskId": "1459357",
+              "generatedAt": "2026-06-30T11:37:06.806Z",
+              "model": "Nano Banana 2.0",
+              "prompt": "@图片1参考生成@图片3"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "id": "node_3_1782819191308",
+      "type": "outputNode",
+      "position": {
+        "x": 9112.556142892956,
+        "y": 17596.689846479756
+      },
+      "data": {
+        "numberOfImages": "1张",
+        "image2Style": "vivid",
+        "image2AspectRatio": "1:1",
+        "image2ImageSize": "1024x1024",
+        "status": "idle",
+        "progress": 0,
+        "generationParams": {
+          "generatedAt": "2026-06-30T11:33:11.303Z",
+          "taskId": "1459368",
+          "prompt": "@图片1参考@图片3风格",
+          "negativePrompt": "",
+          "numberOfImages": "1张",
+          "referenceImages": [
+            "https://aitop100app-1251510006.cos.ap-shanghai.myqcloud.com/openApi/212508/a79e4d5c-61dc-4003-830c-c1023b3486aa.png",
+            "https://aitop100app-1251510006.cos.ap-shanghai.myqcloud.com/openApi/212508/e6b0f01a-e56a-4a27-a56c-771031174f4a.png"
+          ],
+          "model": "image 2",
+          "image2AspectRatio": "1:1",
+          "image2ImageSize": "1024x1024",
+          "image2Style": "vivid",
+          "referenceImageLabels": [
+            "图片1",
+            "",
+            "图片3"
+          ],
+          "aspectRatio": "1:1",
+          "resolution": "1024x1024",
+          "outputUrl": "https://aitop100app-1251510006.cos.ap-shanghai.myqcloud.com/imagesGenerations/b9164bbb-2b0f-4a19-a532-b6c493858117.png"
+        },
+        "label": "Output Picture Node",
+        "imagePreview": "https://aitop100app-1251510006.cos.ap-shanghai.myqcloud.com/imagesGenerations/b9164bbb-2b0f-4a19-a532-b6c493858117.png",
+        "selectedModel": "image 2",
+        "generatedAt": "2026-06-30T11:33:11.303Z",
+        "imageName": "Generated_98.png",
+        "taskId": "1459368",
+        "aspectRatio": "1:1",
+        "resolution": "1024x1024"
+      }
+    },
+    {
+      "id": "node_5_1782819426806",
+      "type": "outputNode",
+      "position": {
+        "x": 9170.724742397015,
+        "y": 17310.794273138556
+      },
+      "data": {
+        "label": "Output Picture Node",
+        "imagePreview": "https://aitop100app-1251510006.cos.ap-shanghai.myqcloud.com/imagesGenerations/b810a3f7-bfc8-41ac-ba47-98bc5dc8a2f2.png",
+        "imageName": "Generated_236.png",
+        "selectedModel": "可灵 2.5 Turbo",
+        "status": "idle",
+        "generatedAt": "2026-06-30T11:37:06.806Z",
+        "taskId": "1459357",
+        "generationParams": {
+          "taskId": "1459357",
+          "generatedAt": "2026-06-30T11:37:06.806Z",
+          "model": "Nano Banana 2.0",
+          "prompt": "@图片1参考生成@图片3"
+        }
+      }
+    }
+  ],
+  "edges": [
+    {
+      "id": "enode_0_1782819006070-node_3_1782819191308-1782819191309-0",
+      "source": "node_0_1782819006070",
+      "target": "node_3_1782819191308",
+      "animated": true,
+      "style": {
+        "stroke": "#6366f1",
+        "strokeWidth": 2
+      }
+    },
+    {
+      "id": "enode_1_1782819039725-node_5_1782819426806-recover-1782819426806-0",
+      "source": "node_1_1782819039725",
+      "target": "node_5_1782819426806",
+      "animated": true,
+      "style": {
+        "stroke": "#6366f1",
+        "strokeWidth": 2
+      }
+    }
+  ],
+  "exportedAt": "2026-06-30T11:41:26.876Z",
+  "nodeCount": 4,
+  "edgeCount": 2
+}

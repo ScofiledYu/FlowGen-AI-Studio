@@ -74,12 +74,35 @@ function stripEphemeralQueryFromPersistUrl(val) {
   }
 }
 
+/** 面板参考槽数组：剥离 blob/data 时保留空串占位，与 referenceImageLocalRefs / labels 下标对齐 */
+const PRESERVE_SLOT_ARRAY_KEYS = new Set([
+  'referenceImages',
+  'referenceImageLabels',
+  'referenceImageLocalRefs',
+  'referenceElementIds',
+  'klingOmniMultiReferenceElementIds',
+  'klingOmniInstructionReferenceElementIds',
+  'klingOmniVideoReferenceElementIds',
+  'klingOmniMultiReferenceImages',
+  'klingOmniMultiReferenceLocalRefs',
+  'klingOmniInstructionReferenceImages',
+  'klingOmniInstructionReferenceLocalRefs',
+  'klingOmniVideoReferenceImages',
+  'klingOmniVideoReferenceLocalRefs',
+]);
+
 export function sanitizePersistValueDeep(val, keyHint = '') {
   if (typeof val === 'string') {
     if (shouldStripPersistString(val, keyHint)) return undefined;
     return stripEphemeralQueryFromPersistUrl(val);
   }
   if (Array.isArray(val)) {
+    if (PRESERVE_SLOT_ARRAY_KEYS.has(keyHint)) {
+      return val.map((v) => {
+        const sv = sanitizePersistValueDeep(v, keyHint);
+        return sv === undefined ? '' : sv;
+      });
+    }
     return val
       .map((v) => sanitizePersistValueDeep(v, keyHint))
       .filter((v) => v !== undefined);
@@ -135,6 +158,36 @@ export function sanitizeChatForPersist(chat) {
 }
 
 /**
+ * @param {unknown} thumb
+ */
+function stripRedundantThumbnailPoster(thumb) {
+  if (!thumb || typeof thumb !== 'object') return thumb;
+  const t = /** @type {Record<string, unknown>} */ ({ ...thumb });
+  const url = t.url;
+  if (
+    typeof url === 'string' &&
+    (url.startsWith('http://') || url.startsWith('https://') || url.startsWith('/flowgen-api/'))
+  ) {
+    delete t.posterDataUrl;
+  }
+  return t;
+}
+
+/**
+ * @param {unknown} data
+ */
+function sanitizeNodeDataForPersist(data) {
+  const d = sanitizePersistValueDeep(data);
+  if (!d || typeof d !== 'object') return d;
+  const out = /** @type {Record<string, unknown>} */ ({ ...d });
+  if (Array.isArray(out.generatedThumbnails)) {
+    out.generatedThumbnails = out.generatedThumbnails.map(stripRedundantThumbnailPoster);
+  }
+  delete out.backdropRenamePending;
+  return out;
+}
+
+/**
  * @param {unknown} payload workspace PUT body payload
  */
 export function sanitizeWorkspacePayload(payload) {
@@ -143,7 +196,14 @@ export function sanitizeWorkspacePayload(payload) {
   if (p.graph && typeof p.graph === 'object') {
     const g = /** @type {Record<string, unknown>} */ ({ ...p.graph });
     if (Array.isArray(g.nodes)) {
-      g.nodes = g.nodes.map((n) => sanitizePersistValueDeep(n)).filter(Boolean);
+      g.nodes = g.nodes
+        .map((n) => {
+          if (!n || typeof n !== 'object') return undefined;
+          const node = /** @type {Record<string, unknown>} */ ({ ...n });
+          if (node.data != null) node.data = sanitizeNodeDataForPersist(node.data);
+          return sanitizePersistValueDeep(node);
+        })
+        .filter(Boolean);
     }
     g.storyboardImages = sanitizeStoryboardImagesForPersist(g.storyboardImages);
     p.graph = g;

@@ -13,6 +13,7 @@ import {
 } from './promptPlaceholders.mjs';
 import { pickMediaResourceUrlFromTaskStatus } from './utils/taskStatusMediaUrl.mjs';
 import { createFlowgenRouter } from './server/flowgen/routes.mjs';
+import { isMysqlConnectionError, isMysqlPacketTooLarge } from './server/flowgen/db.mjs';
 import { initStore, loadStore, bootstrapAdminIfNeeded } from './server/flowgen/store.mjs';
 
 // 在 ES Module 中，__dirname 变量不存在，需要手动创建
@@ -21,6 +22,28 @@ const __dirname = path.dirname(__filename);
 
 const app = express();
 app.use(express.json({ limit: '50mb' }));
+
+process.on('unhandledRejection', (reason) => {
+  if (isMysqlConnectionError(reason)) {
+    console.error('[flowgen] MySQL 未捕获连接异常（已忽略进程退出）:', reason?.message || reason);
+    return;
+  }
+  if (isMysqlPacketTooLarge(reason)) {
+    console.error('[flowgen] MySQL packet too large（已忽略进程退出）:', reason?.message || reason);
+    return;
+  }
+  console.error('[flowgen] unhandledRejection:', reason);
+});
+
+process.on('uncaughtException', (err) => {
+  if (isMysqlConnectionError(err) || isMysqlPacketTooLarge(err)) {
+    console.error('[flowgen] MySQL 未捕获异常（已忽略进程退出）:', err?.message || err);
+    return;
+  }
+  // 非 MySQL 致命错误：打日志后退出，避免带病进程继续对外服务（与开发/生产一致）
+  console.error('[flowgen] uncaughtException（进程即将退出）:', err);
+  process.exit(1);
+});
 
 function forwardParsedJsonBody(proxyReq, req) {
   const method = (req.method || '').toUpperCase();
@@ -63,6 +86,42 @@ const AITOP_API_KEY = process.env.AITOP_API_KEY || 'aitop-key-4MGEBAFEArM3HRaJ0P
 const AITOP_FILE_PREFIX = 'https://aitop100app-1251510006.cos.ap-shanghai.myqcloud.com/';
 const AITOP_STATUS_TIMEOUT_MS = 90000;
 const AITOP_STATUS_RETRY_TIMES = 1;
+
+/**
+ * SSRF 防护：阻断私网/链路本地/云元数据地址，放行公网与本地开发回环。
+ * 不用白名单避免误拦正常 COS/aitop100/项目资产库 URL。
+ */
+function isPrivateOrUnsafeUrl(rawUrl) {
+  try {
+    const u = new URL(rawUrl);
+    if (!/^https?:$/.test(u.protocol)) return true;
+    // Node 的 URL.hostname 对 IPv6 带方括号（如 [fc00::1]），统一去掉用于判断
+    const host = u.hostname.toLowerCase().replace(/^\[|\]$/g, '');
+    if (host === 'localhost' || host === '127.0.0.1' || host === '::1') return false;
+    if (host.endsWith('.local') || host.endsWith('.internal')) return true;
+    // 云元数据 / 内部探测端点
+    if (host === '169.254.169.254' || host === '169.254.170.2' || host === 'metadata.google.internal') {
+      return true;
+    }
+    // IPv4 私网 / 链路本地 / 环回 / 多播
+    const m = host.match(/^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/);
+    if (m) {
+      const [a, b] = [Number(m[1]), Number(m[2])];
+      if (a === 10) return true;
+      if (a === 172 && b >= 16 && b <= 31) return true;
+      if (a === 192 && b === 168) return true;
+      if (a === 127) return true;
+      if (a === 169 && b === 254) return true;
+      if (a === 0) return true;
+      if (a >= 224) return true;
+    }
+    // IPv6 私网（fc00::/7, fe80::/10, ::1）
+    if (/^f[cd][0-9a-f]*:/i.test(host) || /^fe[89ab][0-9a-f]*:/i.test(host) || host === '::1') return true;
+    return false;
+  } catch {
+    return true;
+  }
+}
 
 // 配置端口：优先使用环境变量，否则使用 3001（服务器部署默认端口）
 const PORT = process.env.PORT || 3001;
@@ -224,6 +283,9 @@ app.get('/proxy-file', async (req, res) => {
     if (!/^https?:$/.test(target.protocol)) {
       return res.status(400).json({ error: '仅支持 http/https URL' });
     }
+    if (isPrivateOrUnsafeUrl(fileUrl)) {
+      return res.status(400).json({ error: '禁止代理内网或元数据地址' });
+    }
 
     const range = req.headers.range;
     const ifRange = req.headers['if-range'];
@@ -304,8 +366,10 @@ app.get('/download-task-file', async (req, res) => {
   if (!taskId || typeof taskId !== 'string') {
     return res.status(400).json({ error: '缺少 taskId 参数' });
   }
+  const domainAccount =
+    typeof req.query.domainAccount === 'string' ? req.query.domainAccount.trim() : '';
   try {
-    const statusResp = await fetchTaskStatusWithRetry(taskId);
+    const statusResp = await fetchTaskStatusWithRetry(taskId, domainAccount);
     const statusJson = statusResp?.data || {};
     const resourceUrl =
       pickMediaResourceUrlFromTaskStatus(statusJson?.data) ||
@@ -363,9 +427,11 @@ app.post('/mirror-media-to-aitop', async (req, res) => {
       ? body.filename.trim()
       : 'video.mp4';
 
+  const domainAccount =
+    typeof body.domainAccount === 'string' ? body.domainAccount.trim() : '';
   try {
     if (taskId) {
-      const statusResp = await fetchTaskStatusWithRetry(taskId);
+      const statusResp = await fetchTaskStatusWithRetry(taskId, domainAccount);
       const envelope = statusResp?.data || {};
       const statusUrl = pickMediaResourceUrlFromTaskStatus(envelope?.data) || pickMediaResourceUrlFromTaskStatus(envelope);
       if (statusUrl) src = statusUrl;
@@ -376,6 +442,9 @@ app.post('/mirror-media-to-aitop', async (req, res) => {
 
     if (!src) {
       return res.status(400).json({ error: '缺少 url 或 taskId' });
+    }
+    if (isPrivateOrUnsafeUrl(src)) {
+      return res.status(400).json({ error: '禁止代理内网或元数据地址' });
     }
     if (isAitopCosMediaUrl(src)) {
       return res.json({ ok: true, url: src, via: 'already-aitop' });
@@ -528,6 +597,9 @@ app.get('/proxy-image', async (req, res) => {
     
     // 使用Node.js的http/https模块获取远程图片
     const url = new URL(imageUrl);
+    if (isPrivateOrUnsafeUrl(imageUrl)) {
+      return res.status(400).json({ error: '禁止代理内网或元数据地址' });
+    }
     const client = url.protocol === 'https:' ? https : http;
     
     client.get(imageUrl, (response) => {

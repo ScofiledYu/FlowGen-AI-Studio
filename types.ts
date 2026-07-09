@@ -26,6 +26,8 @@ export interface GenerationParams {
   resolution?: string;
   numberOfImages?: string;
   referenceImages?: string[];
+  /** 与 referenceImages 同序：Node Details 底栏展示名（如 @主图 → 主图） */
+  referenceImageLabels?: string[];
   /** 参考视频（仅用于展示与历史追溯；不自动播放） */
   referenceMovs?: { url: string; posterDataUrl?: string }[];
   /** 参考音频（Seedance 2.0 参考生视频等） */
@@ -85,8 +87,20 @@ export interface GenerationParams {
   image2Style?: 'vivid' | 'natural';
   /** image2：画面比例（与 image2ImageSize 联动） */
   image2AspectRatio?: string;
-  /** image2：图像尺寸 / 清晰度 */
+  /** image2：图像尺寸（像素，随 quality 档位变化） */
   image2ImageSize?: string;
+  /** image2：清晰度档位 1K / 2K / 4K（满血版 API quality） */
+  image2Quality?: '1K' | '2K' | '4K';
+  /** image2：画质等级 low / medium / high（满血版 API qualityLevel） */
+  image2QualityLevel?: 'low' | 'medium' | 'high';
+  /** 生成结果 PNG 实际像素（探测 IHDR；可能与 image2ImageSize 请求值不同） */
+  outputImageSize?: string;
+  /** 本次生成结果主 URL（AiTop COS / 持久化链；Node Details Source URL 优先） */
+  outputUrl?: string;
+  /** 多图/多段生成时的全部结果 URL */
+  outputUrls?: string[];
+  /** 任务结果 resourceUrl 别名（部分模型网关字段） */
+  resourceUrl?: string;
 }
 
 /** Seedance 视频时长标签（1.5 / 2.0 滑杆均为 4–15 秒） */
@@ -122,6 +136,28 @@ export function isImage2Model(model: string | undefined): boolean {
   return model === MODEL_IMAGE_2;
 }
 
+/** 属性面板 Model 下拉可选模型（新节点） */
+export const INSPECTOR_SELECTABLE_MODELS = [
+  MODEL_NANO_BANANA_2,
+  MODEL_IMAGE_2,
+  '可灵3.0 Omni',
+  '即梦3.0 Pro',
+  'seedance2.0 (高质量版)',
+  'seedance2.0 (急速版)',
+] as const;
+
+/** 已从面板下线、旧工程仍可能 persisted 的模型 */
+export const DEPRECATED_INSPECTOR_MODELS = [
+  '可灵 2.5 Turbo',
+  'vidu 2.0',
+  'seedance1.5-pro',
+] as const;
+
+export function isDeprecatedInspectorModel(model: string | undefined): boolean {
+  if (!model) return false;
+  return (DEPRECATED_INSPECTOR_MODELS as readonly string[]).includes(model);
+}
+
 export interface NodeData {
   label: string;
   description?: string;
@@ -134,25 +170,39 @@ export interface NodeData {
   imagePreview?: string; // Main storyboard image
   /** 属性面板是否展示「主图」格：undefined=有 imagePreview 即展示；运行后未 @主图 时为 false */
   panelMainSlotVisible?: boolean;
+  /** 运行后未 @主图 时备份的用户主图 URL，重新选中节点编辑时恢复属性面板主图格 */
+  panelMainImageUrl?: string;
   
   // Progress & Error
   progress?: number;
   errorMessage?: string;
+  /** 持久化：运行中刷新后按 taskId 恢复轮询与进度条（save 时 status 会落成 idle） */
+  runRecoveryPending?: boolean;
+  /** 持久化：刷新前最后一次进度（0–100） */
+  runRecoveryProgress?: number;
   
   // Internal State Data (persisted in flow)
   referenceImages?: string[];
+  /** 与 referenceImages 同槽下标：IndexedDB 引用（flowgen-local:…）；刷新后恢复面板参考图预览 */
+  referenceImageLocalRefs?: string[];
   /** 与 referenceImages 同槽下标：资产库素材展示名（属性面板底栏）；无则显示「图片n」 */
   referenceImageLabels?: string[];
+  /** 与 referenceImages 同槽：画布源 nodeId（canvas:…，仅面板去重，勿发 API） */
+  referenceElementIds?: (string | undefined)[];
   /** 参考视频（仅用于 Node Details 展示；不自动播放） */
   referenceMovs?: { url: string; posterDataUrl?: string }[];
   /** 参考音频（Seedance 2.0 参考生视频 tab） */
   referenceAudios?: { url: string }[];
   /** 可灵3.0 Omni：多图参考（tab = multi）专用参考图 */
   klingOmniMultiReferenceImages?: string[];
+  /** 与 klingOmniMultiReferenceImages 同槽 IndexedDB 引用 */
+  klingOmniMultiReferenceLocalRefs?: string[];
   /** 可灵3.0 Omni：指令变换（tab = instruction）专用参考图 */
   klingOmniInstructionReferenceImages?: string[];
+  klingOmniInstructionReferenceLocalRefs?: string[];
   /** 可灵3.0 Omni：视频参考（tab = video）专用参考图 */
   klingOmniVideoReferenceImages?: string[];
+  klingOmniVideoReferenceLocalRefs?: string[];
   /** 可灵3.0 Omni：与参考图同索引的主体 elementId（主体库；发 Omni 请求时合并进平级 elementList） */
   klingOmniMultiReferenceElementIds?: (string | undefined)[];
   klingOmniInstructionReferenceElementIds?: (string | undefined)[];
@@ -185,6 +235,8 @@ export interface NodeData {
   
   /** 分镜表批量生成下游节点时的边框高亮（绿=时长已写入，黄=模板节点，红=时长无效或不支持） */
   spawnHighlight?: 'green' | 'yellow' | 'red';
+  /** 定时批量运行排队中（仅画布 UI 瞬态标记，勿持久化） */
+  scheduledRunQueued?: boolean;
   /** 分镜表批量生成下游节点：主预览区改为镜头号占位图（仅 UI 显示，不影响真实输入媒体） */
   storyboardShotPreviewText?: string;
 
@@ -196,6 +248,29 @@ export interface NodeData {
 
   /** 可灵3.0 Omni：当前使用的输入方式（决定是否走首尾帧图片 or 视频编辑） */
   klingOmniTab?: 'multi' | 'instruction' | 'video' | 'frames';
+  /** 可灵3.0 Omni：各 tab 独立快照（参考图已分字段；此处仅首尾帧 + 指令/视频顶栏视频；主图四 tab 共用） */
+  klingOmniTabConfigs?: {
+    instruction?: {
+      klingOmniInstructionVideoUrl?: string;
+      klingOmniInstructionVideoPreviewUrl?: string;
+      klingOmniInstructionVideoManuallyCleared?: boolean;
+    };
+    video?: {
+      klingOmniVideoUrl?: string;
+      klingOmniVideoPreviewUrl?: string;
+      klingOmniVideoManuallyCleared?: boolean;
+    };
+    frames?: {
+      firstFrameImage?: string;
+      lastFrameImage?: string;
+      firstFrameImageUrl?: string;
+      lastFrameImageUrl?: string;
+      firstFrameLocalRef?: string;
+      lastFrameLocalRef?: string;
+      firstFrameImageLabel?: string;
+      lastFrameImageLabel?: string;
+    };
+  };
   /** 可灵3.0 Omni：已选视频的预览 URL（对象 URL；用于 UI 展示）——仅「视频参考」tab */
   klingOmniVideoPreviewUrl?: string;
   /** 可灵3.0 Omni：上传到 AiTop 后的视频 URL——仅「视频参考」tab */
@@ -249,6 +324,7 @@ export interface NodeData {
       negativePrompt?: string;
       referenceImages?: string[];
       referenceImageLabels?: string[];
+      referenceElementIds?: (string | undefined)[];
       referenceMovs?: { url: string; posterDataUrl?: string }[];
       referenceAudios?: { url: string }[];
     };
@@ -258,8 +334,12 @@ export interface NodeData {
   image2Style?: 'vivid' | 'natural';
   /** image2：画面比例（与 image2ImageSize 联动） */
   image2AspectRatio?: string;
-  /** image2：图像尺寸（清晰度） */
+  /** image2：图像尺寸（像素） */
   image2ImageSize?: string;
+  /** image2：清晰度档位 1K / 2K / 4K */
+  image2Quality?: '1K' | '2K' | '4K';
+  /** image2：画质等级 low / medium / high */
+  image2QualityLevel?: 'low' | 'medium' | 'high';
 
   // Snapshot of parameters used to generate this node
   generationParams?: GenerationParams;
@@ -292,6 +372,8 @@ export interface NodeData {
   backdropChildIds?: string[];
   /** 标题条文案 */
   backdropLabel?: string;
+  /** 创建后自动进入顶部命名编辑（一次性） */
+  backdropRenamePending?: boolean;
   /** 填充色（如 rgba） */
   backdropFill?: string;
   /** 边框色 */
@@ -325,19 +407,33 @@ export interface NodeData {
       aspectRatio?: string;
       numberOfImages?: string;
       referenceImages?: string[];
+      referenceImageLabels?: string[];
+      referenceElementIds?: (string | undefined)[];
+      referenceImageLocalRefs?: string[];
+      imagePreview?: string;
+      imageName?: string;
+      imageLocalRef?: string;
+      panelMainImageUrl?: string;
+      panelMainSlotVisible?: boolean;
     };
     image2?: {
       prompt?: string;
       negativePrompt?: string;
       referenceImages?: string[];
       referenceImageLabels?: string[];
+      referenceElementIds?: (string | undefined)[];
+      referenceImageLocalRefs?: string[];
       imagePreview?: string;
       imageName?: string;
+      imageLocalRef?: string;
       panelMainSlotVisible?: boolean;
+      panelMainImageUrl?: string;
       numberOfImages?: string;
       image2Style?: 'vivid' | 'natural';
       image2AspectRatio?: string;
       image2ImageSize?: string;
+      image2Quality?: '1K' | '2K' | '4K';
+      image2QualityLevel?: 'low' | 'medium' | 'high';
     };
     '可灵 2.5 Turbo'?: {
       prompt?: string;
@@ -346,6 +442,10 @@ export interface NodeData {
       lastFrameImage?: string;
       firstFrameImageUrl?: string;
       lastFrameImageUrl?: string;
+      firstFrameLocalRef?: string;
+      lastFrameLocalRef?: string;
+      firstFrameImageLabel?: string;
+      lastFrameImageLabel?: string;
       quality?: string;
       duration?: string;
       creativityLevel?: number;
@@ -359,6 +459,10 @@ export interface NodeData {
       lastFrameImage?: string;
       firstFrameImageUrl?: string;
       lastFrameImageUrl?: string;
+      firstFrameLocalRef?: string;
+      lastFrameLocalRef?: string;
+      firstFrameImageLabel?: string;
+      lastFrameImageLabel?: string;
       quality?: string;
       duration?: string;
       numberOfImages?: string;
@@ -380,10 +484,15 @@ export interface NodeData {
       klingOmniFramesPrompt?: string;
       klingOmniFramesNegativePrompt?: string;
       klingOmniTab?: 'multi' | 'instruction' | 'video' | 'frames';
+      klingOmniTabConfigs?: NodeData['klingOmniTabConfigs'];
       klingOmniVideoPreviewUrl?: string;
       klingOmniVideoUrl?: string;
       klingOmniInstructionVideoPreviewUrl?: string;
       klingOmniInstructionVideoUrl?: string;
+      referenceImageLocalRefs?: string[];
+      klingOmniMultiReferenceLocalRefs?: string[];
+      klingOmniInstructionReferenceLocalRefs?: string[];
+      klingOmniVideoReferenceLocalRefs?: string[];
     };
     '即梦3.0 Pro'?: {
       prompt?: string;
@@ -396,6 +505,8 @@ export interface NodeData {
       numberOfImages?: string;
       firstFrameImage?: string;
       firstFrameImageUrl?: string;
+      firstFrameLocalRef?: string;
+      firstFrameImageLabel?: string;
       jimengImages?: string[];
     };
     'vidu 2.0'?: {
@@ -405,6 +516,10 @@ export interface NodeData {
       lastFrameImage?: string;
       firstFrameImageUrl?: string;
       lastFrameImageUrl?: string;
+      firstFrameLocalRef?: string;
+      lastFrameLocalRef?: string;
+      firstFrameImageLabel?: string;
+      lastFrameImageLabel?: string;
       viduDuration?: '4s' | '8s';
       viduClarity?: '360p' | '720p' | '1080p';
       viduMotionRange?: '自动' | '小' | '中' | '大';
@@ -418,6 +533,10 @@ export interface NodeData {
       lastFrameImage?: string;
       firstFrameImageUrl?: string;
       lastFrameImageUrl?: string;
+      firstFrameLocalRef?: string;
+      lastFrameLocalRef?: string;
+      firstFrameImageLabel?: string;
+      lastFrameImageLabel?: string;
       numberOfImages?: string;
       seedanceResolution?: '480p' | '720p';
       seedanceAspectRatio?: SeedanceAspectRatioSetting;
@@ -428,6 +547,11 @@ export interface NodeData {
       seedanceReferenceRatioMode?: SeedanceReferenceRatioMode;
       seedanceReferenceWebSearch?: boolean;
       seedanceTabConfigs?: NodeData['seedanceTabConfigs'];
+      referenceImages?: string[];
+      referenceImageLabels?: string[];
+      referenceElementIds?: (string | undefined)[];
+      referenceMovs?: { url: string; posterDataUrl?: string }[];
+      referenceAudios?: { url: string }[];
     };
     'seedance2.0 (高质量版)'?: {
       prompt?: string;
@@ -436,6 +560,10 @@ export interface NodeData {
       lastFrameImage?: string;
       firstFrameImageUrl?: string;
       lastFrameImageUrl?: string;
+      firstFrameLocalRef?: string;
+      lastFrameLocalRef?: string;
+      firstFrameImageLabel?: string;
+      lastFrameImageLabel?: string;
       numberOfImages?: string;
       seedanceResolution?: '480p' | '720p' | '1080p';
       seedanceAspectRatio?: SeedanceAspectRatioSetting;
@@ -446,6 +574,12 @@ export interface NodeData {
       seedanceReferenceRatioMode?: SeedanceReferenceRatioMode;
       seedanceReferenceWebSearch?: boolean;
       seedanceTabConfigs?: NodeData['seedanceTabConfigs'];
+      referenceImages?: string[];
+      referenceImageLabels?: string[];
+      referenceElementIds?: (string | undefined)[];
+      referenceImageLocalRefs?: string[];
+      referenceMovs?: { url: string; posterDataUrl?: string }[];
+      referenceAudios?: { url: string }[];
     };
     'seedance2.0 (急速版)'?: {
       prompt?: string;
@@ -454,6 +588,10 @@ export interface NodeData {
       lastFrameImage?: string;
       firstFrameImageUrl?: string;
       lastFrameImageUrl?: string;
+      firstFrameLocalRef?: string;
+      lastFrameLocalRef?: string;
+      firstFrameImageLabel?: string;
+      lastFrameImageLabel?: string;
       numberOfImages?: string;
       seedanceResolution?: '480p' | '720p';
       seedanceAspectRatio?: SeedanceAspectRatioSetting;
@@ -464,6 +602,12 @@ export interface NodeData {
       seedanceReferenceRatioMode?: SeedanceReferenceRatioMode;
       seedanceReferenceWebSearch?: boolean;
       seedanceTabConfigs?: NodeData['seedanceTabConfigs'];
+      referenceImages?: string[];
+      referenceImageLabels?: string[];
+      referenceElementIds?: (string | undefined)[];
+      referenceImageLocalRefs?: string[];
+      referenceMovs?: { url: string; posterDataUrl?: string }[];
+      referenceAudios?: { url: string }[];
     };
   };
 }

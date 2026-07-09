@@ -170,6 +170,21 @@ export function ProjectAssetLibrary({
   const [selectedIds, setSelectedIds] = useState<Set<string>>(() => new Set());
   /** 记录最后一次点击的素材 ID，用于 Shift+点击范围选择 */
   const lastSelectedIdRef = useRef<string | null>(null);
+  const assetTileRefs = useRef(new Map<string, HTMLDivElement>());
+  const marqueeSessionRef = useRef<{
+    pointerId: number;
+    startX: number;
+    startY: number;
+    baseSelection: Set<string>;
+    active: boolean;
+  } | null>(null);
+  const [marqueeRect, setMarqueeRect] = useState<{
+    left: number;
+    top: number;
+    width: number;
+    height: number;
+  } | null>(null);
+  const suppressItemClickRef = useRef(false);
 
   const [createOpen, setCreateOpen] = useState(false);
   const [createDragOver, setCreateDragOver] = useState(false);
@@ -435,6 +450,98 @@ export function ProjectAssetLibrary({
     });
     lastSelectedIdRef.current = id;
   };
+
+  const assetMarqueeIntersects = (
+    tileRect: DOMRect,
+    box: { left: number; top: number; width: number; height: number }
+  ) =>
+    !(
+      tileRect.right < box.left ||
+      tileRect.left > box.left + box.width ||
+      tileRect.bottom < box.top ||
+      tileRect.top > box.top + box.height
+    );
+
+  const applyAssetMarqueeSelection = useCallback(
+    (box: { left: number; top: number; width: number; height: number }) => {
+      const base = marqueeSessionRef.current?.baseSelection ?? new Set<string>();
+      const next = new Set(base);
+      for (const a of filtered) {
+        const el = assetTileRefs.current.get(a.id);
+        if (!el) continue;
+        if (assetMarqueeIntersects(el.getBoundingClientRect(), box)) next.add(a.id);
+      }
+      setSelectedIds(next);
+    },
+    [filtered]
+  );
+
+  const onAssetMarqueeMoveRef = useRef<(e: PointerEvent) => void>(() => {});
+  const onAssetMarqueeUpRef = useRef<(e: PointerEvent) => void>(() => {});
+
+  const endAssetMarqueeSession = useCallback(() => {
+    window.removeEventListener('pointermove', onAssetMarqueeMoveRef.current);
+    window.removeEventListener('pointerup', onAssetMarqueeUpRef.current, true);
+    window.removeEventListener('pointercancel', onAssetMarqueeUpRef.current, true);
+  }, []);
+
+  onAssetMarqueeMoveRef.current = (e: PointerEvent) => {
+    const session = marqueeSessionRef.current;
+    if (!session || e.pointerId !== session.pointerId) return;
+    const dx = e.clientX - session.startX;
+    const dy = e.clientY - session.startY;
+    if (!session.active && Math.hypot(dx, dy) < 4) return;
+    session.active = true;
+    e.preventDefault();
+    const box = {
+      left: Math.min(session.startX, e.clientX),
+      top: Math.min(session.startY, e.clientY),
+      width: Math.abs(dx),
+      height: Math.abs(dy),
+    };
+    setMarqueeRect(box);
+    applyAssetMarqueeSelection(box);
+  };
+
+  onAssetMarqueeUpRef.current = (e: PointerEvent) => {
+    const session = marqueeSessionRef.current;
+    if (!session || e.pointerId !== session.pointerId) return;
+    if (session.active) {
+      suppressItemClickRef.current = true;
+      window.setTimeout(() => {
+        suppressItemClickRef.current = false;
+      }, 0);
+    }
+    marqueeSessionRef.current = null;
+    setMarqueeRect(null);
+    endAssetMarqueeSession();
+  };
+
+  const handleAssetGridPointerDown = useCallback(
+    (e: React.PointerEvent<HTMLDivElement>) => {
+      if (e.button !== 0 || !e.shiftKey) return;
+      if ((e.target as Element).closest('button,input,textarea,select,a,[role="combobox"]')) return;
+      marqueeSessionRef.current = {
+        pointerId: e.pointerId,
+        startX: e.clientX,
+        startY: e.clientY,
+        baseSelection: new Set(selectedIds),
+        active: false,
+      };
+      window.addEventListener('pointermove', onAssetMarqueeMoveRef.current);
+      window.addEventListener('pointerup', onAssetMarqueeUpRef.current, true);
+      window.addEventListener('pointercancel', onAssetMarqueeUpRef.current, true);
+    },
+    [selectedIds]
+  );
+
+  useEffect(
+    () => () => {
+      marqueeSessionRef.current = null;
+      endAssetMarqueeSession();
+    },
+    [endAssetMarqueeSession]
+  );
 
   const isDraggableAsset = (a: ProjectAssetRow) =>
     isImageAssetMime(a.mime, a.name) || a.mime.startsWith('video/');
@@ -766,9 +873,24 @@ export function ProjectAssetLibrary({
           </div>
         </div>
 
-        <div className="min-h-0 flex-1 overflow-auto px-5 py-4">
+        <div
+          className="min-h-0 flex-1 overflow-auto px-5 py-4 relative"
+          onPointerDown={handleAssetGridPointerDown}
+        >
           {err && <p className="text-sm text-amber-400 mb-3">{err}</p>}
           {loading && <p className="text-sm text-gray-500 mb-3">加载中…</p>}
+
+          {marqueeRect ? (
+            <div
+              className="fixed z-[60001] pointer-events-none border border-brand-400 bg-brand-500/15 rounded-sm"
+              style={{
+                left: marqueeRect.left,
+                top: marqueeRect.top,
+                width: marqueeRect.width,
+                height: marqueeRect.height,
+              }}
+            />
+          ) : null}
 
           <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-3 select-none">
             {filtered.map((a) => {
@@ -776,9 +898,17 @@ export function ProjectAssetLibrary({
               return (
                 <div
                   key={a.id}
+                  ref={(el) => {
+                    if (el) assetTileRefs.current.set(a.id, el);
+                    else assetTileRefs.current.delete(a.id);
+                  }}
                   role="button"
                   tabIndex={0}
                   onClick={(e) => {
+                    if (suppressItemClickRef.current) {
+                      e.preventDefault();
+                      return;
+                    }
                     if (e.shiftKey) {
                       e.preventDefault();
                       handleRangeSelect(a.id, true);

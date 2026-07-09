@@ -70,7 +70,7 @@ type MatrixRow = {
   assetPrune?: {
     slugMap: Map<string, string>;
     keepSlots: number[];
-    emptySlots: number[];
+    preservedSlots: number[];
   };
   mainUrl?: string;
   mainExpect?: string;
@@ -104,7 +104,7 @@ const MATRIX: MatrixRow[] = [
     assetPrune: {
       slugMap: new Map([['萧道', assets[0].url!], ['鸱吻', assets[1].url!]]),
       keepSlots: [0, 1],
-      emptySlots: [2],
+      preservedSlots: [2],
     },
   },
   {
@@ -134,7 +134,7 @@ const MATRIX: MatrixRow[] = [
     assetPrune: {
       slugMap: new Map([['鸱吻', assets[1].url!]]),
       keepSlots: [0],
-      emptySlots: [1],
+      preservedSlots: [1],
     },
   },
   {
@@ -153,7 +153,7 @@ const MATRIX: MatrixRow[] = [
         ['鸱吻', assets[1].url!],
       ]),
       keepSlots: [0, 1],
-      emptySlots: [2],
+      preservedSlots: [2],
     },
   },
   {
@@ -171,7 +171,7 @@ const MATRIX: MatrixRow[] = [
         ['鸱吻', assets[1].url!],
       ]),
       keepSlots: [0, 1],
-      emptySlots: [2],
+      preservedSlots: [2],
     },
   },
   {
@@ -201,7 +201,7 @@ const MATRIX: MatrixRow[] = [
     assetPrune: {
       slugMap: new Map(),
       keepSlots: [1],
-      emptySlots: [0],
+      preservedSlots: [0],
     },
   },
   {
@@ -452,8 +452,8 @@ for (const row of MATRIX) {
     for (const i of row.assetPrune.keepSlots) {
       ok(`${id}: prune 保留槽${i}`, String(after[i] || '').endsWith('|UP'));
     }
-    for (const i of row.assetPrune.emptySlots) {
-      ok(`${id}: prune 清空槽${i}`, !String(after[i] || '').trim());
+    for (const i of row.assetPrune.preservedSlots) {
+      ok(`${id}: 未@槽${i}仍保留`, !!String(after[i] || '').trim(), String(after[i]));
     }
     const synced = syncReferenceImageLabelsAfterPanelPrune(
       panel,

@@ -3,6 +3,12 @@ import jwt from 'jsonwebtoken';
 const JWT_SECRET = process.env.FLOWGEN_JWT_SECRET || 'flowgen-dev-jwt-change-me-in-production';
 const JWT_EXPIRES = process.env.FLOWGEN_JWT_EXPIRES || '7d';
 
+if (!process.env.FLOWGEN_JWT_SECRET) {
+  console.warn(
+    '[flowgen][security] 未设置 FLOWGEN_JWT_SECRET，正在使用开发默认值。生产环境必须设置环境变量，否则 token 可被伪造。'
+  );
+}
+
 export function signToken(payload) {
   return jwt.sign(payload, JWT_SECRET, { expiresIn: JWT_EXPIRES });
 }

@@ -3,6 +3,16 @@
 @tailwind utilities;
 
 /* React Flow Base Styles Override */
+
+/* Alt+中键拖动画布时：节点/选区不拦截指针，事件落到 pane 上平移 */
+.alt-middle-pan-active .react-flow__node,
+.alt-middle-pan-active .react-flow__nodesselection,
+.alt-middle-pan-active .react-flow__nodesselection-rect,
+.alt-middle-pan-active .nopan,
+.alt-middle-pan-active .react-flow__node .nopan {
+  pointer-events: none !important;
+}
+
 .react-flow__handle {
   width: 10px;
   height: 10px;
@@ -19,28 +29,10 @@
   opacity: 0.5;
 }
 
-/* 导航图：高于选中节点（elevateNodesOnSelect 约 1000），避免拖动时被盖住 */
+/* 导航图：z-index 3，低于 renderer(4) 故节点叠在上面；Controls 仍为 5 */
 .react-flow__panel.react-flow__minimap {
-  z-index: 2000;
-}
-
-/*
- * Portal 挂载到小地图：React Flow Panel 在框选(userSelectionActive)时会内联 pointer-events:none，
- * 拖动画布时也可能让用户误以为「导航不见了」；此处强制可交互并抬高层级。
- */
-[data-flowgen-minimap-portal='1'] {
-  isolation: isolate;
-}
-[data-flowgen-minimap-portal='1'] .react-flow__panel.react-flow__minimap {
+  z-index: 3 !important;
   pointer-events: auto !important;
-  z-index: 6000 !important;
-  position: relative !important;
-  bottom: auto !important;
-  right: auto !important;
-  left: auto !important;
-  top: auto !important;
-  width: 100% !important;
-  height: 100% !important;
   margin: 0 !important;
 }
 
@@ -56,6 +48,20 @@
 }
 .flowgen-viewport-moving .react-flow__node [class*='backdrop-blur'] {
   backdrop-filter: none !important;
+}
+
+/* 暂停刷新：非选中节点不保留 video 层，减轻多 MOV 解码 */
+.flowgen-canvas-refresh-paused .react-flow__node:not(.selected) video {
+  display: none !important;
+  visibility: hidden !important;
+}
+.flowgen-canvas-refresh-paused .react-flow__node img,
+.flowgen-canvas-refresh-paused .react-flow__node video {
+  transition: none !important;
+  transform: none !important;
+}
+.flowgen-canvas-refresh-paused .react-flow__node.group:hover img {
+  transform: none !important;
 }
 
 /* 导航内节点与选中高亮（与主画布 brand 色系一致） */
@@ -152,4 +158,10 @@
   -webkit-background-clip: text;
   -webkit-text-fill-color: transparent;
   background-clip: text;
+}
+
+/* 中键拖素材：全局抓取光标，提示正在拖放 */
+body.flowgen-middle-media-drag,
+body.flowgen-middle-media-drag * {
+  cursor: grabbing !important;
 }

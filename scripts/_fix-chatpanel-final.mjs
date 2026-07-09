@@ -41,8 +41,14 @@ for (let i = 0; i < lines.length; i++) {
   ) {
     lines[i] = '  const wantsTable = /表格|列表|对比|排行/.test(question);';
   }
-  if (lines[i - 3]?.includes('function isLightweightPrompt') && t.trim().startsWith('return /^')) {
-    lines[i] = "  return /^(你好|嗨|hi|hello|嘿|在吗|你是谁|测试|test|ok)[\\s!,.，。!?？]*$/i.test(t);";
+  // 仅修复乱码的轻量句正则；组合问候逻辑以 ChatPanel 源码为准，勿整段覆盖
+  if (
+    lines[i - 3]?.includes('function isLightweightPrompt') &&
+    t.trim().startsWith('return /^') &&
+    (t.includes('??') || t.includes('????'))
+  ) {
+    lines[i] =
+      "  if (/^(你好|嗨|hi|hello|嘿|在吗|你是谁|测试|test|ok)[\\s!,.，。!?？]*$/i.test(t)) return true;";
   }
   if (t.includes('function needsWebSearchContextExpansion') === false && t.trim().startsWith('return /^') && t.includes('.test(q)')) {
     lines[i] = '  return /^(今天|明天|后天|周[一二三四五六日天]|\\d+月\\d+日|几号|几点|天气|股价|汇率)/.test(q);';

@@ -34,7 +34,7 @@ import {
   assertValidGlobalRole,
   normalizeGlobalRoleInput,
 } from './permissions.mjs';
-import { pingMysql, isMysqlConfigured } from './db.mjs';
+import { pingMysql, isMysqlConfigured, isMysqlConnectionError, isMysqlPacketTooLarge } from './db.mjs';
 import { getStorageMode } from './store.mjs';
 import { saveNodeMediaFile, resolveNodeMediaFilePath } from './nodeMedia.mjs';
 import {
@@ -145,6 +145,11 @@ function requireProjectAssetWrite(req, res, next) {
 
 export function createFlowgenRouter() {
   const router = express.Router();
+
+  /** 包裹 async 路由，把 rejection 转给 Express 错误中间件（Express 4 不自动处理 async） */
+  const asyncHandler = (fn) => (req, res, next) => {
+    Promise.resolve(fn(req, res, next)).catch(next);
+  };
 
   router.get('/health/db', async (_req, res) => {
     const storage = getStorageMode();
@@ -584,7 +589,7 @@ export function createFlowgenRouter() {
     });
   });
 
-  router.patch('/projects/:projectId', authMiddleware(true), async (req, res) => {
+  router.patch('/projects/:projectId', authMiddleware(true), asyncHandler(async (req, res) => {
     const store = loadStore();
     const p = getProject(store, req.params.projectId);
     if (!p) return res.status(404).json({ error: '项目不存在' });
@@ -600,6 +605,9 @@ export function createFlowgenRouter() {
     }
     if (status) p.status = String(status);
     if (coverImage !== undefined) {
+      if (!canManageProjectCover(store, req.user, p.id)) {
+        return res.status(403).json({ error: '无权修改项目封面' });
+      }
       const next = coverImage ? String(coverImage) : null;
       if (next && (next.startsWith('data:') || next.startsWith('blob:') || next.startsWith('flowgen-local:'))) {
         return res.status(400).json({ error: '封面请使用上传接口，勿传 data/blob 临时地址' });
@@ -614,7 +622,7 @@ export function createFlowgenRouter() {
       await flushStore();
     }
     res.json(p);
-  });
+  }));
 
   router.post(
     '/projects/:projectId/cover',
@@ -876,7 +884,7 @@ export function createFlowgenRouter() {
     fs.createReadStream(fp).pipe(res);
   });
 
-  router.put('/projects/:projectId/workspace', authMiddleware(true), async (req, res) => {
+  router.put('/projects/:projectId/workspace', authMiddleware(true), asyncHandler(async (req, res) => {
     const store = loadStore();
     const p = getProject(store, req.params.projectId);
     if (!p) return res.status(404).json({ error: '项目不存在' });
@@ -915,9 +923,21 @@ export function createFlowgenRouter() {
           serverNodeCount: e.serverNodeCount,
         });
       }
-      throw e;
+      if (isMysqlConnectionError(e)) {
+        console.error('[flowgen] MySQL 连接异常，保存失败:', e?.message || e);
+        return res.status(503).json({ error: '数据库连接异常，请稍后重试' });
+      }
+      if (isMysqlPacketTooLarge(e) || e?.code === 'WORKSPACE_PAYLOAD_TOO_LARGE') {
+        console.error('[flowgen] workspace payload too large:', e?.message || e);
+        return res.status(413).json({
+          error: '工程数据过大，无法保存。请清理节点历史或联系管理员调大 MySQL max_allowed_packet。',
+          code: e?.code || 'WORKSPACE_PAYLOAD_TOO_LARGE',
+        });
+      }
+      console.error('[flowgen] workspace save error:', e?.message || e);
+      return res.status(500).json({ error: '保存失败，请稍后重试' });
     }
-  });
+  }));
 
   router.get('/projects/:projectId/assets', authMiddleware(true), (req, res) => {
     const store = loadStore();
@@ -1292,7 +1312,7 @@ export function createFlowgenRouter() {
   });
 
   // 保存/更新会话历史
-  router.post('/chat-history/:chatId', authMiddleware(true), async (req, res) => {
+  router.post('/chat-history/:chatId', authMiddleware(true), asyncHandler(async (req, res) => {
     const { chatId } = req.params;
     const { modelId, messages, projectId } = req.body || {};
     if (!Array.isArray(messages)) {
@@ -1329,10 +1349,10 @@ export function createFlowgenRouter() {
     };
     saveStore(store);
     res.json({ ok: true, chatId });
-  });
+  }));
 
   // 删除会话历史
-  router.delete('/chat-history/:chatId', authMiddleware(true), async (req, res) => {
+  router.delete('/chat-history/:chatId', authMiddleware(true), asyncHandler(async (req, res) => {
     const { chatId } = req.params;
     const filterProjectId = req.query?.projectId ? String(req.query.projectId) : null;
     if (getStorageMode() === 'relational') {
@@ -1361,7 +1381,7 @@ export function createFlowgenRouter() {
       saveStore(store);
     }
     res.json({ ok: true });
-  });
+  }));
 
   // 获取当前用户的所有会话列表
   router.get('/chat-history', authMiddleware(true), async (req, res) => {
@@ -1396,6 +1416,20 @@ export function createFlowgenRouter() {
       .sort((a, b) => new Date(b.updatedAt) - new Date(a.updatedAt))
       .slice(0, 60);
     res.json({ sessions: list });
+  });
+
+  // 兜底：捕获 async 路由未处理的异常，返回 JSON 而非默认 HTML 错误页
+  router.use((err, _req, res, _next) => {
+    if (isMysqlConnectionError(err)) {
+      return res.status(503).json({ error: '数据库连接异常，请稍后重试' });
+    }
+    if (isMysqlPacketTooLarge(err)) {
+      return res.status(413).json({
+        error: '工程数据过大，无法保存。请清理节点历史或联系管理员调大 MySQL max_allowed_packet。',
+      });
+    }
+    console.error('[flowgen-api] unhandled route error:', err?.message || err);
+    return res.status(500).json({ error: '服务器内部错误，请稍后重试' });
   });
 
   return router;

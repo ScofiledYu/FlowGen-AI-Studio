@@ -1,5 +1,9 @@
-import { getPool } from '../db.mjs';
+import { getPool, isMysqlConnectionError, resetPool } from '../db.mjs';
 import { parseJsonCol, stringifyJsonCol } from './jsonCol.mjs';
+import {
+  encodeWorkspacePayloadForDb,
+  decodeWorkspacePayloadFromDb,
+} from '../workspacePayloadCodec.mjs';
 import {
   graphNodeCountFromPayload,
   resolveUserWorkspaceSliceView,
@@ -18,12 +22,14 @@ export async function getUserWorkspaceView(projectId, userId) {
   );
   if (!rows.length) return { version: 0, payload: null };
 
-  const slices = rows.map((row) => ({
-    userId: String(row.user_id),
-    version: Number(row.version) || 0,
-    payload: parseJsonCol(row.payload, null),
-    updatedAt: row.updated_at instanceof Date ? row.updated_at.toISOString() : String(row.updated_at),
-  }));
+  const slices = await Promise.all(
+    rows.map(async (row) => ({
+      userId: String(row.user_id),
+      version: Number(row.version) || 0,
+      payload: await decodeWorkspacePayloadFromDb(parseJsonCol(row.payload, null)),
+      updatedAt: row.updated_at instanceof Date ? row.updated_at.toISOString() : String(row.updated_at),
+    }))
+  );
   return resolveUserWorkspaceSliceView(slices, userId);
 }
 
@@ -33,6 +39,22 @@ export async function getUserWorkspaceView(projectId, userId) {
  * @param {{ payload: unknown; version?: number; allowEmptyGraph?: boolean }} body
  */
 export async function putUserWorkspaceSlice(projectId, userId, body) {
+  const maxAttempts = 3;
+  let lastErr;
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    try {
+      return await putUserWorkspaceSliceOnce(projectId, userId, body);
+    } catch (e) {
+      lastErr = e;
+      if (!isMysqlConnectionError(e) || attempt >= maxAttempts) throw e;
+      await resetPool();
+      await new Promise((r) => setTimeout(r, 150 * attempt));
+    }
+  }
+  throw lastErr;
+}
+
+async function putUserWorkspaceSliceOnce(projectId, userId, body) {
   const pool = getPool();
   const conn = await pool.getConnection();
   try {
@@ -42,7 +64,8 @@ export async function putUserWorkspaceSlice(projectId, userId, body) {
       [projectId, userId]
     );
     const prevVersion = rows.length ? Number(rows[0].version) || 0 : 0;
-    const prevPayload = rows.length ? parseJsonCol(rows[0].payload, null) : null;
+    const prevPayloadRaw = rows.length ? parseJsonCol(rows[0].payload, null) : null;
+    const prevPayload = await decodeWorkspacePayloadFromDb(prevPayloadRaw);
     const clientVersion = body.version;
     if (clientVersion !== undefined && clientVersion !== prevVersion) {
       const err = new Error('版本冲突');
@@ -62,8 +85,10 @@ export async function putUserWorkspaceSlice(projectId, userId, body) {
     }
     const nextVersion = prevVersion + 1;
     const now = new Date().toISOString().slice(0, 23).replace('T', ' ');
-    const payloadStr = stringifyJsonCol(body.payload ?? null);
-    const payloadBytes = Buffer.byteLength(payloadStr || '', 'utf8');
+    const { stored, storedBytes, uncompressedBytes } = await encodeWorkspacePayloadForDb(
+      body.payload ?? null
+    );
+    const payloadStr = stringifyJsonCol(stored);
     await conn.query(
       `INSERT INTO flowgen_workspace_slices
         (project_id, user_id, version, payload, payload_bytes, updated_at, updated_by)
@@ -74,7 +99,7 @@ export async function putUserWorkspaceSlice(projectId, userId, body) {
         payload_bytes = VALUES(payload_bytes),
         updated_at = VALUES(updated_at),
         updated_by = VALUES(updated_by)`,
-      [projectId, userId, nextVersion, payloadStr, payloadBytes, now, userId]
+      [projectId, userId, nextVersion, payloadStr, uncompressedBytes, now, userId]
     );
     await conn.commit();
     return {
@@ -83,10 +108,18 @@ export async function putUserWorkspaceSlice(projectId, userId, body) {
       updatedAt: now,
     };
   } catch (e) {
-    await conn.rollback();
+    try {
+      await conn.rollback();
+    } catch {
+      /* 连接已断开时 rollback 会失败，勿因此拖垮进程 */
+    }
     throw e;
   } finally {
-    conn.release();
+    try {
+      conn.release();
+    } catch {
+      /* ignore */
+    }
   }
 }
 
@@ -102,8 +135,8 @@ export async function bulkImportSlice(projectId, userId, slice) {
     typeof slice.updatedAt === 'string'
       ? slice.updatedAt.slice(0, 23).replace('T', ' ')
       : new Date().toISOString().slice(0, 23).replace('T', ' ');
-  const payloadStr = stringifyJsonCol(slice.payload ?? null);
-  const payloadBytes = Buffer.byteLength(payloadStr || '', 'utf8');
+  const { stored, uncompressedBytes } = await encodeWorkspacePayloadForDb(slice.payload ?? null);
+  const storedStr = stringifyJsonCol(stored);
   await pool.query(
     `INSERT INTO flowgen_workspace_slices
       (project_id, user_id, version, payload, payload_bytes, updated_at, updated_by)
@@ -114,7 +147,7 @@ export async function bulkImportSlice(projectId, userId, slice) {
       payload_bytes = VALUES(payload_bytes),
       updated_at = VALUES(updated_at),
       updated_by = VALUES(updated_by)`,
-    [projectId, userId, version, payloadStr, payloadBytes, now, slice.updatedBy || userId]
+    [projectId, userId, version, storedStr, uncompressedBytes, now, slice.updatedBy || userId]
   );
 }
 

@@ -23,7 +23,7 @@ const node = sanitizePersistValueDeep({
   },
 });
 assert.equal(node.data.imagePreview, undefined);
-assert.deepEqual(node.data.referenceImages, ['https://ok']);
+assert.deepEqual(node.data.referenceImages, ['https://ok', '']);
 assert.equal(node.data.generatedThumbnails[0].url, undefined);
 
 const storyboard = sanitizeStoryboardImagesForPersist([
@@ -62,5 +62,26 @@ const ws = sanitizeWorkspacePayload({
 });
 assert.equal(ws.graph.nodes[0].data.imagePreview, undefined);
 assert.equal(ws.graph.storyboardImages.length, 0);
+
+const wsPoster = sanitizeWorkspacePayload({
+  v: 1,
+  graph: {
+    nodes: [
+      {
+        id: 'n2',
+        data: {
+          generatedThumbnails: [
+            {
+              url: 'https://cdn.example/v.mp4',
+              posterDataUrl: '/flowgen-api/projects/1/node-media/x/file',
+            },
+          ],
+        },
+      },
+    ],
+  },
+});
+assert.equal(wsPoster.graph.nodes[0].data.generatedThumbnails[0].posterDataUrl, undefined);
+assert.equal(wsPoster.graph.nodes[0].data.generatedThumbnails[0].url, 'https://cdn.example/v.mp4');
 
 console.log('persist-sanitize-test: ok');

@@ -1,6 +1,6 @@
 import React, { memo, useState, useCallback, useRef, useEffect, useMemo } from 'react';
-import { Handle, Position, NodeProps, useReactFlow, useStore } from 'reactflow';
-import { Image as ImageIcon, GripHorizontal, AlertCircle, Loader2, PlayCircle, Film, Maximize2, Upload, Download, FileText, Layers, Ratio, Monitor, Pause, Folder, ChevronRight, FolderOpen } from 'lucide-react';
+import { Handle, Position, NodeProps, useReactFlow, useStore, useStoreApi } from 'reactflow';
+import { Image as ImageIcon, GripHorizontal, AlertCircle, Loader2, PlayCircle, Film, Maximize2, Upload, Download, FileText, Layers, Ratio, Monitor, Pause, Folder, ChevronRight, FolderOpen, Clock } from 'lucide-react';
 import { NodeType, GenerationParams } from '../../types';
 import { FLOW_MAX_THUMBNAILS_PER_NODE } from '../../utils/flowLimits';
 import { prepareCanvasNodeImagePreview } from '../../utils/imageCompress';
@@ -11,18 +11,32 @@ import {
   isVideoPreviewUrl,
   pickReferenceImagePosterUrl,
 } from '../../utils/hydratePersistedNodePreviews';
-import { remoteMediaUrlPreferSameOriginProxy } from '../../utils/remoteMediaFetch';
+import { resolveCanvasNodePreviewUrl } from '../../utils/referencedMediaRun';
+import { resolvePreferredNodeDownloadUrl } from '../../utils/generatedOutputUrl';
+import { remoteMediaUrlPreferSameOriginProxy, resolveDownloadFetchUrl } from '../../utils/remoteMediaFetch';
 import { resolveNodeDownloadFilename } from '../../utils/nodeDownloadFilename';
+import { buildDownloadTaskFileUrl } from '../../utils/aitopBilling';
 import { captureVideoMiddleFrameQueued } from '../../utils/videoPosterQueue';
 import { materializePosterDataUrl } from '../../utils/workspaceMediaPersist';
-import { startMiddleButtonMediaDrag } from '../../utils/middleButtonMediaDrag';
+import { startMiddleButtonMediaDrag, isMiddleButtonMediaDragActive } from '../../utils/middleButtonMediaDrag';
+import { buildCanvasMiddleDragStartPayload, debugLogCanvasMiddleDragPayload, isAltMiddlePanGesture, resolveCanvasNodeMiddleDragUrl } from '../../utils/canvasMiddleDrag';
+import { logMiddleDrag, summarizeMiddleDragUrl } from '../../utils/middleDragDebug';
 import {
   canvasPreviewLodImageClass,
   maxThumbnailsForLod,
   resolveLodNodePreviewSrc,
-  shouldRenderNodeThumbnailStrip,
-  zoomToCanvasPreviewLod,
 } from '../../utils/canvasPreviewLod';
+import {
+  CANVAS_REFRESH_PAUSE_EVENT,
+  CANVAS_VIEWPORT_MOVING_EVENT,
+  getCanvasRefreshPaused,
+  getCanvasViewportMoving,
+  resolvePreviewLodWithPause,
+  resolveVisibleThumbCountWhenPaused,
+  selectViewportZoomForNode,
+  shouldDeferVideoDecodeWhenPaused,
+  shouldRenderNodeThumbnailsWhenPaused,
+} from '../../utils/canvasRefreshPause';
 import {
   isFlowgenProtectedAssetFileUrl,
   resolveDisplayMediaUrl,
@@ -188,6 +202,7 @@ function normalizeLegacyThumbVideoUrl(raw?: string): string {
 // --- MAIN NODE COMPONENT ---
 const CustomNode = ({ id, data, type, selected }: NodeProps) => {
   const { setNodes, getNodes } = useReactFlow();
+  const storeApi = useStoreApi();
   const [isDragOver, setIsDragOver] = useState(false);
   const [isVideoPlaying, setIsVideoPlaying] = useState(false);
   const videoRef = useRef<HTMLVideoElement>(null);
@@ -195,6 +210,8 @@ const CustomNode = ({ id, data, type, selected }: NodeProps) => {
   const nodeVideoFallbackTriedRef = useRef(false);
   const [visibleThumbCount, setVisibleThumbCount] = useState(THUMBNAIL_INITIAL_RENDER_COUNT);
   const [isDragPerformanceMode, setIsDragPerformanceMode] = useState(false);
+  const [isCanvasRefreshPaused, setIsCanvasRefreshPaused] = useState(() => getCanvasRefreshPaused());
+  const [isCanvasViewportMoving, setIsCanvasViewportMoving] = useState(() => getCanvasViewportMoving());
   const [lodPreviewFallbackFile, setLodPreviewFallbackFile] = useState(false);
   const localImageInputRef = useRef<HTMLInputElement>(null);
 
@@ -219,11 +236,24 @@ const CustomNode = ({ id, data, type, selected }: NodeProps) => {
     }
     return false;
   });
-  /** 仅订阅 zoom（平移不改 transform[2]，避免拖画布时全图节点重渲染） */
-  const viewportZoom = useStore((s) => s.transform[2]);
+  /** 暂停刷新时非选中节点固定 zoom 常量，避免缩放触发全图重渲染 */
+  const viewportZoom = useStore((s) =>
+    selectViewportZoomForNode(
+      s.transform[2],
+      isCanvasRefreshPaused,
+      selected,
+      isCanvasViewportMoving
+    )
+  );
   const previewLod = useMemo(
-    () => zoomToCanvasPreviewLod(viewportZoom, selected),
-    [viewportZoom, selected]
+    () =>
+      resolvePreviewLodWithPause(
+        viewportZoom,
+        selected,
+        isCanvasRefreshPaused,
+        isCanvasViewportMoving
+      ),
+    [viewportZoom, selected, isCanvasRefreshPaused, isCanvasViewportMoving]
   );
   useEffect(() => {
     setLodPreviewFallbackFile(false);
@@ -392,10 +422,46 @@ const CustomNode = ({ id, data, type, selected }: NodeProps) => {
       .filter(Boolean)
       .pop();
 
+    const preferredUrl = resolvePreferredNodeDownloadUrl(data, type as NodeType) || src;
+
     try {
-      // 与 Node Details 一致：有 taskId 时优先走服务端 task 下载，最稳定（避免签名过期/跨域）
+      // 优先节点已持久化成品 URL（与画布一致），避免 task 返回 openApi 低分辨率链
+      if (preferredUrl) {
+        try {
+          const fetchUrl = resolveDownloadFetchUrl(preferredUrl);
+          if (fetchUrl.startsWith('data:') || fetchUrl.startsWith('blob:')) {
+            const directResp = await fetch(fetchUrl);
+            if (!directResp.ok) throw new Error(`Direct source fetch failed: ${directResp.status}`);
+            triggerBlobDownload(await directResp.blob(), filename);
+            return;
+          }
+          if (fetchUrl.startsWith('/proxy-file?') || remoteMediaUrlPreferSameOriginProxy(fetchUrl)) {
+            const proxyTarget = fetchUrl.startsWith('/')
+              ? fetchUrl
+              : `/proxy-file?url=${encodeURIComponent(fetchUrl)}`;
+            const proxyResp = await fetch(proxyTarget);
+            if (!proxyResp.ok) throw new Error(`Proxy download failed: ${proxyResp.status}`);
+            const proxyBlob = await proxyResp.blob();
+            if (!proxyBlob.size) throw new Error('Proxy returned empty file');
+            triggerBlobDownload(proxyBlob, filename);
+            return;
+          }
+          const response = await fetch(fetchUrl, {
+            mode: fetchUrl.startsWith('/') ? 'same-origin' : 'cors',
+            credentials: 'omit',
+            cache: 'no-cache',
+          });
+          if (!response.ok) throw new Error(`Fetch failed: ${response.status}`);
+          triggerBlobDownload(await response.blob(), filename);
+          return;
+        } catch {
+          /* 回退 taskId */
+        }
+      }
+
+      // 有 taskId 时走服务端 task 下载（签名过期时兜底）
       if (latestTaskId) {
-        const taskResp = await fetch(`/download-task-file?taskId=${encodeURIComponent(latestTaskId)}`);
+        const taskResp = await fetch(buildDownloadTaskFileUrl(latestTaskId));
         if (taskResp.ok) {
           const taskBlob = await taskResp.blob();
           if (taskBlob.size > 0) {
@@ -405,9 +471,11 @@ const CustomNode = ({ id, data, type, selected }: NodeProps) => {
         }
       }
 
+      const fetchUrl = resolveDownloadFetchUrl(preferredUrl);
+
       // data/blob URL 可直接下载
-      if (src.startsWith('data:') || src.startsWith('blob:')) {
-        const directResp = await fetch(src);
+      if (fetchUrl.startsWith('data:') || fetchUrl.startsWith('blob:')) {
+        const directResp = await fetch(fetchUrl);
         if (!directResp.ok) throw new Error(`Direct source fetch failed: ${directResp.status}`);
         const directBlob = await directResp.blob();
         triggerBlobDownload(directBlob, filename);
@@ -415,8 +483,11 @@ const CustomNode = ({ id, data, type, selected }: NodeProps) => {
       }
 
       // 对象存储等无 CORS：直接同源代理，避免控制台 CORS 报错与无效直连
-      if (remoteMediaUrlPreferSameOriginProxy(src)) {
-        const proxyResp = await fetch(`/proxy-file?url=${encodeURIComponent(src)}`);
+      if (fetchUrl.startsWith('/proxy-file?') || remoteMediaUrlPreferSameOriginProxy(fetchUrl)) {
+        const proxyTarget = fetchUrl.startsWith('/')
+          ? fetchUrl
+          : `/proxy-file?url=${encodeURIComponent(fetchUrl)}`;
+        const proxyResp = await fetch(proxyTarget);
         if (!proxyResp.ok) throw new Error(`Proxy download failed: ${proxyResp.status}`);
         const proxyBlob = await proxyResp.blob();
         if (!proxyBlob.size) throw new Error('Proxy returned empty file');
@@ -424,8 +495,8 @@ const CustomNode = ({ id, data, type, selected }: NodeProps) => {
         return;
       }
       try {
-        const response = await fetch(src, {
-          mode: 'cors',
+        const response = await fetch(fetchUrl, {
+          mode: fetchUrl.startsWith('/') ? 'same-origin' : 'cors',
           credentials: 'omit',
           cache: 'no-cache',
         });
@@ -434,7 +505,7 @@ const CustomNode = ({ id, data, type, selected }: NodeProps) => {
         triggerBlobDownload(blob, filename);
         return;
       } catch {
-        const proxyUrl = `/proxy-file?url=${encodeURIComponent(src)}`;
+        const proxyUrl = `/proxy-file?url=${encodeURIComponent(fetchUrl)}`;
         const proxyResp = await fetch(proxyUrl);
         if (!proxyResp.ok) {
           throw new Error(`Proxy download failed: ${proxyResp.status}`);
@@ -455,6 +526,57 @@ const CustomNode = ({ id, data, type, selected }: NodeProps) => {
     [type, data.imageName]
   );
 
+  const beginCanvasMiddleDrag = useCallback(
+    (e: React.MouseEvent | React.PointerEvent) => {
+      if (e.button !== 1 || isMiddleButtonMediaDragActive()) return;
+      if (isAltMiddlePanGesture(e.nativeEvent)) return;
+      const previewUrl = resolveCanvasNodeMiddleDragUrl(data, type);
+      if (!previewUrl) {
+        logMiddleDrag('canvas:pointerdown:skip-no-preview-url', {
+          nodeId: id,
+          imageName: data.imageName,
+          hasImagePreview: Boolean(data.imagePreview),
+        });
+        return;
+      }
+      const allNodes = storeApi.getState().getNodes?.() ?? getNodes();
+      const payload = buildCanvasMiddleDragStartPayload({
+        allNodes,
+        sourceNodeId: id,
+        sourceData: data,
+      });
+      if (!payload) {
+        logMiddleDrag('canvas:pointerdown:skip-no-payload', {
+          nodeId: id,
+          previewUrl: summarizeMiddleDragUrl(previewUrl),
+        });
+        return;
+      }
+      debugLogCanvasMiddleDragPayload({ sourceNodeId: id, allNodes, payload });
+      logMiddleDrag('canvas:pointerdown:start', {
+        nodeId: id,
+        x: e.clientX,
+        y: e.clientY,
+        previewUrl: summarizeMiddleDragUrl(previewUrl),
+      });
+      e.preventDefault();
+      e.stopPropagation();
+      startMiddleButtonMediaDrag(e as React.PointerEvent, payload);
+    },
+    [data, getNodes, id, storeApi]
+  );
+
+  const handleNodeMiddleDragStart = useCallback(
+    (e: React.MouseEvent) => {
+      if (e.button !== 1) return;
+      if (isAltMiddlePanGesture(e.nativeEvent)) return;
+      const target = e.target as Element;
+      if (target.closest('.nodrag, button, a, input, textarea, select, [role="combobox"]')) return;
+      beginCanvasMiddleDrag(e);
+    },
+    [beginCanvasMiddleDrag]
+  );
+
   // ????????
   const handleVideoPlay = useCallback(() => {
     setIsVideoPlaying(true);
@@ -469,16 +591,31 @@ const CustomNode = ({ id, data, type, selected }: NodeProps) => {
   }, []);
 
   /** 按视口缩放 LOD：远=占位 / 资产 thumb，近=清晰原图（含 access_token） */
+  const canvasMainPreviewUrl = useMemo(
+    () => resolveCanvasNodePreviewUrl(data),
+    [
+      data.imagePreview,
+      data.panelMainImageUrl,
+      data.referenceImages,
+      data.referenceImageLabels,
+      data.generationParams,
+      data.panelMainSlotVisible,
+      data.prompt,
+      data.selectedModel,
+      data.modelConfigs,
+      data.taskId,
+    ]
+  );
   const displayImagePreview = useMemo(
-    () => resolveLodNodePreviewSrc(data.imagePreview ? String(data.imagePreview) : '', previewLod),
-    [data.imagePreview, previewLod]
+    () => resolveLodNodePreviewSrc(canvasMainPreviewUrl ? String(canvasMainPreviewUrl) : '', previewLod),
+    [canvasMainPreviewUrl, previewLod]
   );
   const mainPreviewSrc = useMemo(() => {
-    if (!lodPreviewFallbackFile || previewLod !== 'low' || !data.imagePreview) {
-      return displayImagePreview || (data.imagePreview ? String(data.imagePreview) : '');
+    if (!lodPreviewFallbackFile || previewLod !== 'low' || !canvasMainPreviewUrl) {
+      return displayImagePreview || (canvasMainPreviewUrl ? String(canvasMainPreviewUrl) : '');
     }
-    return resolveLodNodePreviewSrc(String(data.imagePreview), 'high');
-  }, [displayImagePreview, data.imagePreview, lodPreviewFallbackFile, previewLod]);
+    return resolveLodNodePreviewSrc(String(canvasMainPreviewUrl), 'high');
+  }, [displayImagePreview, canvasMainPreviewUrl, lodPreviewFallbackFile, previewLod]);
   const previewLodImageClass = canvasPreviewLodImageClass(previewLod);
   // 主预览为视频 URL 时（含 processor 上误写的 mp4）：走 <video> + 代理，避免 <img> 裂图
   const mainVideoUrl =
@@ -574,6 +711,12 @@ const CustomNode = ({ id, data, type, selected }: NodeProps) => {
     mainVideoUrl,
     referencePosterUrl
   ]);
+  const deferVideoDecode = shouldDeferVideoDecodeWhenPaused(
+    isCanvasRefreshPaused,
+    selected,
+    !!mainPosterSrc,
+    isVideoPlaying
+  );
   useEffect(() => {
     const onDragPerfMode = (event: Event) => {
       const customEvent = event as CustomEvent<{ active?: boolean }>;
@@ -582,6 +725,26 @@ const CustomNode = ({ id, data, type, selected }: NodeProps) => {
     window.addEventListener('flowgen:drag-perf-mode', onDragPerfMode as EventListener);
     return () => {
       window.removeEventListener('flowgen:drag-perf-mode', onDragPerfMode as EventListener);
+    };
+  }, []);
+  useEffect(() => {
+    const onCanvasRefreshPaused = (event: Event) => {
+      const customEvent = event as CustomEvent<{ active?: boolean }>;
+      setIsCanvasRefreshPaused(Boolean(customEvent.detail?.active));
+    };
+    window.addEventListener(CANVAS_REFRESH_PAUSE_EVENT, onCanvasRefreshPaused as EventListener);
+    return () => {
+      window.removeEventListener(CANVAS_REFRESH_PAUSE_EVENT, onCanvasRefreshPaused as EventListener);
+    };
+  }, []);
+  useEffect(() => {
+    const onViewportMoving = (event: Event) => {
+      const customEvent = event as CustomEvent<{ active?: boolean }>;
+      setIsCanvasViewportMoving(Boolean(customEvent.detail?.active));
+    };
+    window.addEventListener(CANVAS_VIEWPORT_MOVING_EVENT, onViewportMoving as EventListener);
+    return () => {
+      window.removeEventListener(CANVAS_VIEWPORT_MOVING_EVENT, onViewportMoving as EventListener);
     };
   }, []);
   useEffect(() => {
@@ -716,7 +879,7 @@ const CustomNode = ({ id, data, type, selected }: NodeProps) => {
 
   // 大图 poster：只要是 MOV 且当前没有 poster，就截帧写回（与 0327 一致，保证“至少有一张缩略图”）
   useEffect(() => {
-    if (!mainVideoUrl || data.videoPosterDataUrl || isDragPerformanceMode) return;
+    if (!mainVideoUrl || data.videoPosterDataUrl || isDragPerformanceMode || isCanvasRefreshPaused) return;
     let cancelled = false;
     captureVideoMiddleFrameQueued(mainVideoUrl).then(async (poster) => {
       if (cancelled || !poster) return;
@@ -730,14 +893,14 @@ const CustomNode = ({ id, data, type, selected }: NodeProps) => {
     return () => {
       cancelled = true;
     };
-  }, [mainVideoUrl, data.videoPosterDataUrl, isDragPerformanceMode, applyCapturedPosterAcrossGraph]);
+  }, [mainVideoUrl, data.videoPosterDataUrl, isDragPerformanceMode, isCanvasRefreshPaused, applyCapturedPosterAcrossGraph]);
 
   /**
    * 用户点播放后，强制再尝试一次“由当前视频截图”覆盖封面：
    * 即便前面兜底显示了首帧/参考图，也会在可截帧时替换成视频帧，保证最终缩略图来源是视频本身。
    */
   useEffect(() => {
-    if (!isVideoPlaying || !mainVideoUrl) return;
+    if (!isVideoPlaying || !mainVideoUrl || isCanvasRefreshPaused) return;
     let cancelled = false;
     const run = async () => {
       // 优先从已播放的视频元素抓帧（最贴近用户当下看到的画面）
@@ -769,11 +932,11 @@ const CustomNode = ({ id, data, type, selected }: NodeProps) => {
     return () => {
       cancelled = true;
     };
-  }, [isVideoPlaying, mainVideoUrl, applyCapturedPosterAcrossGraph, capturePosterFromPlayingElement]);
+  }, [isVideoPlaying, mainVideoUrl, isCanvasRefreshPaused, applyCapturedPosterAcrossGraph, capturePosterFromPlayingElement]);
 
   // 旧节点兼容：只要选中视频节点就主动尝试截帧，不依赖“节点卡片内播放态”
   useEffect(() => {
-    if (!selected || !mainVideoUrl) return;
+    if (!selected || !mainVideoUrl || isCanvasRefreshPaused) return;
     let cancelled = false;
     const run = async () => {
       const waits = [0, 1200, 2600];
@@ -795,7 +958,7 @@ const CustomNode = ({ id, data, type, selected }: NodeProps) => {
     return () => {
       cancelled = true;
     };
-  }, [selected, mainVideoUrl, applyCapturedPosterAcrossGraph]);
+  }, [selected, mainVideoUrl, isCanvasRefreshPaused, applyCapturedPosterAcrossGraph]);
 
   // ??????? poster ??? generatedThumbnails
   const handleThumbPosterGenerated = useCallback((thumbId: string, dataUrl: string) => {
@@ -822,6 +985,17 @@ const CustomNode = ({ id, data, type, selected }: NodeProps) => {
   // 松手后易与分批揭示状态错乱，表现为「放手后缩略图有时不出来」。
   useEffect(() => {
     const total = thumbnailsForUi.length;
+    if (isCanvasRefreshPaused) {
+      setVisibleThumbCount(
+        resolveVisibleThumbCountWhenPaused(
+          total,
+          true,
+          selected,
+          THUMBNAIL_INITIAL_RENDER_COUNT
+        )
+      );
+      return;
+    }
     if (total <= THUMBNAIL_INITIAL_RENDER_COUNT) {
       setVisibleThumbCount(total);
       return;
@@ -845,7 +1019,7 @@ const CustomNode = ({ id, data, type, selected }: NodeProps) => {
       cancelled = true;
       if (timerId) window.clearTimeout(timerId);
     };
-  }, [thumbnailsForUi.length]);
+  }, [thumbnailsForUi.length, isCanvasRefreshPaused, selected]);
   const visibleThumbnailsForUi = thumbnailsForUi.slice(0, visibleThumbCount);
   const hasThumbnails =
     (isInput || isProcessor || isOutput || isMov) &&
@@ -854,7 +1028,12 @@ const CustomNode = ({ id, data, type, selected }: NodeProps) => {
   /** 与旧版一致：拖动/平移时仍渲染主预览与缩略图（MiniMap 导航与拖入立即可见） */
   const shouldRenderRichPreview = !!data.imagePreview;
   const previewAreaRef = useRef<HTMLDivElement>(null);
-  const shouldRenderThumbnails = hasThumbnails && shouldRenderNodeThumbnailStrip(previewLod);
+  const shouldRenderThumbnails = shouldRenderNodeThumbnailsWhenPaused(
+    hasThumbnails,
+    previewLod,
+    isCanvasRefreshPaused,
+    selected
+  );
   const lodMaxThumbCount = maxThumbnailsForLod(previewLod, thumbnailsForUi.length);
   const visibleThumbnailsLod = visibleThumbnailsForUi.slice(0, lodMaxThumbCount);
   // 极端场景防护：限制同节点同时触发视频截帧的数量，避免解码风暴导致崩溃
@@ -881,7 +1060,9 @@ const CustomNode = ({ id, data, type, selected }: NodeProps) => {
   const defaultBorderClass =
     data.status === 'error'
       ? 'border-red-500'
-      : data.spawnHighlight === 'green'
+      : data.scheduledRunQueued
+        ? 'border-amber-400 hover:border-amber-300 ring-2 ring-amber-400/40'
+        : data.spawnHighlight === 'green'
         ? 'border-green-500 hover:border-green-400'
         : data.spawnHighlight === 'yellow'
           ? 'border-yellow-500 hover:border-yellow-400'
@@ -889,16 +1070,19 @@ const CustomNode = ({ id, data, type, selected }: NodeProps) => {
             ? 'border-red-500 hover:border-red-400'
           : 'border-gray-800 hover:border-gray-700';
 
+  const scheduledQueued = data.scheduledRunQueued === true;
+
   return (
     <div 
       className={`
         relative w-[200px] bg-gray-950 rounded-xl border-2 shadow-xl flex flex-col overflow-visible group transition-all duration-300
-        ${selected ? 'border-brand-500 ring-4 ring-brand-500/20' : defaultBorderClass}
+        ${selected ? `border-brand-500 ring-4 ring-brand-500/20${scheduledQueued ? ' shadow-[inset_0_0_0_2px_rgba(251,191,36,0.55)]' : ''}` : defaultBorderClass}
         ${isDragOver ? '!border-brand-400 !ring-4 !ring-brand-400/50 scale-105 z-50' : ''}
       `}
       data-flowgen-media-drop="1"
       data-flowgen-node-id={id}
       data-flowgen-drop-zone="node-main"
+      onMouseDownCapture={handleNodeMiddleDragStart}
       onDragOver={onDragOver}
       onDragLeave={onDragLeave}
       onDrop={onDrop}
@@ -923,6 +1107,15 @@ const CustomNode = ({ id, data, type, selected }: NodeProps) => {
             <span className="text-[10px] font-bold text-white shadow-sm tracking-wide truncate max-w-[120px]">
               {data.customName?.trim() || data.label}
             </span>
+            {scheduledQueued && (
+              <span
+                className="pointer-events-none flex items-center gap-0.5 text-[9px] font-bold px-1.5 py-0.5 rounded bg-amber-500/95 text-amber-950 shadow-sm shrink-0"
+                title="已加入定时运行队列"
+              >
+                <Clock size={10} strokeWidth={2.5} />
+                定时
+              </span>
+            )}
         </div>
       </div>
 
@@ -932,13 +1125,8 @@ const CustomNode = ({ id, data, type, selected }: NodeProps) => {
       <div
         ref={previewAreaRef}
         className="nopan w-full aspect-[4/3] bg-gray-900 flex items-center justify-center overflow-hidden relative"
-        onPointerDownCapture={(e) => {
-          if (e.button !== 1 || !data.imagePreview) return;
-          startMiddleButtonMediaDrag(e, {
-            url: data.imagePreview,
-            kind: isVideoUrl(data.imagePreview) ? 'video' : 'image',
-            sourceNodeId: id,
-          });
+        onAuxClick={(e) => {
+          if (e.button === 1) e.preventDefault();
         }}
       >
         
@@ -969,11 +1157,12 @@ const CustomNode = ({ id, data, type, selected }: NodeProps) => {
                     className="absolute inset-0 w-full h-full object-cover"
                   />
                 )}
+                {!deferVideoDecode && (
                 <video
                   ref={videoRef}
                   src={nodeVideoSrc || mainVideoDisplaySrc || displayImagePreview}
-                  className="absolute inset-0 w-full h-full object-cover"
-                  preload="auto"
+                  className="absolute inset-0 w-full h-full object-cover pointer-events-none"
+                  preload={isCanvasRefreshPaused && !selected ? 'none' : 'auto'}
                   onError={() => {
                     // 某些客户端代理链路会返回 500/ECONNRESET；失败时自动退回直链再试一次。
                     if (!mainVideoUrl) return;
@@ -992,18 +1181,17 @@ const CustomNode = ({ id, data, type, selected }: NodeProps) => {
                   playsInline
                   style={
                     isVideoPlaying
-                      ? { opacity: 1, zIndex: 0, pointerEvents: 'auto' }
+                      ? { opacity: 1, zIndex: 0 }
                       : mainPosterSrc
-                        ? { opacity: 0, pointerEvents: 'none', zIndex: -1 }
-                        : { opacity: 1, pointerEvents: 'none', zIndex: 0 }
+                        ? { opacity: 0, zIndex: -1 }
+                        : { opacity: 1, zIndex: 0 }
                   }
                 />
-                <div
-                  className="absolute inset-0 flex items-center justify-center cursor-pointer z-10"
-                  onClick={handleVideoPlayPause}
-                >
+                )}
+                <div className="absolute inset-0 flex items-center justify-center z-10 pointer-events-none">
                   <div
-                    className={`bg-black/60 rounded-full p-3 backdrop-blur-sm border border-white/30 transition-all hover:bg-brand-500/90 hover:scale-110 ${isVideoPlaying ? 'opacity-50' : 'opacity-100'}`}
+                    className={`pointer-events-auto cursor-pointer bg-black/60 rounded-full p-3 backdrop-blur-sm border border-white/30 transition-all hover:bg-brand-500/90 hover:scale-110 ${isVideoPlaying ? 'opacity-50' : 'opacity-100'}`}
+                    onClick={handleVideoPlayPause}
                   >
                     {isVideoPlaying ? (
                       <Pause className="text-white w-10 h-10 fill-white/30" />
@@ -1026,7 +1214,7 @@ const CustomNode = ({ id, data, type, selected }: NodeProps) => {
                         setLodPreviewFallbackFile(true);
                       }
                     }}
-                    className={`w-full h-full object-cover ${previewLod === 'high' ? 'transition-transform duration-300 group-hover:scale-105' : ''} ${isMov ? 'opacity-80' : ''} ${previewLodImageClass}`}
+                    className={`w-full h-full object-cover pointer-events-none ${previewLod === 'high' ? 'transition-transform duration-300 group-hover:scale-105' : ''} ${isMov ? 'opacity-80' : ''} ${previewLodImageClass}`}
                 />
                 {/* Play Overlay for MOV nodes (when it's an image, not video) */}
                 {isMov && (
@@ -1193,6 +1381,9 @@ const CustomNode = ({ id, data, type, selected }: NodeProps) => {
                     data: {
                       label: thumb.type === 'video' ? 'Output Mov Node' : 'Output Picture Node',
                       imagePreview: thumb.url,
+                      selectedModel:
+                        (thumb.generationParams as { model?: string } | undefined)?.model ||
+                        undefined,
                       generationParams: thumb.generationParams,
                       firstFrameImage: thumb.generationParams?.firstFrameImage,
                       lastFrameImage: thumb.generationParams?.lastFrameImage,
@@ -1305,6 +1496,8 @@ export default memo(CustomNode, (prevProps, nextProps) => {
     'customName',
     'errorMessage',
     'videoPosterDataUrl',
+    'spawnHighlight',
+    'scheduledRunQueued',
   ];
 
   for (const field of keyFields) {

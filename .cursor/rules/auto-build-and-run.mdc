@@ -1,5 +1,5 @@
 ---
-description: After code changes, auto build and start services for user testing without asking
+description: 
 alwaysApply: true
 ---
 
