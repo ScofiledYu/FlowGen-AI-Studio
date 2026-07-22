@@ -13,6 +13,7 @@ import {
   persistedReferenceImagesForRun,
 } from './panelRefPersistence';
 import {
+  buildPromptMediaRefContextFromNode,
   buildReferenceIndexOptionsFromPlan,
   collectReferencedMediaFromPrompt,
   getNodeInspectorPromptText,
@@ -159,42 +160,102 @@ export function seedanceReferenceCompactRefsIncludeMainLabel(
   return Boolean(referenceImageLabels?.some((l) => String(l || '').trim() === '主图'));
 }
 
-/** 画布节点缩略图：未 @主图 运行后保留主图（panelMainImageUrl 备份）；旧节点 imagePreview 已切到 @ 参考时仍可读 gp */
+/** 画布节点缩略图：未 @主图 运行后 = 首个 @ 参考（§5.7 / §10.38）；主图仅作 panelMainImageUrl 备份 */
 export function resolveCanvasNodePreviewUrl(
   data: Partial<NodeData>,
   projectAssets?: ProjectAssetLabelRow[]
 ): string | undefined {
   const backup = String(data.panelMainImageUrl || '').trim();
   const preview = String(data.imagePreview || '').trim();
-  if (
-    backup &&
-    !isLikelyMainVideoUrl(backup) &&
-    !promptMentionsMainImageForNodeData(data) &&
-    promptMentionsAnyImageRefForNodeData(data)
-  ) {
-    if (preview && !isLikelyMainVideoUrl(preview)) return preview;
-    return backup;
-  }
-
+  const mentionsMain = promptMentionsMainImageForNodeData(data);
+  const mentionsAny = promptMentionsAnyImageRefForNodeData(data);
   const gp = data.generationParams;
   const gpRefs = Array.isArray(gp?.referenceImages)
     ? gp!.referenceImages!.map((u) => String(u || '').trim()).filter(Boolean)
     : [];
-  /** 仅运行后隐藏主图格（panelMainSlotVisible=false / panelMainImageUrl 备份）才用 gp 首项作画布缩略图 */
-  if (
-    gpRefs.length > 0 &&
-    !promptMentionsMainImageForNodeData(data) &&
-    promptMentionsAnyImageRefForNodeData(data) &&
-    (data.panelMainSlotVisible === false || backup)
-  ) {
-    const first = gpRefs[0];
-    if (first && !isLikelyMainVideoUrl(first)) return first;
+  const panelRefs = Array.isArray(data.referenceImages)
+    ? data.referenceImages.map((u) => String(u || '').trim()).filter(Boolean)
+    : [];
+  const runHidMainSlot = data.panelMainSlotVisible === false || Boolean(backup);
+  const previewIsBackup =
+    Boolean(backup) &&
+    Boolean(preview) &&
+    isDuplicateOfMainImagePreview(preview, backup);
+
+  /** 运行后未 @主图：优先运行写入的 imagePreview（换面板参考后仍保留）；若仍等于主图备份则用 gp/首个@参考/面板首张 */
+  if (!mentionsMain && mentionsAny && runHidMainSlot) {
+    if (preview && !isLikelyMainVideoUrl(preview) && !previewIsBackup) {
+      return preview;
+    }
+    // MOV/视频节点：Seedance 参考生画布缩略图优先展示参考视频（@主视频），与 PREVIEW MODE 一致
+    if (preview && isLikelyMainVideoUrl(preview)) {
+      const isSeedanceRef = typeof data.selectedModel === 'string' &&
+        (data.selectedModel.includes('seedance2.0') || data.selectedModel.includes('seedance1.5')) &&
+        data.seedanceGenerationMode === 'reference';
+      if (isSeedanceRef && data.referenceMovs?.length) {
+        const refMovUrl = String(data.referenceMovs[0]?.url || '').trim();
+        if (refMovUrl) return refMovUrl;
+      }
+      // 可灵3.0 Omni 指令变换/视频参考：画布缩略图优先展示参考视频（@主视频）
+      const gpOmni = data.generationParams as any;
+      const omniTab = gpOmni?.klingOmniTab || data.klingOmniTab;
+      const isOmniVideoRef = typeof data.selectedModel === 'string' &&
+        data.selectedModel === '可灵3.0 Omni' &&
+        (omniTab === 'instruction' || omniTab === 'video');
+      if (isOmniVideoRef && data.referenceMovs?.length) {
+        const refMovUrl = String(data.referenceMovs[0]?.url || '').trim();
+        if (refMovUrl) return refMovUrl;
+      }
+      return preview;
+    }
+    const firstGp = gpRefs.find((u) => u && !isLikelyMainVideoUrl(u));
+    if (firstGp) return firstGp;
+    // recovery/未写 preview 补丁时 imagePreview 仍=主图备份：勿误用面板槽0，须取创意描述首个 @ 参考
+    const firstMentioned = firstPersistableMentionedPanelRefUrl(data, projectAssets);
+    if (firstMentioned) return firstMentioned;
+    const firstPanel = panelRefs.find(
+      (u) => u && !isLikelyMainVideoUrl(u) && (!backup || !isDuplicateOfMainImagePreview(u, backup))
+    );
+    if (firstPanel) return firstPanel;
   }
+
+  if (
+    backup &&
+    !isLikelyMainVideoUrl(backup) &&
+    !mentionsMain &&
+    mentionsAny
+  ) {
+    if (preview && !isLikelyMainVideoUrl(preview) && !previewIsBackup) {
+      return preview;
+    }
+    // MOV/视频节点：Seedance 参考生画布缩略图优先展示参考视频
+    if (preview && isLikelyMainVideoUrl(preview)) {
+      const isSeedanceRef = typeof data.selectedModel === 'string' &&
+        (data.selectedModel.includes('seedance2.0') || data.selectedModel.includes('seedance1.5')) &&
+        data.seedanceGenerationMode === 'reference';
+      if (isSeedanceRef && data.referenceMovs?.length) {
+        const refMovUrl = String(data.referenceMovs[0]?.url || '').trim();
+        if (refMovUrl) return refMovUrl;
+      }
+      // 可灵3.0 Omni 指令变换/视频参考：画布缩略图优先展示参考视频（@主视频）
+      const gpOmni = data.generationParams as any;
+      const omniTab = gpOmni?.klingOmniTab || data.klingOmniTab;
+      const isOmniVideoRef = typeof data.selectedModel === 'string' &&
+        data.selectedModel === '可灵3.0 Omni' &&
+        (omniTab === 'instruction' || omniTab === 'video');
+      if (isOmniVideoRef && data.referenceMovs?.length) {
+        const refMovUrl = String(data.referenceMovs[0]?.url || '').trim();
+        if (refMovUrl) return refMovUrl;
+      }
+      return preview;
+    }
+  }
+
   const directMain = String(data.imagePreview || '').trim();
   if (
     directMain &&
     !isLikelyMainVideoUrl(directMain) &&
-    !promptMentionsAnyImageRefForNodeData(data)
+    !mentionsAny
   ) {
     return directMain;
   }
@@ -255,22 +316,33 @@ export function shouldShowPanelMainImageSlot(data: Partial<NodeData>): boolean {
   return Boolean(resolvePanelMainSlotPreviewUrl(data));
 }
 
-/** 运行后重新选中 / 编辑创意描述：有 panelMainImageUrl 备份则须保留主图格 */
+/** 运行后重新选中 / 编辑创意描述：是否允许把 imagePreview 恢复为 panelMainImageUrl 备份 */
 function shouldRestorePanelMainImageSlotForEditing(data: Partial<NodeData>): boolean {
+  const prompt = getNodeInspectorPromptText(data as NodeData).trim();
+  if (prompt) {
+    // 未 @主图、仅有 @图片n/@资产：画布须保持首个 @ 参考（§5.7）；主图格靠 panelMainImageUrl 展示，勿把 imagePreview 盖回主图
+    // （banana-丢图2：restore 误把白泽盖回 imagePreview → 主图与参考「重复」+ 下次生成错乱）
+    if (promptMentionsAnyImageRefForNodeData(data) && !promptMentionsMainImageForNodeData(data)) {
+      return false;
+    }
+    if (promptMentionsMainImageForNodeData(data)) return true;
+  }
   const backup = String(data.panelMainImageUrl || '').trim();
   if (backup && !isLikelyMainVideoUrl(backup)) return true;
   if (panelMainSlotRestorableFromLocalRef(data)) return true;
   const preview = String(data.imagePreview || '').trim();
   if (!preview || isLikelyMainVideoUrl(preview)) return false;
-  const prompt = getNodeInspectorPromptText(data as NodeData).trim();
-  if (prompt) {
-    if (promptMentionsMainImageForNodeData(data)) return true;
-    if (promptMentionsAnyImageRefForNodeData(data)) return false;
-  }
   return true;
 }
 
-/** 编辑创意描述：legacy panelMainSlotVisible=false 但有运行前主图备份时清除隐藏标记 */
+/**
+ * 编辑创意描述：legacy panelMainSlotVisible=false 但有运行前主图备份时清除隐藏标记。
+ * 勿在「运行后未 @主图、imagePreview 已是首个 @ 参考」时清除——否则主图格用失效/备份 blob 冒充，
+ * 且会与参考槽去重叠加成「丢图」（banana-丢图.json / banana-主图是资产库中图片.json）。
+ *
+ * 主图来自资产库时：imagePreview 常为 @图片n 上传 COS，与 refs 偶发 URL 不完全一致；
+ * 仅靠「preview∈refs」不够，须用「preview ≠ 主图备份」判定画布已切到参考图。
+ */
 export function buildPanelMainImagePreservePatchOnEdit(
   data: Partial<NodeData>
 ): Partial<Pick<NodeData, 'panelMainSlotVisible'>> | undefined {
@@ -278,12 +350,55 @@ export function buildPanelMainImagePreservePatchOnEdit(
   if (seedanceReferenceCompactRefsIncludeMainLabel(data)) return undefined;
   const backup = String(data.panelMainImageUrl || '').trim();
   if (!backup || isLikelyMainVideoUrl(backup)) return undefined;
+  const preview = String(data.imagePreview || '').trim();
+  if (
+    preview &&
+    !promptMentionsMainImageForNodeData(data) &&
+    promptMentionsAnyImageRefForNodeData(data)
+  ) {
+    // 画布已切到参考图（≠ 主图备份）→ 保持隐藏，避免随后按 imagePreview 去重掏空参考槽
+    if (!isDuplicateOfMainImagePreview(preview, backup)) {
+      return undefined;
+    }
+    const refs = data.referenceImages || [];
+    if (refs.some((r) => isDuplicateOfMainImagePreview(preview, String(r || '').trim()))) {
+      return undefined;
+    }
+  }
   return { panelMainSlotVisible: undefined };
 }
 
 /** 主图格展示时参考格按主图槽 URL 去重；隐藏主图格时 imagePreview 仅作画布大图，勿去重参考槽 */
 export function shouldDedupePanelRefsAgainstMainPreview(data: Partial<NodeData>): boolean {
   return shouldShowPanelMainImageSlot(data);
+}
+
+/**
+ * 数据层 sync（buildPanelRefSlotSyncPatch）是否按主图去重参考槽。
+ * 当 imagePreview / 主图备份与任一参考槽同素材时禁止清空该槽，否则会出现「主图格隐藏/仅展示主图 + 参考槽被 sync 删掉」双边丢图
+ *（Seedance/image2/Omni；Nano 已强制 false）。
+ */
+export function panelMainOverlapsAnyReferenceSlot(data: Partial<NodeData>): boolean {
+  const refs = livePanelReferenceImages(data) || data.referenceImages || [];
+  if (!refs.length) return false;
+  const candidates = [
+    String(data.panelMainImageUrl || '').trim(),
+    String(resolvePanelMainSlotPreviewUrl(data) || '').trim(),
+    String(data.imagePreview || '').trim(),
+  ].filter((u) => u && !isLikelyMainVideoUrl(u));
+  if (!candidates.length) return false;
+  return refs.some((raw) => {
+    const u = String(raw || '').trim();
+    if (!u) return false;
+    return candidates.some((m) => isDuplicateOfMainImagePreview(u, m));
+  });
+}
+
+/** 展示层可去重；数据层仅在主图与参考槽无重叠时才允许按主图清空槽 */
+export function shouldDedupePanelRefsAgainstMainForSync(data: Partial<NodeData>): boolean {
+  if (!shouldDedupePanelRefsAgainstMainPreview(data)) return false;
+  if (panelMainOverlapsAnyReferenceSlot(data)) return false;
+  return true;
 }
 
 /** 参考格底栏标签用：未展示主图格时不把 imagePreview 当作「主图」去重命名 */
@@ -493,18 +608,218 @@ export function buildPanelImagePreviewPatchAfterRun(
   if (options?.mergedPanelRefs?.length && options.nodeData) {
     // 未 @主图：画布大图=首个 @ 参考图上传 URL（§5.7 原始规则，§10.38 恢复 §10.21）；
     // 面板主图格隐藏 + 备份主图至 panelMainImageUrl（重新选中编辑可恢复）；生成结果仍进 generatedThumbnails / OUTPUT 节点
-    const first = firstUploadedNonMainImageFromPlan(planImages, uploadedByToken);
+    const first =
+      firstUploadedNonMainImageFromPlan(planImages, uploadedByToken) ||
+      options.mergedPanelRefs.map((u) => String(u || '').trim()).find((u) => {
+        if (!u || isLikelyMainVideoUrl(u)) return false;
+        if (preRunMain && isDuplicateOfMainImagePreview(u, preRunMain)) return false;
+        return true;
+      });
     return {
       ...(first ? { imagePreview: first } : {}),
       panelMainSlotVisible: false,
       ...mainBackupPatch,
     };
   }
-  const first = firstUploadedNonMainImageFromPlan(planImages, uploadedByToken);
+  const first =
+    firstUploadedNonMainImageFromPlan(planImages, uploadedByToken) ||
+    undefined;
   return {
     ...(first ? { imagePreview: first, panelMainSlotVisible: false } : {}),
     ...mainBackupPatch,
   };
+}
+
+/** 可写入 gp / 画布的参考 URL（排除 blob/data 临时链） */
+export function isPersistablePanelReferenceUrl(url: string | undefined): boolean {
+  const u = String(url || '').trim();
+  if (!u || isLikelyMainVideoUrl(u)) return false;
+  if (u.startsWith('blob:') || /^data:/i.test(u)) return false;
+  return true;
+}
+
+/**
+ * 从创意描述 @ 引用解析可持久化参考图列表（Nano / image2 刷新恢复用）。
+ * 仅含 @ 到的素材；URL 优先 plan，其次面板槽（上传后 COS / 资产库）。
+ */
+export function pickStillImageRecoveryApiReferenceImages(
+  data: Partial<NodeData>,
+  projectAssets?: ProjectAssetLabelRow[]
+): { referenceImages: string[]; referenceImageLabels?: string[] } | null {
+  const model = String(data.selectedModel || '').trim();
+  if (!isNanoBanana2Model(model) && !isImage2Model(model)) return null;
+  const d = data as NodeData;
+  const prompt = getNodeInspectorPromptText(d).trim();
+  if (!prompt) return null;
+  const ctx = {
+    ...buildPromptMediaRefContextFromNode(d),
+    ...(projectAssets?.length ? { projectAssets } : {}),
+  };
+  const plan = collectReferencedMediaFromPrompt(prompt, d, ctx, new Map(), projectAssets);
+  if (!plan.images.length) return null;
+  const panelRefs = d.referenceImages || [];
+  const images: string[] = [];
+  const labels: string[] = [];
+  for (const e of plan.images) {
+    let u = String(e.url || '').trim();
+    if (!isPersistablePanelReferenceUrl(u) && e.refImageSlotIndex != null && e.refImageSlotIndex >= 0) {
+      u = String(panelRefs[e.refImageSlotIndex] || '').trim();
+    }
+    if (!isPersistablePanelReferenceUrl(u)) continue;
+    images.push(u);
+    const lab = String(e.label || '').trim();
+    labels.push(
+      lab || (MAIN_IMAGE_REF_TOKENS.has(e.token) ? '主图' : e.token.replace(/^@/, ''))
+    );
+  }
+  if (!images.length) return null;
+  return {
+    referenceImages: images,
+    ...(labels.some((l) => l.trim()) ? { referenceImageLabels: labels } : {}),
+  };
+}
+
+/** 画布：创意描述首个可持久化 @ 参考（非主图备份） */
+export function firstPersistableMentionedPanelRefUrl(
+  data: Partial<NodeData>,
+  projectAssets?: ProjectAssetLabelRow[]
+): string | undefined {
+  const picked = pickStillImageRecoveryApiReferenceImages(data, projectAssets);
+  if (picked?.referenceImages?.length) {
+    const backup = String(data.panelMainImageUrl || '').trim();
+    const first = picked.referenceImages.find((u) => {
+      if (!isPersistablePanelReferenceUrl(u)) return false;
+      if (backup && isDuplicateOfMainImagePreview(u, backup)) return false;
+      return true;
+    });
+    if (first) return first;
+  }
+  // 非 Nano/image2 或 pick 未覆盖：仍按 plan 扫面板
+  const d = data as NodeData;
+  const prompt = getNodeInspectorPromptText(d).trim();
+  if (!prompt || !promptMentionsAnyImageRefForNodeData(data)) return undefined;
+  if (promptMentionsMainImageForNodeData(data)) return undefined;
+  const ctx = {
+    ...buildPromptMediaRefContextFromNode(d),
+    ...(projectAssets?.length ? { projectAssets } : {}),
+  };
+  const plan = collectReferencedMediaFromPrompt(prompt, d, ctx, new Map(), projectAssets);
+  const panelRefs = livePanelReferenceImages(data) || data.referenceImages || [];
+  const backup = String(data.panelMainImageUrl || '').trim();
+  for (const e of plan.images) {
+    if (MAIN_IMAGE_REF_TOKENS.has(e.token)) continue;
+    let u = String(e.url || '').trim();
+    if (!isPersistablePanelReferenceUrl(u) && e.refImageSlotIndex != null && e.refImageSlotIndex >= 0) {
+      u = String(panelRefs[e.refImageSlotIndex] || '').trim();
+    }
+    if (!isPersistablePanelReferenceUrl(u)) continue;
+    if (backup && isDuplicateOfMainImagePreview(u, backup)) continue;
+    return u;
+  }
+  return undefined;
+}
+
+/**
+ * 刷新恢复 / 加载修复：Nano·image2 未 @主图 时补齐运行后主图预览态
+ *（imagePreview=首个@参考、panelMainSlotVisible=false、panelMainImageUrl=主图备份）。
+ * banana-丢图3：recovery 只写了 taskId/outputUrl，未走正常 run 的 preview 补丁。
+ */
+export function buildStillImageRecoveryPanelPreviewPatch(
+  data: Partial<NodeData>,
+  projectAssets?: ProjectAssetLabelRow[]
+): Partial<Pick<NodeData, 'imagePreview' | 'panelMainSlotVisible' | 'panelMainImageUrl'>> | undefined {
+  const model = String(data.selectedModel || '').trim();
+  if (!isNanoBanana2Model(model) && !isImage2Model(model)) return undefined;
+  const hasTask = Boolean(
+    String(data.taskId || data.generationParams?.taskId || '').trim()
+  );
+  if (!hasTask) return undefined;
+  if (promptMentionsMainImageForNodeData(data)) return undefined;
+  if (!promptMentionsAnyImageRefForNodeData(data)) return undefined;
+
+  const d = data as NodeData;
+  const prompt = getNodeInspectorPromptText(d).trim();
+  const ctx = {
+    ...buildPromptMediaRefContextFromNode(d),
+    ...(projectAssets?.length ? { projectAssets } : {}),
+  };
+  const plan = collectReferencedMediaFromPrompt(prompt, d, ctx, new Map(), projectAssets);
+  if (!plan.images.length) return undefined;
+
+  const panelRefs = [...(d.referenceImages || [])];
+  const uploadedByToken = new Map<string, string>();
+  for (const e of plan.images) {
+    let u = String(e.url || '').trim();
+    if (!isPersistablePanelReferenceUrl(u) && e.refImageSlotIndex != null && e.refImageSlotIndex >= 0) {
+      u = String(panelRefs[e.refImageSlotIndex] || '').trim();
+    }
+    if (isPersistablePanelReferenceUrl(u)) uploadedByToken.set(e.token, u);
+  }
+  if (!uploadedByToken.size) return undefined;
+
+  const patch = buildPanelImagePreviewPatchAfterRun(plan.images, uploadedByToken, {
+    nodeData: data,
+    mergedPanelRefs: panelRefs,
+    mergedPanelLabels: d.referenceImageLabels,
+    projectAssets,
+  });
+  if (!patch.imagePreview && patch.panelMainSlotVisible !== false) return undefined;
+
+  const preview = String(data.imagePreview || '').trim();
+  const backup = String(data.panelMainImageUrl || '').trim();
+  const alreadyOk =
+    data.panelMainSlotVisible === false &&
+    Boolean(patch.imagePreview) &&
+    isDuplicateOfMainImagePreview(preview, String(patch.imagePreview || '')) &&
+    (!backup || !isDuplicateOfMainImagePreview(preview, backup));
+  if (alreadyOk) return undefined;
+  return patch;
+}
+
+/**
+ * 加载/恢复：gp 缺 referenceImages 时从面板 @ 引用补齐（仅 Nano / image2）。
+ */
+export function repairStillImageGenerationParamsFromPanel(
+  data: Partial<NodeData>,
+  projectAssets?: ProjectAssetLabelRow[]
+): Partial<GenerationParams> | undefined {
+  const model = String(data.selectedModel || data.generationParams?.model || '').trim();
+  if (!isNanoBanana2Model(model) && !isImage2Model(model)) return undefined;
+  const prev = (data.generationParams || {}) as GenerationParams;
+  const prevRefs = Array.isArray(prev.referenceImages)
+    ? prev.referenceImages.map((u) => String(u || '').trim()).filter(Boolean)
+    : [];
+  const picked = pickStillImageRecoveryApiReferenceImages(
+    { ...data, selectedModel: model },
+    projectAssets
+  );
+  if (!picked?.referenceImages.length && prevRefs.length) return undefined;
+
+  const patch: Partial<GenerationParams> = {};
+  if (!prevRefs.length && picked?.referenceImages.length) {
+    patch.referenceImages = [...picked.referenceImages];
+    if (picked.referenceImageLabels?.length) {
+      patch.referenceImageLabels = [...picked.referenceImageLabels];
+    }
+  }
+  if (isNanoBanana2Model(model)) {
+    if (!String(prev.aspectRatio || '').trim()) {
+      patch.aspectRatio = String(data.aspectRatio || '1:1');
+    }
+    if (!String(prev.resolution || '').trim()) {
+      patch.resolution = String(data.resolution || '1K');
+    }
+    if (!String(prev.numberOfImages || '').trim()) {
+      patch.numberOfImages = String(data.numberOfImages || '1张');
+    }
+  }
+  if (isImage2Model(model)) {
+    if (!String(prev.image2AspectRatio || prev.aspectRatio || '').trim()) {
+      patch.image2AspectRatio = String(data.image2AspectRatio || '1:1');
+      patch.aspectRatio = patch.image2AspectRatio;
+    }
+  }
+  return Object.keys(patch).length ? patch : undefined;
 }
 
 /** 运行后节点大图：先走 @主图/参考图规则，否则用首尾帧上传结果（按 plan 是否 @ 到） */
@@ -754,6 +1069,8 @@ export function shouldUseSlotOriginalFileForUpload(
   if (entry.token.startsWith('@资产:')) return false;
   const slot = String(slotUrl || '').trim();
   if (!slot) return false;
+  // 槽位已是 data: 预览时以面板 URL 上传；originals File 可能过期或串槽（banana-问题3 @图片4 与图片3 同图）
+  if (/^data:image\//i.test(slot)) return false;
   const compareUrl = String(resolvedUploadUrl || entry.url || '').trim();
   if (!compareUrl) return false;
   if (
@@ -943,12 +1260,12 @@ export function pickSeedanceReferencePanelSnapshot(data: Partial<NodeData>): {
   const refTab = data.seedanceTabConfigs?.reference as
     | { referenceImages?: string[]; referenceImageLabels?: string[] }
     | undefined;
+  // 保持原始槽位结构（含空槽），让 buildSeedanceReferenceDetailsFromSnapshot 按索引对齐 URL 与标签，
+  // 避免只压缩 URL 导致标签错位（seedance2.json 缺图问题）。
   const referenceImages = (
     refTab?.referenceImages?.length ? refTab.referenceImages : data.referenceImages
-  )
-    ?.map((u) => String(u || '').trim())
-    .filter(Boolean);
-  if (!referenceImages?.length) return { referenceImages: [] };
+  )?.map((u) => String(u || '').trim());
+  if (!referenceImages?.some((u) => u)) return { referenceImages: [] };
   const referenceImageLabels = refTab?.referenceImageLabels?.length
     ? refTab.referenceImageLabels
     : data.referenceImageLabels;
@@ -959,10 +1276,16 @@ export function pickSeedanceReferencePanelSnapshot(data: Partial<NodeData>): {
 }
 
 function seedanceReferenceSnapshotUrlsMatch(a: string[], b: string[]): boolean {
-  if (a.length !== b.length) return false;
-  return a.every(
-    (u, i) => normalizePanelReferenceUrlKey(u) === normalizePanelReferenceUrlKey(b[i] || '')
-  );
+  // 过滤空值、blob:、data: 等临时 URL，仅比较 COS http(s) URL 集合，
+  // 防止面板含 blob/data 临时链接触发 gp 覆盖，破坏已压缩的 @引用顺序。
+  const isComparableUrl = (u: string) => {
+    const s = String(u || '').trim();
+    return s && /^https?:\/\//.test(s);
+  };
+  const setA = new Set(a.filter(isComparableUrl).map((u) => normalizePanelReferenceUrlKey(u)));
+  const setB = new Set(b.filter(isComparableUrl).map((u) => normalizePanelReferenceUrlKey(u)));
+  if (setA.size !== setB.size) return false;
+  return [...setA].every((u) => setB.has(u));
 }
 
 /**

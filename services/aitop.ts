@@ -42,11 +42,11 @@ function withScoreProjectId(payload: object): object {
   return payload;
 }
 
-/** 默认关闭；控制台执行 `window.__FLOWGEN_DEBUG_PRELOAD__ = true` 开启 preload JSON 日志 */
+/** 浏览器默认开启；控制台执行 `window.__FLOWGEN_DEBUG_PRELOAD__ = false` 可关闭 preload JSON 日志 */
 export function isPreloadDebugEnabled(): boolean {
   if (typeof window === 'undefined') return false;
   const w = window as Window & { __FLOWGEN_DEBUG_PRELOAD__?: boolean };
-  return w.__FLOWGEN_DEBUG_PRELOAD__ === true;
+  return w.__FLOWGEN_DEBUG_PRELOAD__ !== false;
 }
 
 /** 控制台打印 JSON preload（每次发往 AITOP 只打一条，含 domainAccount / scoreProjectId） */

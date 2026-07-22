@@ -78,6 +78,45 @@ describe('generatedOutputUrl', () => {
     expect(url.startsWith('blob:')).toBe(false);
   });
 
+  it('multi-output nodes should have distinct gp.outputUrl per node', () => {
+    const img0 =
+      'https://aitop100app-1251510006.cos.ap-shanghai.myqcloud.com/imagesGenerations/out-0.png';
+    const img1 =
+      'https://aitop100app-1251510006.cos.ap-shanghai.myqcloud.com/imagesGenerations/out-1.png';
+
+    // 模拟一次运行 spawn 出的两个 OUTPUT 节点：各自 gp.outputUrl 指向对应结果
+    const node0 = {
+      selectedModel: 'Nano Banana 2.0',
+      imagePreview: img0,
+      taskId: '1662365, 1662366',
+      generationParams: {
+        model: 'Nano Banana 2.0',
+        taskId: '1662365, 1662366',
+        outputUrl: img0,
+        outputUrls: [img0, img1],
+        numberOfImages: '2张',
+      },
+    };
+    const node1 = {
+      selectedModel: 'Nano Banana 2.0',
+      imagePreview: img1,
+      taskId: '1662365, 1662366',
+      generationParams: {
+        model: 'Nano Banana 2.0',
+        taskId: '1662365, 1662366',
+        outputUrl: img1,
+        outputUrls: [img0, img1],
+        numberOfImages: '2张',
+      },
+    };
+
+    expect(resolveNodeDetailsSourceUrl(node0, NodeType.OUTPUT)).toBe(img0);
+    expect(resolveNodeDetailsSourceUrl(node1, NodeType.OUTPUT)).toBe(img1);
+    expect(resolveNodeDetailsSourceUrl(node0, NodeType.OUTPUT)).not.toBe(
+      resolveNodeDetailsSourceUrl(node1, NodeType.OUTPUT)
+    );
+  });
+
   it('pickGeneratedOutputUrlFromNodeData reads thumbnails', () => {
     const url = pickGeneratedOutputUrlFromNodeData(
       {

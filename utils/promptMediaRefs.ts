@@ -436,16 +436,16 @@ export function buildReferenceImageDetailItemsFromPanel(
           preferAssetDisplayNameOverGenericLabel(data.referenceImageLabels?.[i], u) ||
           panelReferenceSlotLabel(i, refs, labelMain, 'seedanceSlot');
         const displayUrl = projectAssets?.length
-          ? resolvePanelReferenceSlotDisplayUrl(u, slotLabel, projectAssets)
-          : u;
-        items.push({
-          url: displayUrl,
-          label: slotLabel,
-        });
-      }
-      return appendPromptReferencedAssetDetailItems(items, data, projectAssets);
-    }
-    if (mode === 'image') {
+	      ? resolvePanelReferenceSlotDisplayUrl(u, slotLabel, projectAssets)
+	      : u;
+	    items.push({
+	      url: displayUrl,
+	      label: slotLabel,
+	    });
+	  }
+	  return appendPromptReferencedAssetDetailItems(items, data, projectAssets);
+	}
+	if (mode === 'image') {
       const tab = data.seedanceTabConfigs?.image;
       const first = String(
         data.firstFrameImageUrl ||
@@ -491,14 +491,14 @@ export function buildReferenceImageDetailItemsFromPanel(
         preferAssetDisplayNameOverGenericLabel(data.referenceImageLabels?.[i], u) ||
         panelReferenceSlotLabel(i, refs, labelMain, 'panelSlot');
       const displayUrl = projectAssets?.length
-        ? resolvePanelReferenceSlotDisplayUrl(u, slotLabel, projectAssets)
-        : u;
-      items.push({ url: displayUrl, label: slotLabel });
-    }
-    return appendPromptReferencedAssetDetailItems(items, data, projectAssets);
-  }
+	    ? resolvePanelReferenceSlotDisplayUrl(u, slotLabel, projectAssets)
+	    : u;
+	  items.push({ url: displayUrl, label: slotLabel });
+	}
+	return appendPromptReferencedAssetDetailItems(items, data, projectAssets);
+      }
 
-  if (model === '即梦3.0 Pro') {
+      if (model === '即梦3.0 Pro') {
     const mentionsMain = promptMentionsMainImageForNodeData(data);
     const first = String(data.firstFrameImageUrl || data.firstFrameImage || '').trim();
     if (first) {
@@ -660,7 +660,8 @@ export function resolveSeedanceReferenceMainVideoUrl(
 
   if (outputUrl && isLikelyMainVideoUrl(outputUrl)) {
     if (soleMov && isSameMediaUrl(soleMov, outputUrl)) return soleMov;
-    return outputUrl;
+    // 仅当 referenceMovs 中有 outputUrl 时才视为参考主视频；
+    // 无 referenceMovs 时 outputUrl 仅为生成结果，非参考视频，避免误将 @主图 变为 @主视频
   }
 
   return undefined;
@@ -2183,8 +2184,11 @@ export function resolveProjectAssetUrlFromTokenKey(
   if (direct) return direct;
   if (!assets?.length) return undefined;
   const row = assets.find((a) => a.slug === key || a.name.trim() === key);
-  if (!row?.slug) return undefined;
-  return bySlug.get(row.slug)?.trim();
+  if (!row) return undefined;
+  const fromSlug = row.slug?.trim() ? bySlug.get(row.slug.trim())?.trim() : undefined;
+  if (fromSlug) return fromSlug;
+  /** recovery / Details：仅有 projectAssets[].url、slug map 未建时仍须解析 @资产 */
+  return row.url?.trim() || undefined;
 }
 
 export function collectProjectAssetUrlsFromPrompt(
@@ -3148,11 +3152,24 @@ export function promptMentionsMainImageForNodeData(data: Partial<NodeData>): boo
   return plan.images.some((e) => e.token === '@主图' || e.token === '@主体');
 }
 
+/** 创意描述是否含图片类 @ token 字面量（不依赖资产库能否 resolve；导出 JSON / 刷新无 projectAssets 时仍须为 true） */
+export function promptTextHasImageMediaMention(prompt: string | undefined): boolean {
+  const t = String(prompt || '');
+  return (
+    /@主图\b|@主体\b/.test(t) ||
+    /@图片\d*\b/.test(t) ||
+    /@首帧图\b|@尾帧图\b/.test(t) ||
+    /@资产:[^\s@]+/.test(t)
+  );
+}
+
 /** 创意描述是否 @ 到任意图片类引用（@图片n / @资产 / @首帧图 等，不含纯文本） */
 export function promptMentionsAnyImageRefForNodeData(data: Partial<NodeData>): boolean {
   const d = data as NodeData;
   const prompt = getNodeInspectorPromptText(d).trim();
   if (!prompt) return false;
+  // 纯 @资产:名 在无 projectAssets 时 collect 可能解析不出 plan.images，但仍算「有图片类 @」（§5.7 画布缩略图）
+  if (promptTextHasImageMediaMention(prompt)) return true;
   const plan = collectReferencedMediaFromPrompt(
     prompt,
     d,
@@ -3616,7 +3633,8 @@ export function getCanonicalInspectorPromptText(
   step = repairPromptStraySlotLabelDuplicates(step, data, projectAssets);
   step = remapPromptMainImageToAssetToken(step, data, projectAssets);
   step = remapPromptFrameTokensToAssetTokens(step, data, projectAssets);
-  return remapPromptPanelImageTokensToAssetTokens(step, data, ctx, projectAssets);
+  step = remapPromptPanelImageTokensToAssetTokens(step, data, ctx, projectAssets);
+  return step;
 }
 
 /**

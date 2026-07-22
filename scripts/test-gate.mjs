@@ -38,6 +38,19 @@ const steps = [
   { label: 'all-models-three-requirements', cmd: 'npm', args: ['run', 'test:all-models-three-requirements'] },
   { label: '20260709-seedance-ref-images', cmd: 'npm', args: ['run', 'test:20260709-seedance-ref-images'] },
   { label: '20260709-seedance-video1-mention', cmd: 'npm', args: ['run', 'test:20260709-seedance-video1-mention'] },
+  { label: '20260709-seedance-main-dup-ref-panel', cmd: 'npm', args: ['run', 'test:20260709-seedance-main-dup-ref-panel'] },
+  { label: '20260709-all-models-main-dup-ref-panel', cmd: 'npm', args: ['run', 'test:20260709-all-models-main-dup-ref-panel'] },
+  { label: '20260710-seedance-asset-thumb', cmd: 'npm', args: ['run', 'test:20260710-seedance-asset-thumb'] },
+  { label: '20260710-all-models-asset-thumb', cmd: 'npm', args: ['run', 'test:20260710-all-models-asset-thumb'] },
+  { label: '20260710-banana-panel-loss', cmd: 'npm', args: ['run', 'test:20260710-banana-panel-loss'] },
+  { label: '20260710-banana-restore-dup', cmd: 'npm', args: ['run', 'test:20260710-banana-restore-dup'] },
+  { label: '20260710-four-mention-all-models', cmd: 'npm', args: ['run', 'test:20260710-four-mention-all-models'] },
+  { label: '20260710-asset-main-all-models', cmd: 'npm', args: ['run', 'test:20260710-asset-main-all-models'] },
+  { label: '20260710-banana-run-gp-at-mention', cmd: 'npm', args: ['run', 'test:20260710-banana-run-gp-at-mention'] },
+  { label: '20260710-asset-mention-details-recovery', cmd: 'npm', args: ['run', 'test:20260710-asset-mention-details-recovery'] },
+  { label: '20260713-export-json-main-image', cmd: 'npm', args: ['run', 'test:20260713-export-json-main-image'] },
+  { label: '20260714-seedance-reference-consistency', cmd: 'npm', args: ['run', 'test:20260714-seedance-reference-consistency'] },
+  { label: '20260715-seedance-unreferenced-filter', cmd: 'npm', args: ['run', 'test:20260715-seedance-unreferenced-filter'] },
 ];
 
 console.log('=== FlowGen test:gate（回归门禁）===\n');

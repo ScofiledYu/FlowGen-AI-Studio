@@ -1,0 +1,179 @@
+{
+  "nodes": [
+    {
+      "id": "node_0_1783922001453",
+      "type": "processorNode",
+      "position": {
+        "x": -1417.5212709936136,
+        "y": 44303.66267416395
+      },
+      "data": {
+        "label": "Input Picture Node",
+        "imagePreview": "https://aitop100app-1251510006.cos.ap-shanghai.myqcloud.com/openApi/212508/8cdbc6d8-15fc-4cc9-bd87-a1f23c97b22b.png",
+        "imageLocalRef": "flowgen-local:dd73b906-2dd5-40be-a70d-762fba12e36e_14:node_0_1783922001453:main",
+        "selectedModel": "image 2",
+        "imageName": "asset.sa004002ctw2.art_ref.祠堂外2（黄昏）.jpg",
+        "modelConfigs": {
+          "Nano Banana 2.0": {},
+          "image2": {
+            "prompt": "@主图参考@图片1的风格生产",
+            "negativePrompt": "",
+            "referenceImages": [
+              "https://aitop100app-1251510006.cos.ap-shanghai.myqcloud.com/openApi/212508/c2f1bc63-b984-4103-aac1-389be1532eac.png"
+            ],
+            "referenceImageLabels": [
+              "图片1"
+            ],
+            "numberOfImages": "1张",
+            "image2Style": "natural",
+            "image2AspectRatio": "16:9",
+            "image2ImageSize": "2048x1152",
+            "imagePreview": "https://aitop100app-1251510006.cos.ap-shanghai.myqcloud.com/openApi/212508/8cdbc6d8-15fc-4cc9-bd87-a1f23c97b22b.png",
+            "panelMainSlotVisible": true
+          }
+        },
+        "prompt": "@主图参考@图片1的风格生产",
+        "negativePrompt": "",
+        "numberOfImages": "1张",
+        "referenceImages": [
+          "https://aitop100app-1251510006.cos.ap-shanghai.myqcloud.com/openApi/212508/c2f1bc63-b984-4103-aac1-389be1532eac.png"
+        ],
+        "referenceImageLabels": [
+          "图片1"
+        ],
+        "panelMainSlotVisible": true,
+        "image2AspectRatio": "16:9",
+        "image2ImageSize": "2048x1152",
+        "image2Style": "natural",
+        "status": "completed",
+        "progress": 100,
+        "taskId": "1568695",
+        "generationParams": {
+          "taskId": "1568695",
+          "generatedAt": "2026-07-13T05:54:49.947Z",
+          "prompt": "@主图参考@图片1的风格生产",
+          "negativePrompt": "",
+          "numberOfImages": "1张",
+          "referenceImages": [
+            "https://aitop100app-1251510006.cos.ap-shanghai.myqcloud.com/openApi/212508/8cdbc6d8-15fc-4cc9-bd87-a1f23c97b22b.png",
+            "https://aitop100app-1251510006.cos.ap-shanghai.myqcloud.com/openApi/212508/c2f1bc63-b984-4103-aac1-389be1532eac.png"
+          ],
+          "model": "image 2",
+          "image2AspectRatio": "16:9",
+          "image2ImageSize": "2048x1152",
+          "image2Style": "natural",
+          "aspectRatio": "16:9",
+          "resolution": "2048x1152"
+        },
+        "generatedAt": "2026-07-13T05:54:49.947Z",
+        "generatedThumbnails": [
+          {
+            "id": "node_1_1783922089952",
+            "url": "https://aitop100app-1251510006.cos.ap-shanghai.myqcloud.com/imagesGenerations/5b5c4518-e9c7-4fc4-bb54-0bfe50f52730.png",
+            "type": "image",
+            "nodeId": "node_1_1783922089952",
+            "name": "Generated_955.png",
+            "generationParams": {
+              "generatedAt": "2026-07-13T05:54:49.947Z",
+              "taskId": "1568695",
+              "prompt": "@主图参考@图片1的风格生产",
+              "negativePrompt": "",
+              "numberOfImages": "1张",
+              "referenceImages": [
+                "https://aitop100app-1251510006.cos.ap-shanghai.myqcloud.com/openApi/212508/8cdbc6d8-15fc-4cc9-bd87-a1f23c97b22b.png",
+                "https://aitop100app-1251510006.cos.ap-shanghai.myqcloud.com/openApi/212508/c2f1bc63-b984-4103-aac1-389be1532eac.png"
+              ],
+              "model": "image 2",
+              "image2AspectRatio": "16:9",
+              "image2ImageSize": "2048x1152",
+              "image2Style": "natural",
+              "aspectRatio": "16:9",
+              "resolution": "2048x1152"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "id": "node_1_1783922089952",
+      "type": "outputNode",
+      "position": {
+        "x": -1067.5212709936136,
+        "y": 44304.36256811941
+      },
+      "data": {
+        "prompt": "@主图参考@图片1的风格生产",
+        "negativePrompt": "",
+        "imagePreview": "https://aitop100app-1251510006.cos.ap-shanghai.myqcloud.com/imagesGenerations/5b5c4518-e9c7-4fc4-bb54-0bfe50f52730.png",
+        "referenceImages": [
+          "https://aitop100app-1251510006.cos.ap-shanghai.myqcloud.com/openApi/212508/8cdbc6d8-15fc-4cc9-bd87-a1f23c97b22b.png",
+          "https://aitop100app-1251510006.cos.ap-shanghai.myqcloud.com/openApi/212508/c2f1bc63-b984-4103-aac1-389be1532eac.png"
+        ],
+        "referenceImageLabels": [
+          "图片1",
+          ""
+        ],
+        "numberOfImages": "1张",
+        "image2Style": "natural",
+        "image2AspectRatio": "16:9",
+        "image2ImageSize": "2048x1152",
+        "modelConfigs": {
+          "Nano Banana 2.0": {},
+          "image2": {
+            "prompt": "@主图参考@图片1的风格生产",
+            "negativePrompt": "",
+            "numberOfImages": "1张",
+            "referenceImages": [
+              "https://aitop100app-1251510006.cos.ap-shanghai.myqcloud.com/openApi/212508/8cdbc6d8-15fc-4cc9-bd87-a1f23c97b22b.png",
+              "https://aitop100app-1251510006.cos.ap-shanghai.myqcloud.com/openApi/212508/c2f1bc63-b984-4103-aac1-389be1532eac.png"
+            ],
+            "image2Style": "natural",
+            "image2AspectRatio": "16:9",
+            "image2ImageSize": "2048x1152"
+          }
+        },
+        "status": "idle",
+        "progress": 0,
+        "generationParams": {
+          "generatedAt": "2026-07-13T05:54:49.947Z",
+          "taskId": "1568695",
+          "prompt": "@主图参考@图片1的风格生产",
+          "negativePrompt": "",
+          "numberOfImages": "1张",
+          "referenceImages": [
+            "https://aitop100app-1251510006.cos.ap-shanghai.myqcloud.com/openApi/212508/8cdbc6d8-15fc-4cc9-bd87-a1f23c97b22b.png",
+            "https://aitop100app-1251510006.cos.ap-shanghai.myqcloud.com/openApi/212508/c2f1bc63-b984-4103-aac1-389be1532eac.png"
+          ],
+          "model": "image 2",
+          "image2AspectRatio": "16:9",
+          "image2ImageSize": "2048x1152",
+          "image2Style": "natural",
+          "aspectRatio": "16:9",
+          "resolution": "2048x1152"
+        },
+        "label": "Output Picture Node",
+        "selectedModel": "image 2",
+        "generatedAt": "2026-07-13T05:54:49.947Z",
+        "imageName": "Generated_955.png",
+        "taskId": "1568695",
+        "aspectRatio": "16:9",
+        "resolution": "2048x1152"
+      }
+    }
+  ],
+  "edges": [
+    {
+      "id": "enode_0_1783922001453-node_1_1783922089952-1783922089952-0",
+      "source": "node_0_1783922001453",
+      "target": "node_1_1783922089952",
+      "animated": true,
+      "style": {
+        "stroke": "#6366f1",
+        "strokeWidth": 2
+      }
+    }
+  ],
+  "exportedAt": "2026-07-13T05:55:06.427Z",
+  "nodeCount": 2,
+  "edgeCount": 1
+}

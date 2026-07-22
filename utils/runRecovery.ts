@@ -1,5 +1,5 @@
 import type { Edge, Node as RFNode } from 'reactflow';
-import { NodeType, type GenerationParams, type NodeData } from '../types';
+import { NodeType, isImage2Model, isNanoBanana2Model, type GenerationParams, type NodeData } from '../types';
 import {
   parseAiTopTaskIds,
   isVideoModelName,
@@ -14,7 +14,13 @@ import {
   pickSeedanceReferencePanelSnapshot,
   repairSeedanceReferenceGenerationParamsFromPanel,
   repairSeedanceReferencePanelMainSlotIfNeeded,
+  pickStillImageRecoveryApiReferenceImages,
+  buildStillImageRecoveryPanelPreviewPatch,
 } from './referencedMediaRun';
+import {
+  resolveSpawnOutputDefaultModel,
+  buildStillImageOutputSpawnPatch,
+} from './spawnOutputNode';
 
 export function normalizeNodeRunStateForPersist<T extends { data?: NodeData }>(node: T): T {
   if (!node.data || node.data.status !== 'running') return node;
@@ -665,7 +671,10 @@ export function prepareNodesAfterWorkspaceLoad(
   });
   const { nodes: seedanceRepaired, changed: seedanceChanged } =
     applyWorkspaceSeedanceReferenceGpRepair(prepared, edges);
-  return { nodes: seedanceRepaired, changed: changed || seedanceChanged };
+  return {
+    nodes: seedanceRepaired,
+    changed: changed || seedanceChanged,
+  };
 }
 
 /** 刷新后单次查询：任务若已在 AiTop 侧完成则直接取 URL，避免先闪 running 进度条 */
@@ -1003,6 +1012,38 @@ export function mergeRecoveryGenerationParamsFromRunNode(
     return mergeKlingOmniRecoveryGenerationParams(d, prev, merged, patch);
   }
 
+  if (isNanoBanana2Model(model) || isImage2Model(model)) {
+    const patchRefs = Array.isArray(patch.referenceImages)
+      ? patch.referenceImages.map((u) => String(u || '').trim()).filter(Boolean)
+      : [];
+    const picked = pickStillImageRecoveryApiReferenceImages({
+      ...d,
+      selectedModel: model,
+    });
+    if (patchRefs.length) {
+      merged.referenceImages = [...patchRefs];
+    } else if (picked?.referenceImages.length) {
+      merged.referenceImages = [...picked.referenceImages];
+      if (picked.referenceImageLabels?.length) {
+        merged.referenceImageLabels = [...picked.referenceImageLabels];
+      }
+    } else {
+      merged.referenceImages = undefined;
+      merged.referenceImageLabels = undefined;
+    }
+    if (isNanoBanana2Model(model)) {
+      merged.aspectRatio = merged.aspectRatio ?? d.aspectRatio ?? '1:1';
+      merged.resolution = merged.resolution ?? d.resolution ?? '1K';
+      merged.numberOfImages = merged.numberOfImages ?? d.numberOfImages ?? '1张';
+    }
+    if (isImage2Model(model)) {
+      merged.image2AspectRatio =
+        merged.image2AspectRatio ?? d.image2AspectRatio ?? '1:1';
+      merged.aspectRatio = merged.aspectRatio ?? merged.image2AspectRatio;
+    }
+    return merged;
+  }
+
   if (!['seedance2.0 (高质量版)', 'seedance2.0 (急速版)'].includes(model)) {
     return merged;
   }
@@ -1127,6 +1168,11 @@ export function buildRecoveryGraphUpdates(params: BuildRecoveryGraphParams): {
       : `Generated_${Math.floor(Math.random() * 1000)}.png`;
 
     if (!existingOutputUrls.has(urlKey)) {
+      const outModel = resolveSpawnOutputDefaultModel({
+        isVideoModel: isVideo,
+        currentModelName: model,
+      });
+      const stillPatch = buildStillImageOutputSpawnPatch(runNode.data, outModel);
       const outNode: RFNode = {
         id: newNodeId,
         type: nodeType,
@@ -1135,11 +1181,12 @@ export function buildRecoveryGraphUpdates(params: BuildRecoveryGraphParams): {
           label,
           imagePreview: mediaUrl,
           imageName,
-          selectedModel: isVideo ? model : '可灵 2.5 Turbo',
+          selectedModel: outModel,
           status: 'idle',
           generatedAt: generatedAtIso,
           taskId: taskIdJoined,
           generationParams: { ...generationParams },
+          ...stillPatch,
         },
       };
       newNodes.push(outNode);
@@ -1183,8 +1230,17 @@ export function buildRecoveryGraphUpdates(params: BuildRecoveryGraphParams): {
 
     let nextData = { ...n.data };
     if (isRunNode) {
+      const previewPatch = buildStillImageRecoveryPanelPreviewPatch({
+        ...nextData,
+        generationParams: {
+          ...(nextData.generationParams || {}),
+          ...(recoveryGenerationParams ||
+            mergeRecoveryGenerationParamsFromRunNode(runNode, recoveryPatchBase)),
+        },
+      });
       nextData = clearRunRecoveryHints({
         ...nextData,
+        ...(previewPatch || {}),
         status: 'completed' as const,
         progress: 100,
         errorMessage: undefined,

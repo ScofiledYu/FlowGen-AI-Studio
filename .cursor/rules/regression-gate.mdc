@@ -5,7 +5,7 @@ alwaysApply: true
 
 # 回归门禁（test:gate）
 
-> 四大验收域（模型 UI 面板 / 生成结果 / 拖拽 / Node Details）见根目录 `skill.md` **§5.9**；S 级勿改见 **§5.8**；Chat 身份/联网见 **§5.10**。
+> 四大验收域（模型 UI 面板 / 生成结果 / 拖拽 / Node Details）见根目录 `skill.md` **§5.9**；S 级勿改见 **§5.8**（含 **§5.8.5 @资产 plan + gp空 Details recovery**、**§5.8.7 二次运行 prompt 不写回**）；Chat 身份/联网见 **§5.10**；preload / 主图=参考槽 / Backdrop 缩放见 **§5.11**；Node Details ←→ 整份历史见 **§5.12**；**导出 JSON 跨机器主图 hydrate 见 §5.13**。
 
 ## 何时必须跑
 
@@ -35,10 +35,12 @@ alwaysApply: true
 - `utils/seedance20ModelSwitch.ts`（Seedance tab 快照含 `referenceElementIds`，**§5.8.4**）
 - `utils/persistSanitize.mjs`（`referenceElementIds` / Omni eids 槽位数组，**§5.8.4**）
 - `utils/middleButtonMediaDrag.ts` / `utils/canvasMiddleDrag.ts` / `utils/inspectorMediaDrop.ts`（画布/Inspector 拖拽）
+- `utils/generatedThumbKeyboardNav.ts`（Node Details ←→ 整份 Generated Outputs 历史，**§5.12 已验收**）
+- `utils/hydratePersistedNodePreviews.ts`（导入/刷新 hydrate 主预览；**§5.13 导出 JSON 跨机器主图**）
 
 ## 改 bug 时的范围约束
 
-- **已验收勿改**：改面板/切模型/tab 前必读根目录 `skill.md` **§5.8** + **§5.9**；禁止顺手改 Omni 主图共用、image2 切模型主图保留、per-model IDB 隔离逻辑、**§5.8.4 Inspector 中键/Shift 框选拖入去重**（`referenceElementIds` / `klingOmni*ReferenceElementIds`、`nodeDataRef` 读 eids、单次 `onUpdate`、拖入串行队列）。
+- **已验收勿改**：改面板/切模型/tab 前必读根目录 `skill.md` **§5.8** + **§5.9** + **§5.11** + **§5.12** + **§5.13**；禁止顺手改 Omni 主图共用、image2 切模型主图保留、per-model IDB 隔离逻辑、**§5.8.4 Inspector 中键/Shift 框选拖入去重**（`referenceElementIds` / `klingOmni*ReferenceElementIds`、`nodeDataRef` 读 eids、单次 `onUpdate`、拖入串行队列）、**§5.8.5 @资产 row.url 回退 + gp空 Details recovery**（`resolveProjectAssetUrlFromTokenKey`、`pickStillImageRecoveryApiReferenceImages`、`buildStillImageGenNodeDetailsReferencePreview`；禁止 gp 空 Details 全量面板）、**§5.8.7 二次运行 prompt 不写回**（`handleNodeRun` 禁止 `updateNodeDataById(promptCanonPatch)`；Seedance 禁止运行中/收尾 `refTab.prompt = getCanonical…`；六模型 Inspector 须保持 `getNodeInspectorPromptText` 原文）、**§5.11.2 sync 用 `shouldDedupePanelRefsAgainstMainPreview` 清空同 URL 参考槽**、**§5.11.3 去掉 Backdrop 手柄 `pointer-events-auto` / resizer CSS**、**§5.11.1 preload 默认关闭**、**§5.12 左右键只换预览 URL / 去掉 `previewActiveThumbId` 历史锁**、**§5.13 已持久化 COS 主预览 hydrate 勿清空**。
 - **一次只修一类问题**；用户未要求时不要顺手 refactor 其它模型/ tab。
 - 先对照 skill 决策树确认：改的是「面板态 / 运行快照 / Node Details 展示」中的哪一种；**只动对应文件**。
 - 每个用户报告的 bug，优先在对应脚本 **加一条命名回归用例**（fixture 放 `scripts/fixtures/`，见 §5.9.3）：
@@ -55,6 +57,7 @@ alwaysApply: true
   - 跨模型契约 → `model-media-contract-test.ts`
   - 运行后 gp / 刷新 recovery → `src/test/utils/runRecovery.test.ts` + `referencedMediaRun.test.ts`
   - Backdrop 组名 → `src/test/utils/backdropLabel.test.ts`
+  - **Backdrop 四角无法缩放（§5.11.3）** → `backdropLabel.test.ts`（`backdropResizeHandleNeedsPointerEventsAuto`）；禁止去掉手柄 `pointer-events-auto` / resizer CSS
   - image2 比例/尺寸 → `scripts/image2-model-aspect-size-test.ts`
   - 下载成品 URL 优先级（imagesGenerations/videosGenerations vs openApi）→ `scripts/download-result-url-ranking-test.ts` + `src/test/utils/generatedOutputUrl.test.ts`
   - Omni 视频 @资产-only 面板去重 / Details 标签 → `panel-ref-media-simulation-test.ts` §130 + `node-details-simulation-test.ts` §10d
@@ -66,10 +69,22 @@ alwaysApply: true
   - **Inspector 中键/Shift 框选重复拖入多槽 / 本地 1 张双槽 / 串行 batch 丢 eids（§5.8.4 已验收）** → `npm run test:2026070802-omni-panel-dedup` + `src/test/utils/omniPanelInspectorDropDedup.test.ts` + `test:panel-dedup-same-element`；**禁止**去掉 `canvas:{nodeId}` 或改回读 React `data` prop
   - **Seedance @图片n 上传串图（槽 COS + 过期 originals File）** → `scripts/20260709-seedance-ref-images-verify-test.ts` + `referencedMediaRun.test.ts`
   - **Seedance MOV @主视频 非 @视频1** → `scripts/20260709-seedance-video1-mention-test.ts` + `seedanceMainVideoLabel.test.ts`
+  - **Seedance 参考生运行后主图=参考槽同 URL 丢图（§5.11.2）** → `scripts/20260709-seedance-main-dup-ref-panel-test.ts`
+  - **全模型主图=参考槽同 URL / sync 清空（§5.11.2）** → `scripts/20260709-all-models-main-dup-ref-panel-test.ts`；**禁止** sync 直接用 `shouldDedupePanelRefsAgainstMainPreview`
+  - **Seedance 纯@资产未@主图画布仍显示主图（§5.7）** → `scripts/20260710-seedance-asset-thumb-test.ts`
+  - **Node Details ←→ 只换视频不换整份面板（§5.12 已验收）** → `src/test/utils/generatedThumbKeyboardNav.test.ts`；**禁止**只改 `imagePreview`、禁止历史态被 live MOV sync 覆盖、禁止去掉 `previewActiveThumbId`
+  - **Banana 运行后主图裂图 / preserve 误清 false（banana-丢图）** → `scripts/20260710-banana-panel-loss-test.ts`；**禁止**在 imagePreview 已是参考槽时 `buildPanelMainImagePreservePatchOnEdit` 清掉 `panelMainSlotVisible=false`
+  - **Banana/全模型 未@主图 restore 误盖回主图（banana-丢图2）** → `scripts/20260710-banana-restore-dup-test.ts`；**禁止** `shouldRestorePanelMainImageSlotForEditing` 仅凭有 `panelMainImageUrl` 就 restore
+  - **4 种引用方式 × 全模型（banana-丢图2/正常）** → `scripts/20260710-four-mention-all-models-test.ts`（@图片n 部分/@图片n 多槽/@主图+@图片/@资产+@图片）
+  - **主图=资产库 + @图片n 丢图（banana-主图是资产库中图片）** → `scripts/20260710-asset-main-all-models-test.ts`；**禁止** `referenceImagesDedupePatchIfNeeded` 用运行后 `imagePreview`（首个@参考）当主图去重
+  - **banana 无@运行 gp 误写面板全量（banana-源/问题）** → `scripts/20260710-banana-run-gp-at-mention-test.ts` + `runRecovery.test.ts`；**禁止** Nano/image2 无 snapshot 时把 `mergedRefImages` strip 后写入 gp
+  - **banana-问题4 gp 空 + @资产+@图片3 Details 少一张（§5.8.5·S级）** → `scripts/20260710-asset-mention-details-recovery-test.ts` + `projectAssetUrlFromTokenKey.test.ts` + fixtures `20260710-banana-source-9slot.json` / `20260710-banana-problem4-asset-pic3.json`；**禁止** `resolveProjectAssetUrlFromTokenKey` 无 slug map 时忽略 `projectAssets[].url`；**禁止** Nano/image2 gp 空 Details 回退全量面板
+  - **二次运行创意描述 @ 引用不 rewrite（§5.8.7·S级）** → `20260710-banana-run-gp-at-mention-test.ts` §8–§9 + vitest `promptRerunCanonical.test.ts`（Nano/image2/Omni/Seedance/即梦/vidu）；**禁止** `handleNodeRun` 写回 canonical prompt；**禁止** Seedance 运行中/收尾 `refTab.prompt = getCanonical…`
+  - **导出 JSON 跨机器 INPUT 主图 EMPTY（§5.13）** → `scripts/20260713-export-json-main-image-persist-test.ts` + fixture `20260713-export-json-main-image-persist.json` + vitest `hydratePersistedNodePreviews.test.ts`；**禁止** `hydrateNodeImagePreviewFromPersisted` 在 `@主图` + 已持久化 COS `imagePreview` 时误清空走 IDB
 
-## test:gate 步骤（`scripts/test-gate.mjs`，33 步）
+## test:gate 步骤（`scripts/test-gate.mjs`，44 步）
 
-1. vitest（含拖入去重、Details 标签 vitest）
+1. vitest（含拖入去重、Details 标签、**§5.12 `generatedThumbKeyboardNav`**、**§5.8.7 `promptRerunCanonical`**）
 2. test:node-details
 3. test:panel-refs
 4. **test:panel-partial-ref** — 全模型：面板保留未@ + Details 仅 @ + 运行后新拖入可@
@@ -102,8 +117,19 @@ alwaysApply: true
 31. **test:all-models-three-requirements**（§5.9 三诉求总矩阵）
 32. **test:20260709-seedance-ref-images**
 33. **test:20260709-seedance-video1-mention**
+34. **test:20260709-seedance-main-dup-ref-panel**（§5.11.2 Seedance 主图=参考槽）
+35. **test:20260709-all-models-main-dup-ref-panel**（§5.11.2 全模型展示+sync）
+36. **test:20260710-seedance-asset-thumb**（§5.7 纯@资产画布≠主图）
+37. **test:20260710-all-models-asset-thumb**（全模型纯@资产/@图片n 画布≠主图）
+38. **test:20260710-banana-panel-loss**（Banana 运行后 preserve 误清 panelMainSlotVisible）
+39. **test:20260710-banana-restore-dup**（Banana/全模型 未@主图 restore 误盖回主图）
+40. **test:20260710-four-mention-all-models**（4 种引用方式 × Nano/image2/Omni/Seedance）
+41. **test:20260710-asset-main-all-models**（主图=资产库 × @图片n/@资产/@主图 × 全模型）
+42. **test:20260710-banana-run-gp-at-mention**（banana 无@：gp 勿写面板全量；有@：画布=首参考 + recovery OUTPUT 继承 Nano；**§5.8.7** §8–§9 六模型二次运行 Inspector prompt 不写回）
+43. **test:20260710-asset-mention-details-recovery**（banana-源/问题4 fixture + 用户 JSON；@资产+@图片3 × 四模型 plan/面板/Details recovery）
+44. **test:20260713-export-json-main-image**（§5.13 导出 JSON 跨机器：@主图 + COS imagePreview 勿 hydrate 清空）
 
-**vitest 步**另含：`omniPanelInspectorDropDedup.test.ts`（§5.8.4）、`omniMainVideoLabel.test.ts`、`referenceVideoDetail.test.ts`、`runRecovery.test.ts`、`panelMainSlotPrompt.test.ts`、`referencedMediaRun.test.ts`（上传 File 规则）、`middleButtonMediaDrag` / `canvasMiddleDrag` / `inspectorMediaDrop`（拖拽）。
+**vitest 步**另含：`omniPanelInspectorDropDedup.test.ts`（§5.8.4）、`omniMainVideoLabel.test.ts`、`referenceVideoDetail.test.ts`、`runRecovery.test.ts`（含 Nano recovery）、`panelMainSlotPrompt.test.ts`、`referencedMediaRun.test.ts`（上传 File 规则）、**`projectAssetUrlFromTokenKey.test.ts`（@资产 row.url 回退）**、**`promptRerunCanonical.test.ts`（§5.8.7 六模型二次运行 prompt）**、`middleButtonMediaDrag` / `canvasMiddleDrag` / `inspectorMediaDrop`（拖拽）、**`generatedThumbKeyboardNav`（§5.12）**、**`hydratePersistedNodePreviews`（§5.13 导出 JSON 主图）**。
 
 修改 `utils/batchRunQueue.ts` 时须跑 gate（含 batch-run-schedule 步）。
 
@@ -143,7 +169,7 @@ npm run build
 
 ## 改 Chat / 大语言模型时
 
-> 已验收勿改见根目录 `skill.md` **§5.10**（身份/问候关联网、probe 不串历史、身份 tip 按需、四模式）。
+> 已验收勿改见根目录 `skill.md` **§5.10**（身份/问候关联网、probe 不串历史、身份 tip 按需、**§5.10.4 展示/模式开关**、四模式）。
 
 修改 `ChatPanel.tsx`、`utils/assistantMessageLayout.ts`、`utils/webSearchProbe.ts`、`server.js` 的 `/aitop-llm-see` 或 Chat 相关代理时：
 
@@ -151,13 +177,16 @@ npm run build
 npm run test:chat-gate
 ```
 
-`test:chat-gate` **已含**：layout、chat-pipeline、probe（离线）、**llm-chat-identity-contract（§5.10）**、llm-model-contract。
+`test:chat-gate` **已含**：layout、chat-pipeline、**llm-chat-display-contract（§5.10.4）**、probe（离线）、**llm-chat-identity-contract（§5.10）**、llm-model-contract。
 
-**触碰 §5.10 时额外约束：**
+**触碰 §5.10 / §5.10.4 时额外约束：**
 
 - 禁止问候/身份问仍走联网首轮（须 `effectiveWebSearch` 驱动）
 - 禁止每轮 tip 强制「禁止自称 Claude/GPT…」长约束；身份 tip **仅**身份问注入
 - 禁止 probe 对非检索句拼历史话题
+- **禁止**未开联网/思考时误显 `[联网检索]`/`[思考过程]` 或 `allowWebSearchExtractFromMain` compose 默认 true
+- **禁止**关思考时正文泄漏英文 CoT（`**Assessing**` 等）或 summarize retry 硬编码 `thinking: true`
+- **禁止**嵌套过程标记 parse 丢正文；禁止有 raw 流时跳过 `recoverAssistantReplyFromRaw` / `rawFallback` 校验
 
 **新增/修改 LLM 注册**（`AI_MODELS`、`normalizeModelId`、`sendByModel`、fallback）时，**除 chat-gate 外必须跑**：
 

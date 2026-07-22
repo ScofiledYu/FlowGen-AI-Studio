@@ -37,6 +37,10 @@ export function isLikelyVideoMediaUrl(
   const u = String(url || '').trim();
   if (!u) return false;
   if (isVideoPreviewUrl(u)) return true;
+  // 如果 URL 本身明确是图片格式，不因 imageName 等 hint 误判为视频
+  // 修复：MOV 节点 imagePreview 为 PNG 但 imageName 为 .mov 时，movPreviewLooksComplete 误判导致
+  // hydrateMovNodesFromUpstream 跳过视频 URL 继承，PREVIEW MODE / 画布缩略图无法播放
+  if (/\.(png|jpe?g|webp|gif|bmp|svg)(\?|$)/i.test(u)) return false;
   if (hints?.nodeType === NodeType.MOV || hints?.nodeType === NodeType.OUTPUT) {
     if (isFlowgenNodeMediaFileUrl(u)) return true;
     const name = String(hints.imageName || '');
@@ -273,11 +277,16 @@ export function hydrateNodeImagePreviewFromPersisted<
       ? gp!.referenceImages!.map((u) => String(u || '').trim()).filter(Boolean)
       : [];
     const ref0 = String(panelRefs[0] || gpRefs[0] || '').trim();
-    if (
+    const looksLikePanelFirstRef = Boolean(ref0 && current === ref0);
+    const matchesGpRef = gpRefs.some((r) => isDuplicateOfMainImagePreview(current, r));
+    /** 跨机器 JSON：@主图 + 已持久化 COS 主预览须保留；仅剥离「面板首参考槽 / 非持久化 gp 参考 URL」以走 IDB */
+    /** panelMainSlotVisible===false 时，imagePreview 已是运行后切换的参考图，不应清空 */
+    const panelMainHidden = (node.data as { panelMainSlotVisible?: boolean }).panelMainSlotVisible === false;
+    const shouldClearForLocalMainRestore =
       !current ||
-      gpRefs.some((r) => isDuplicateOfMainImagePreview(current, r)) ||
-      (ref0 && current === ref0)
-    ) {
+      (looksLikePanelFirstRef && !panelMainHidden) ||
+      (!isPersistableMediaUrl(current) && matchesGpRef);
+    if (shouldClearForLocalMainRestore) {
       return { ...node, data: { ...node.data, imagePreview: '' } };
     }
   }

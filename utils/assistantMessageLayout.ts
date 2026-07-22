@@ -211,8 +211,20 @@ export function parseAssistantMessage(text: string): AssistantMessageSections {
     const nextMain = rest.slice(0, idx).trimEnd();
     const nextMarkerIdx = block.search(/\n\n\[(?:联网检索|思考过程)\]\n/);
     const body = (nextMarkerIdx >= 0 ? block.slice(0, nextMarkerIdx) : block).trim();
-    if (marker === ASSISTANT_MARKER_WEB_SEARCH) webSearch = body;
-    else thinking = body;
+    if (marker === ASSISTANT_MARKER_WEB_SEARCH) {
+      webSearch = webSearch ? `${webSearch}\n\n${body}`.trim() : body;
+    } else {
+      thinking = thinking ? `${thinking}\n\n${body}`.trim() : body;
+    }
+    if (nextMarkerIdx >= 0) {
+      const tail = block.slice(nextMarkerIdx);
+      const tailMatch = tail.match(/^\n\n\[(联网检索|思考过程)\]\n([\s\S]*)$/);
+      if (tailMatch) {
+        const tailBody = tailMatch[2].trim();
+        if (tailMatch[1] === '联网检索' && !webSearch) webSearch = tailBody;
+        else if (tailMatch[1] === '思考过程' && !thinking) thinking = tailBody;
+      }
+    }
     rest = nextMain;
   };
 
@@ -557,6 +569,13 @@ function isLikelyFinalAnswerStartLine(line: string): boolean {
   if (/^以下(是|为|将)/.test(t)) return true;
   if (/^综上[，,]/.test(t)) return true;
   if (/^#{1,3}\s+[^#]/.test(t) && !/思考|分析搜索|组织回答|检索过程/.test(t)) return true;
+  // Gemini 思考模式下常见的答案起始标记
+  if (/^最终[的的]?.*(?:结果|答案|计算|路程|距离|总)[：:]/u.test(t)) return true;
+  if (/^总共.*(?:为|是)[：:]?/u.test(t)) return true;
+  if (/^根据(?:以上)?(?:分析|计算|推导)[，,]/u.test(t)) return true;
+  if (/^答[：:]/u.test(t)) return true;
+  if (/^答案为[：:]/u.test(t)) return true;
+  if (/^#{1,3}\s*(?:最终|答案|结果|总结)/u.test(t)) return true;
   return false;
 }
 
@@ -772,15 +791,130 @@ export function extractThinkingBlockFromMain(main: string): { main: string; thin
   return { main: tail || text, thinking: head };
 }
 
+/**
+ * Gemini 思考模式降级提取：AiTop API 不返回独立的 thinkingContent 字段，
+ * 思考内容混在正文中。尝试在长文本中找「结论/答案」标记作为拆分点。
+ * 仅当文本 >200 字符且有明确结论标记时才拆分，避免误伤普通回答。
+ */
+function extractGeminiFallbackThinking(main: string): { main: string; thinking: string } {
+  const text = (main || '').replace(/\r\n/g, '\n').trim();
+  if (text.length < 200) return { main: text, thinking: '' };
+
+  const lines = text.split('\n');
+  // 从后往前找「结论」或「答案」标记（更可能出现在末尾）
+  const conclusionPatterns = [
+    /^\*\*结论\*\*/,
+    /^\*\*答案\*\*/,
+    /^\*\*总结[^*]*\*\*/,
+    /^\*\*最终[^*]*\*\*/,
+    /^结论[：:]/,
+    /^答案[：:]/,
+    /^总结[：:]/,
+    /^所以[，,]/,
+    /^因此[，,]/,
+    /^综上所述[，,]/,
+    /^第\d+次落地时[，,]/,
+    // Gemini 思考模式下更多答案起始标记
+    /^最终[的的]?.*(?:结果|答案|计算|路程|距离|总)[：:]/u,
+    /^总共.*(?:为|是)[：:]?/u,
+    /^根据(?:以上)?(?:分析|计算|推导)[，,]/u,
+    /^答[：:]/u,
+    /^答案为[：:]/u,
+    /^#{1,3}\s*(?:最终|答案|结果|总结)/u,
+  ];
+
+  let conclusionIdx = -1;
+  for (let i = lines.length - 1; i >= 1; i--) {
+    const ln = lines[i].trim();
+    if (!ln) continue;
+    if (conclusionPatterns.some((p) => p.test(ln))) {
+      conclusionIdx = i;
+      break;
+    }
+  }
+
+  if (conclusionIdx <= 0) return { main: text, thinking: '' };
+
+  const thinking = lines.slice(0, conclusionIdx).join('\n').trim();
+  const answer = lines.slice(conclusionIdx).join('\n').trim();
+
+  // 确保思考部分足够长（至少 80 字符）且答案部分不太短
+  if (thinking.length < 80 || answer.length < 8) {
+    return { main: text, thinking: '' };
+  }
+
+  // 确保思考部分有实质内容（不是纯标题）
+  const thinkingZh = (thinking.match(/[\u4e00-\u9fa5]/g) || []).length;
+  if (thinkingZh < 10) return { main: text, thinking: '' };
+
+  return { main: answer, thinking };
+}
+
+/**
+ * 思考关闭时：剥离正文里泄漏的英文/中文推理前缀，仅保留面向用户的回答。
+ * 不误伤「Hello + 中文自我介绍」等无思考特征行的正常双语正文。
+ */
+export function stripLeakedThinkingFromMainWhenDisabled(main: string): string {
+  const text = (main || '').replace(/\r\n/g, '\n').trim();
+  if (!text) return text;
+
+  const extracted = extractThinkingBlockFromMain(text);
+  const tail = (extracted.main || '').trim();
+  const head = (extracted.thinking || '').trim();
+  if (!head || !tail || tail === text) return text;
+
+  const tailLooksLikeAnswer =
+    /[\u4e00-\u9fff]{4,}/.test(tail) ||
+    tail.split('\n').some((ln) => isLikelyFinalAnswerStartLine(ln.trim())) ||
+    looksLikeChineseStructuredAnswer(tail);
+
+  if (!tailLooksLikeAnswer) return text;
+  if (isLikelyTooShortMainAnswer(tail) && !/[\u4e00-\u9fff]{6,}/.test(tail)) return text;
+  return tail;
+}
+
+/**
+ * 未开联网/思考时：把过程区正文合并回 main，避免误存/误显 [联网检索]/[思考过程] 卡片。
+ */
+export function flattenAssistantSectionsWhenProcessDisabled(
+  sections: AssistantMessageSections,
+  opts?: { webSearchEnabled?: boolean; thinkingEnabled?: boolean }
+): AssistantMessageSections {
+  const webSearchEnabled = opts?.webSearchEnabled !== false;
+  const thinkingEnabled = opts?.thinkingEnabled !== false;
+  let main = (sections.main || '').trim();
+  let webSearch = (sections.webSearch || '').trim();
+  let thinking = (sections.thinking || '').trim();
+
+  if (!webSearchEnabled && webSearch) {
+    main = [main, webSearch].filter(Boolean).join('\n\n').trim();
+    webSearch = '';
+  }
+  if (!thinkingEnabled && thinking) {
+    main = [main, thinking].filter(Boolean).join('\n\n').trim();
+    thinking = '';
+  }
+  if (!thinkingEnabled && main) {
+    main = stripLeakedThinkingFromMainWhenDisabled(main);
+  }
+  return { main, webSearch, thinking };
+}
+
 /** 展示/渲染前：若缺少 [思考过程] 标记，尝试从正文再拆一次（兼容旧消息与 Gemini 中文思考） */
-export function resolveAssistantDisplaySections(text: string): AssistantMessageSections {
+export function resolveAssistantDisplaySections(
+  text: string,
+  opts?: { allowLegacyThinkingExtract?: boolean }
+): AssistantMessageSections {
   const first = parseAssistantMessage(text || '');
   if (first.thinking.trim() || !first.main.trim()) return first;
+  if (!opts?.allowLegacyThinkingExtract) return first;
+  // 未开联网时不从正文启发式抽检索块，避免误显 [联网检索] 卡片
   const normalized = normalizeAssistantStream({
     content: text || '',
     apiReasoning: '',
     collectApiReasoning: false,
-    allowWebSearchExtractFromMain: true,
+    allowWebSearchExtractFromMain: false,
+    allowThinkingExtractFromMain: true,
   });
   if (normalized.thinking.trim()) return normalized;
   return first;
@@ -820,6 +954,8 @@ export function normalizeAssistantStream(params: {
   skipExtractThinkingFromMain?: boolean;
   /** 仅在启用联网搜索时，才从正文启发式抽取检索过程，避免把思考误判为检索 */
   allowWebSearchExtractFromMain?: boolean;
+  /** 仅在启用思考时，才从正文启发式拆思考块（展示层兼容旧消息可显式 true） */
+  allowThinkingExtractFromMain?: boolean;
 }): AssistantMessageSections {
   const parsed = parseAssistantMessage(params.content || '');
   let main = parsed.main;
@@ -839,10 +975,38 @@ export function normalizeAssistantStream(params: {
   }
 
   const hasApiReasoning = !!(params.apiReasoning || '').trim();
-  if (!params.skipExtractThinkingFromMain && !(params.collectApiReasoning && hasApiReasoning)) {
-    const th = extractThinkingBlockFromMain(main);
-    main = th.main;
-    thinking = thinking ? `${thinking}\n\n${th.thinking}`.trim() : th.thinking;
+  const allowThinkingExtract =
+    params.allowThinkingExtractFromMain ?? !!params.collectApiReasoning;
+  if (
+    allowThinkingExtract &&
+    !params.skipExtractThinkingFromMain &&
+    !(params.collectApiReasoning && hasApiReasoning)
+  ) {
+    // Gemini 思考模式（开了思考但 API 没返回独立 thinkingContent）：优先用结论标记拆分
+    const isGeminiThinkingFallback = params.collectApiReasoning && !hasApiReasoning;
+    if (isGeminiThinkingFallback) {
+      const geminiFallback = extractGeminiFallbackThinking(main);
+      if (geminiFallback.thinking.trim()) {
+        main = geminiFallback.main;
+        thinking = thinking
+          ? `${thinking}\n\n${geminiFallback.thinking}`.trim()
+          : geminiFallback.thinking;
+      } else {
+        // Gemini 降级未命中结论标记，回退到通用思考提取
+        const th = extractThinkingBlockFromMain(main);
+        if (th.thinking.trim()) {
+          main = th.main;
+          thinking = thinking ? `${thinking}\n\n${th.thinking}`.trim() : th.thinking;
+        }
+      }
+    } else {
+      // 非 Gemini 模式：通用思考提取
+      const th = extractThinkingBlockFromMain(main);
+      if (th.thinking.trim()) {
+        main = th.main;
+        thinking = thinking ? `${thinking}\n\n${th.thinking}`.trim() : th.thinking;
+      }
+    }
   }
 
   webSearch = sanitizeWebSearchProcessText(ensureWebSearchProcessLines(webSearch));
@@ -947,10 +1111,15 @@ export function prepareWebSearchFirstPassContent(
 }
 
 /** 首轮若把检索列表写在正文里，合并进 webSearch 以便总结后仍能展示「检索来源」 */
-export function consolidateWebSearchSections(sections: AssistantMessageSections): AssistantMessageSections {
+export function consolidateWebSearchSections(
+  sections: AssistantMessageSections,
+  opts?: { webSearchEnabled?: boolean }
+): AssistantMessageSections {
   let { main, webSearch, thinking } = sections;
   const mainTrim = (main || '').trim();
+  const webSearchEnabled = opts?.webSearchEnabled !== false;
   if (
+    webSearchEnabled &&
     mainTrim &&
     !looksLikeChineseStructuredAnswer(mainTrim) &&
     (isLikelyRawWebSearchDump(mainTrim) || looksLikeNumberedSearchList(mainTrim))
@@ -1027,21 +1196,32 @@ function extractChineseProseFromSearchDump(webSearch: string, userQuestion = '')
  */
 export function ensureAssistantSectionsHaveMain(
   sections: AssistantMessageSections,
-  opts?: { synthesizedRaw?: string; userQuestion?: string }
+  opts?: {
+    synthesizedRaw?: string;
+    userQuestion?: string;
+    /** 本轮是否启用联网；false 时勿用检索区兜底文案 */
+    webSearchEnabled?: boolean;
+    /** 本轮是否启用思考；false 时勿用思考区兜底正文 */
+    thinkingEnabled?: boolean;
+  }
 ): AssistantMessageSections {
-  let main = (sections.main || '').trim();
-  const webSearch = (sections.webSearch || '').trim();
-  const thinking = (sections.thinking || '').trim();
+  const flattened = flattenAssistantSectionsWhenProcessDisabled(sections, opts);
+  let main = (flattened.main || '').trim();
+  let webSearch = (flattened.webSearch || '').trim();
+  let thinking = (flattened.thinking || '').trim();
 
   const adoptCandidate = (raw: string) => {
     const t = stripInternalPromptBoilerplate(stripLeakedSearchBlocks(raw.replace(/\r\n/g, '\n'))).trim();
     if (!t || t.length < 16) return;
+    const parsedFull = parseAssistantMessage(t);
     const withoutMarkers = t
       .replace(/\n\n\[联网检索\][\s\S]*/i, '')
       .replace(/\n\n\[思考过程\][\s\S]*/i, '')
       .trim();
     const parsed = parseAssistantMessage(withoutMarkers || t);
     let candidate = (parsed.main || '').trim();
+    if (!candidate && parsedFull.webSearch.trim()) candidate = parsedFull.webSearch.trim();
+    if (!candidate && parsedFull.thinking.trim()) candidate = parsedFull.thinking.trim();
     if (!candidate && withoutMarkers) candidate = withoutMarkers;
     if (!candidate || isLikelyTooShortMainAnswer(candidate)) return;
     if (isLikelyRawWebSearchDump(candidate) && !looksLikeChineseStructuredAnswer(candidate)) return;
@@ -1050,38 +1230,84 @@ export function ensureAssistantSectionsHaveMain(
   };
 
   if (main.length >= 20 && !isLikelyTooShortMainAnswer(main) && /[\u4e00-\u9fff]{4,}/.test(main)) {
-    return consolidateWebSearchSections({ main, webSearch, thinking });
+    return consolidateWebSearchSections({ main, webSearch, thinking }, opts);
   }
 
   if (opts?.synthesizedRaw?.trim()) adoptCandidate(opts.synthesizedRaw);
 
-  if (main.length < 20 && webSearch.trim()) {
+  const webSearchEnabled = opts?.webSearchEnabled !== false;
+  const thinkingEnabled = opts?.thinkingEnabled !== false;
+
+  if (main.length < 20 && webSearch.trim() && webSearchEnabled) {
     const fallback = extractChineseProseFromSearchDump(webSearch, opts?.userQuestion);
     if (fallback) main = fallback;
   }
 
-  if (main.length < 20 && thinking.trim()) {
+  if (main.length < 20 && thinking.trim() && thinkingEnabled) {
     const fromThinking = extractChineseProseFromThinking(thinking, opts?.userQuestion);
     if (fromThinking) main = fromThinking;
   }
 
-  if (
-    main.length < 20 &&
-    (webSearch.trim() || thinking.trim()) &&
-    !isLikelyTooShortMainAnswer(main)
-  ) {
+  const hasProcessPanels =
+    (webSearch.trim() && webSearchEnabled) || (thinking.trim() && thinkingEnabled);
+  if (main.length < 20 && hasProcessPanels && !isLikelyTooShortMainAnswer(main)) {
     const q = (opts?.userQuestion || '').trim();
+    const panelHint =
+      webSearchEnabled && thinkingEnabled
+        ? '「联网检索」与「思考过程」'
+        : webSearchEnabled
+          ? '「联网检索」'
+          : thinkingEnabled
+            ? '「思考过程」'
+            : '过程区';
     main = q
-      ? `本次未能生成独立正文摘要，请展开上方「联网检索」与「思考过程」查看详情，或直接重试提问。\n\n（您的问题：${q.slice(0, 120)}）`
-      : '本次未能生成独立正文摘要，请展开上方「联网检索」与「思考过程」查看详情，或重新发送提问。';
+      ? `本次未能生成独立正文摘要，请展开上方${panelHint}查看详情，或直接重试提问。\n\n（您的问题：${q.slice(0, 120)}）`
+      : `本次未能生成独立正文摘要，请展开上方${panelHint}查看详情，或重新发送提问。`;
   }
 
-  return consolidateWebSearchSections({ main, webSearch, thinking });
+  return consolidateWebSearchSections({ main, webSearch, thinking }, opts);
+}
+
+/** 从原始流文本恢复可见正文（未开联网/思考时合并过程区） */
+export function recoverAssistantReplyFromRaw(
+  raw: string,
+  opts?: {
+    userQuestion?: string;
+    webSearchEnabled?: boolean;
+    thinkingEnabled?: boolean;
+  }
+): string {
+  const flattened = flattenAssistantSectionsWhenProcessDisabled(parseAssistantMessage(raw || ''), opts);
+  let main = (flattened.main || '').trim();
+  if (!main && (raw || '').trim()) {
+    main = (raw || '').trim();
+  }
+  return guardAssistantReplyContent(composeAssistantMessage({ main, webSearch: '', thinking: '' }), {
+    synthesizedRaw: raw,
+    ...opts,
+  });
 }
 
 /** 助手回复是否有用户可见正文（不含仅过程区） */
-export function assistantReplyHasVisibleMain(content: string): boolean {
-  const main = (parseAssistantMessage(content || '').main || '').trim();
+export function assistantReplyHasVisibleMain(
+  content: string,
+  opts?: {
+    webSearchEnabled?: boolean;
+    thinkingEnabled?: boolean;
+    rawFallback?: string;
+  }
+): boolean {
+  const visibleMain = (text: string): string => {
+    const flat = flattenAssistantSectionsWhenProcessDisabled(parseAssistantMessage(text || ''), opts);
+    return (flat.main || '').trim();
+  };
+  let main = visibleMain(content || '');
+  if ((!main || isLikelyTooShortMainAnswer(main)) && (opts?.rawFallback || '').trim()) {
+    main = visibleMain(opts!.rawFallback!);
+    if (!main || isLikelyTooShortMainAnswer(main)) {
+      main = (opts!.rawFallback || '').trim();
+    }
+  }
   if (!main) return false;
   return !isLikelyTooShortMainAnswer(main);
 }
@@ -1089,7 +1315,12 @@ export function assistantReplyHasVisibleMain(content: string): boolean {
 /** 保存前统一补齐正文，避免界面只剩 [联网检索]/[思考过程] */
 export function guardAssistantReplyContent(
   content: string,
-  opts?: { synthesizedRaw?: string; userQuestion?: string }
+  opts?: {
+    synthesizedRaw?: string;
+    userQuestion?: string;
+    webSearchEnabled?: boolean;
+    thinkingEnabled?: boolean;
+  }
 ): string {
   const sections = parseAssistantMessage(content || '');
   const ensured = ensureAssistantSectionsHaveMain(sections, opts);

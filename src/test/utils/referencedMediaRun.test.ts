@@ -125,4 +125,15 @@ describe('shouldUseSlotOriginalFileForUpload', () => {
       )
     ).toBe(true);
   });
+
+  it('skips stale File when panel slot is data: image (banana-问题3 @图片4 串图)', () => {
+    const dataUrl = 'data:image/jpeg;base64,/9j/pic4slot';
+    expect(
+      shouldUseSlotOriginalFileForUpload(
+        { ...entry, url: dataUrl, refImageSlotIndex: 3 } as any,
+        dataUrl,
+        { name: 'stale-pic3.png' } as File
+      )
+    ).toBe(false);
+  });
 });

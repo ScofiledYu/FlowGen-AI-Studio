@@ -1,0 +1,49 @@
+{
+  "nodes": [
+    {
+      "id": "node_6_1783670837466",
+      "type": "processorNode",
+      "position": {
+        "x": 16088.652486129726,
+        "y": 26600.759093542267
+      },
+      "data": {
+        "label": "Input Picture Node",
+        "imagePreview": "https://aitop100app-1251510006.cos.ap-shanghai.myqcloud.com/openApi/212508/9def7079-e0d2-40f5-9b5d-cd16ea8ba77d.png",
+        "imageName": "光头强",
+        "projectAssetId": "eec77159-9e6c-4b01-afd7-55780135e010",
+        "selectedModel": "Nano Banana 2.0",
+        "status": "idle",
+        "referenceImages": [
+          "/flowgen-api/projects/14/assets/b8659868-9fd3-433a-8a2c-3083d7a1b999/file",
+          "https://cos.example/banana-p4-slot-1.png",
+          "https://aitop100app-1251510006.cos.ap-shanghai.myqcloud.com/openApi/212508/906e4ec3-f1be-4a83-a24f-33e9807772f7.png",
+          "https://cos.example/banana-p4-slot-3.png"
+        ],
+        "referenceImageLabels": [
+          "祭司老人",
+          "图片2",
+          "图片3",
+          "图片4"
+        ],
+        "referenceElementIds": [
+          null,
+          "canvas:node_12_1783662683735",
+          "canvas:node_0_1783662786767",
+          "canvas:node_14_1783662683736"
+        ],
+        "prompt": "@资产:光头强参考@图片3风格生成",
+        "progress": 0,
+        "panelMainSlotVisible": false,
+        "panelMainImageUrl": "/flowgen-api/projects/14/assets/eec77159-9e6c-4b01-afd7-55780135e010/file"
+      }
+    }
+  ],
+  "projectAssets": [
+    {
+      "slug": "guangtouqiang",
+      "name": "光头强",
+      "url": "/flowgen-api/projects/14/assets/eec77159-9e6c-4b01-afd7-55780135e010/file"
+    }
+  ]
+}

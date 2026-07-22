@@ -1,0 +1,249 @@
+{
+  "nodes": [
+    {
+      "id": "node_0_1784107857538",
+      "type": "processorNode",
+      "position": {
+        "x": -2961.0229574340015,
+        "y": 33408.08435341543
+      },
+      "data": {
+        "label": "Input Picture Node",
+        "prompt": "@资产:石头出现在@图片1中，他们碰到一起，聊起天来",
+        "status": "completed",
+        "taskId": "1600495",
+        "progress": 100,
+        "imageName": "美女",
+        "generatedAt": "2026-07-15T09:36:45.665Z",
+        "imagePreview": "/flowgen-api/projects/14/assets/62803dee-e53e-4f51-b0c7-b297829bea54/file",
+        "modelConfigs": {
+          "Nano Banana 2.0": {
+            "imageName": "美女",
+            "imagePreview": "/flowgen-api/projects/14/assets/62803dee-e53e-4f51-b0c7-b297829bea54/file"
+          },
+          "seedance2.0 (急速版)": {
+            "prompt": "@资产:石头出现在@图片1中，他们碰到一起，聊起天来",
+            "referenceMovs": [],
+            "negativePrompt": "",
+            "numberOfImages": "1条",
+            "referenceAudios": [],
+            "referenceImages": [
+              "https://aitop100app-1251510006.cos.ap-shanghai.myqcloud.com/openApi/212508/9d65585c-c0da-4f01-a6bc-989781f2bede.png",
+              "https://aitop100app-1251510006.cos.ap-shanghai.myqcloud.com/openApi/212508/795c8b66-6e21-4f77-a6a2-27b13dac7c81.png",
+              ""
+            ],
+            "seedanceDuration": "5s",
+            "seedanceResolution": "480p",
+            "seedanceTabConfigs": {
+              "reference": {
+                "prompt": "@资产:石头出现在@图片1中，他们碰到一起，聊起天来",
+                "referenceMovs": [],
+                "referenceAudios": [],
+                "referenceImages": [
+                  "https://aitop100app-1251510006.cos.ap-shanghai.myqcloud.com/openApi/212508/9d65585c-c0da-4f01-a6bc-989781f2bede.png",
+                  "https://aitop100app-1251510006.cos.ap-shanghai.myqcloud.com/openApi/212508/795c8b66-6e21-4f77-a6a2-27b13dac7c81.png",
+                  ""
+                ],
+                "referenceImageLabels": [
+                  "图片1",
+                  "石头",
+                  "图片3"
+                ]
+              }
+            },
+            "seedanceAspectRatio": "16:9",
+            "seedanceFixedCamera": false,
+            "seedanceGenerateAudio": false,
+            "seedanceGenerationMode": "reference",
+            "seedanceReferenceRatioMode": "force",
+            "seedanceReferenceWebSearch": false
+          }
+        },
+        "referenceMovs": [],
+        "selectedModel": "seedance2.0 (急速版)",
+        "negativePrompt": "",
+        "numberOfImages": "1条",
+        "projectAssetId": "62803dee-e53e-4f51-b0c7-b297829bea54",
+        "referenceAudios": [],
+        "referenceImages": [
+          "https://aitop100app-1251510006.cos.ap-shanghai.myqcloud.com/openApi/212508/9d65585c-c0da-4f01-a6bc-989781f2bede.png",
+          "https://aitop100app-1251510006.cos.ap-shanghai.myqcloud.com/openApi/212508/795c8b66-6e21-4f77-a6a2-27b13dac7c81.png",
+          ""
+        ],
+        "generationParams": {
+          "model": "seedance2.0 (急速版)",
+          "prompt": "@资产:石头出现在@图片1中，他们碰到一起，聊起天来",
+          "taskId": "1600495",
+          "outputUrl": "https://aitop100app-1251510006.cos.ap-shanghai.myqcloud.com/videosGenerations/videosGenerations/14edcf75-d136-4b84-b6ec-8bf9416287e9.mp4",
+          "generatedAt": "2026-07-15T09:36:45.665Z",
+          "negativePrompt": "",
+          "numberOfImages": "1条",
+          "referenceImages": [
+            "https://aitop100app-1251510006.cos.ap-shanghai.myqcloud.com/openApi/212508/9d65585c-c0da-4f01-a6bc-989781f2bede.png",
+            "https://aitop100app-1251510006.cos.ap-shanghai.myqcloud.com/openApi/212508/795c8b66-6e21-4f77-a6a2-27b13dac7c81.png",
+            ""
+          ],
+          "seedanceDuration": "5s",
+          "seedanceResolution": "480p",
+          "seedanceAspectRatio": "16:9",
+          "referenceImageLabels": [
+            "图片1",
+            "石头",
+            "图片3"
+          ],
+          "seedanceGenerateAudio": false,
+          "seedanceGenerationMode": "reference",
+          "seedanceReferenceRatioMode": "force",
+          "seedanceReferenceWebSearch": false
+        },
+        "seedanceDuration": "5s",
+        "panelMainImageUrl": "/flowgen-api/projects/14/assets/62803dee-e53e-4f51-b0c7-b297829bea54/file",
+        "seedanceResolution": "480p",
+        "seedanceTabConfigs": {
+          "reference": {
+            "prompt": "@资产:石头出现在@图片1中，他们碰到一起，聊起天来",
+            "referenceMovs": [],
+            "referenceAudios": [],
+            "referenceImages": [
+              "https://aitop100app-1251510006.cos.ap-shanghai.myqcloud.com/openApi/212508/9d65585c-c0da-4f01-a6bc-989781f2bede.png",
+              "https://aitop100app-1251510006.cos.ap-shanghai.myqcloud.com/openApi/212508/795c8b66-6e21-4f77-a6a2-27b13dac7c81.png",
+              ""
+            ],
+            "referenceImageLabels": [
+              "图片1",
+              "石头",
+              "图片3"
+            ]
+          }
+        },
+        "generatedThumbnails": [
+          {
+            "id": "node_1_1784108205672",
+            "url": "https://aitop100app-1251510006.cos.ap-shanghai.myqcloud.com/videosGenerations/videosGenerations/14edcf75-d136-4b84-b6ec-8bf9416287e9.mp4",
+            "name": "Video_3.mov",
+            "type": "video",
+            "nodeId": "node_1_1784108205672",
+            "generationParams": {
+              "model": "seedance2.0 (急速版)",
+              "prompt": "@资产:石头出现在@图片1中，他们碰到一起，聊起天来",
+              "taskId": "1600495",
+              "outputUrl": "https://aitop100app-1251510006.cos.ap-shanghai.myqcloud.com/videosGenerations/videosGenerations/14edcf75-d136-4b84-b6ec-8bf9416287e9.mp4",
+              "generatedAt": "2026-07-15T09:36:45.665Z",
+              "negativePrompt": "",
+              "numberOfImages": "1条",
+              "referenceImages": [
+                "https://aitop100app-1251510006.cos.ap-shanghai.myqcloud.com/openApi/212508/9d65585c-c0da-4f01-a6bc-989781f2bede.png",
+                "https://aitop100app-1251510006.cos.ap-shanghai.myqcloud.com/openApi/212508/795c8b66-6e21-4f77-a6a2-27b13dac7c81.png",
+                ""
+              ],
+              "seedanceDuration": "5s",
+              "seedanceResolution": "480p",
+              "seedanceAspectRatio": "16:9",
+              "referenceImageLabels": [
+                "图片1",
+                "石头",
+                "图片3"
+              ],
+              "seedanceGenerateAudio": false,
+              "seedanceGenerationMode": "reference",
+              "seedanceReferenceRatioMode": "force",
+              "seedanceReferenceWebSearch": false
+            }
+          }
+        ],
+        "referenceElementIds": [
+          "canvas:node_10_1784080554002",
+          "",
+          "canvas:node_15_1784076932799"
+        ],
+        "seedanceAspectRatio": "16:9",
+        "seedanceFixedCamera": false,
+        "panelMainSlotVisible": false,
+        "referenceImageLabels": [
+          "图片1",
+          "石头",
+          "图片3"
+        ],
+        "seedanceGenerateAudio": false,
+        "seedanceGenerationMode": "reference",
+        "referenceImageLocalRefs": [],
+        "seedanceReferenceRatioMode": "force",
+        "seedanceReferenceWebSearch": false
+      }
+    },
+    {
+      "id": "node_1_1784108205672",
+      "type": "movNode",
+      "position": {
+        "x": -2611.0229574340015,
+        "y": 33408.08435341543
+      },
+      "data": {
+        "label": "Output Mov Node",
+        "status": "idle",
+        "taskId": "1600495",
+        "progress": 0,
+        "imageName": "Video_3.mov",
+        "generatedAt": "2026-07-15T09:36:45.665Z",
+        "imagePreview": "https://aitop100app-1251510006.cos.ap-shanghai.myqcloud.com/videosGenerations/videosGenerations/14edcf75-d136-4b84-b6ec-8bf9416287e9.mp4",
+        "referenceMovs": [
+          {
+            "url": "https://aitop100app-1251510006.cos.ap-shanghai.myqcloud.com/videosGenerations/videosGenerations/14edcf75-d136-4b84-b6ec-8bf9416287e9.mp4"
+          }
+        ],
+        "selectedModel": "seedance2.0 (急速版)",
+        "numberOfImages": "1条",
+        "generationParams": {
+          "model": "seedance2.0 (急速版)",
+          "prompt": "@资产:石头出现在@图片1中，他们碰到一起，聊起天来",
+          "taskId": "1600495",
+          "outputUrl": "https://aitop100app-1251510006.cos.ap-shanghai.myqcloud.com/videosGenerations/videosGenerations/14edcf75-d136-4b84-b6ec-8bf9416287e9.mp4",
+          "generatedAt": "2026-07-15T09:36:45.665Z",
+          "negativePrompt": "",
+          "numberOfImages": "1条",
+          "referenceImages": [
+            "https://aitop100app-1251510006.cos.ap-shanghai.myqcloud.com/openApi/212508/9d65585c-c0da-4f01-a6bc-989781f2bede.png",
+            "https://aitop100app-1251510006.cos.ap-shanghai.myqcloud.com/openApi/212508/795c8b66-6e21-4f77-a6a2-27b13dac7c81.png",
+            ""
+          ],
+          "seedanceDuration": "5s",
+          "seedanceResolution": "480p",
+          "seedanceAspectRatio": "16:9",
+          "referenceImageLabels": [
+            "图片1",
+            "石头",
+            "图片3"
+          ],
+          "seedanceGenerateAudio": false,
+          "seedanceGenerationMode": "reference",
+          "seedanceReferenceRatioMode": "force",
+          "seedanceReferenceWebSearch": false
+        },
+        "seedanceDuration": "5s",
+        "seedanceResolution": "480p",
+        "videoPosterDataUrl": "/flowgen-api/projects/14/node-media/4c6f854c-fccf-4623-a524-79f63ab03c07.jpg/file",
+        "seedanceAspectRatio": "16:9",
+        "seedanceFixedCamera": false,
+        "seedanceGenerateAudio": false,
+        "seedanceGenerationMode": "reference",
+        "seedanceReferenceRatioMode": "force",
+        "seedanceReferenceWebSearch": false
+      }
+    }
+  ],
+  "edges": [
+    {
+      "id": "enode_0_1784107857538-node_1_1784108205672-1784108205673-0",
+      "source": "node_0_1784107857538",
+      "target": "node_1_1784108205672",
+      "animated": true,
+      "style": {
+        "stroke": "#6366f1",
+        "strokeWidth": 2
+      }
+    }
+  ],
+  "exportedAt": "2026-07-15T09:37:43.494Z",
+  "nodeCount": 2,
+  "edgeCount": 1
+}

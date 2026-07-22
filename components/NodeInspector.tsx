@@ -289,6 +289,7 @@ import {
   buildPromptMediaRefContextForRun,
   remapPromptPanelImageTokensToAssetTokens,
   refImageOrdinalForSlot,
+  resolvePromptMainImagePreviewForRefs,
   stripPromptMediaTokensForPlainCopy,
   type PromptMediaRefItem,
 } from '../utils/promptMediaRefs';
@@ -300,6 +301,7 @@ import {
   panelReferenceDisplaySlots,
   panelReferenceLabelImagePreview,
   shouldDedupePanelRefsAgainstMainPreview,
+  shouldDedupePanelRefsAgainstMainForSync,
   shouldShowPanelMainImageSlot,
   resolvePanelMainSlotPreviewUrl,
 } from '../utils/referencedMediaRun';
@@ -1487,9 +1489,10 @@ function NodeInspector({
       (model === '可灵3.0 Omni' && (omniTab === 'multi' || omniTab === 'instruction'));
     if (!usePanelRefSync) return;
     const patch = buildPanelRefSlotSyncPatch(data, {
+      // Nano 历来不去重；其它模型：主图与参考槽同素材时禁止 sync 清空（0709 双边丢图）
       dedupeAgainstMain: isNanoBanana2Model(model)
         ? false
-        : shouldDedupePanelRefsAgainstMainPreview(data),
+        : shouldDedupePanelRefsAgainstMainForSync(data),
       projectAssets: projectAssetLabelRows,
     });
     if (!patch) return;
@@ -1528,14 +1531,14 @@ function NodeInspector({
     // eslint-disable-next-line react-hooks/exhaustive-deps -- 仅在选中节点切换时恢复主图
   }, [nodeId]);
 
-  /** 运行后有 panelMainImageUrl 备份时：编辑创意描述须保留主图格（清除 legacy panelMainSlotVisible=false） */
+  /** 仅创意描述变化时：有 panelMainImageUrl 备份则清除 legacy panelMainSlotVisible=false（勿在运行刚写完备份时误清） */
   useLayoutEffect(() => {
     if (isCurrentNodeRunning) return;
     if (!nodeModelUsesPanelMainImageRestore(data.selectedModel)) return;
     const patch = buildPanelMainImagePreservePatchOnEdit(data);
     if (!patch) return;
     onUpdate(patch);
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- 创意描述 / 主图备份变化时保留主图格
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- 只跟创意描述；勿依赖 panelMainImageUrl/SlotVisible（运行后写入会误清隐藏标记）
   }, [
     nodeId,
     data.prompt,
@@ -1544,8 +1547,6 @@ function NodeInspector({
     data.klingOmniVideoPrompt,
     data.klingOmniFramesPrompt,
     data.seedanceTabConfigs,
-    data.panelMainImageUrl,
-    data.panelMainSlotVisible,
     data.selectedModel,
     isCurrentNodeRunning,
   ]);
@@ -1600,6 +1601,45 @@ function NodeInspector({
     ]
   );
 
+  /** 须先于 seedanceRefDisplayEntries：主图与某参考槽同 URL 时不展示主图格，此时参考槽也不得再按主图去重（否则该图两边都消失） */
+  const seedanceShowMainInRefGrid = useMemo(() => {
+    if (!isSeedance20 || seedanceMode !== 'reference') return false;
+    if (!shouldShowPanelMainImageSlot(data)) return false;
+    const p = resolvePanelMainSlotPreviewUrl(data);
+    if (!p || isLikelyMainVideoUrl(p)) {
+      return Boolean(String(data.imageLocalRef || '').trim());
+    }
+    const mainKey = panelRefDisplayDedupeKey(p, data.imageName, projectAssetLabelRows);
+    if (!mainKey) return true;
+    const refs = effectivePanelReferenceImages || [];
+    const dupInRefs = refs.some((raw, i) => {
+      const u = String(raw || '').trim();
+      if (!u) return false;
+      const cap = data.referenceImageLabels?.[i];
+      const k = panelRefDisplayDedupeKey(
+        resolvePanelReferenceSlotDisplayUrl(u, cap, projectAssetLabelRows),
+        cap,
+        projectAssetLabelRows
+      );
+      return k === mainKey;
+    });
+    if (dupInRefs && String(data.imageLocalRef || '').trim() && data.panelMainSlotVisible === false) {
+      return true;
+    }
+    return !dupInRefs;
+  }, [
+    isSeedance20,
+    seedanceMode,
+    data.imagePreview,
+    data.imageName,
+    data.panelMainSlotVisible,
+    data.panelMainImageUrl,
+    data.imageLocalRef,
+    effectivePanelReferenceImages,
+    data.referenceImageLabels,
+    projectAssetLabelRows,
+  ]);
+
   const seedanceRefDisplayEntries = useMemo(() => {
     if (!isSeedance20 || seedanceMode !== 'reference') {
       return buildPanelReferenceDisplayEntries(effectivePanelReferenceImages);
@@ -1607,9 +1647,11 @@ function NodeInspector({
     // 用原始 data.referenceImages（保留空槽下标），避免 filter(Boolean) 后下标与 referenceImageLabels 错位
     const seedanceRefs = (data.referenceImages || []);
     const mainForDedupe = panelReferenceLabelImagePreview(data) ?? data.imagePreview;
+    // 仅当主图格实际展示时才对参考槽去重；否则保留与 imagePreview 同 URL 的参考槽（0709 石头丢图）
+    const dedupeAgainstMain = seedanceShowMainInRefGrid;
     const base = buildPanelReferenceDisplayEntries(seedanceRefs, {
       imagePreview: mainForDedupe,
-      dedupeAgainstMain: shouldDedupePanelRefsAgainstMainPreview(data),
+      dedupeAgainstMain,
       referenceImageLabels: data.referenceImageLabels,
       projectAssets: projectAssetLabelRows,
     });
@@ -1618,7 +1660,7 @@ function NodeInspector({
       data.referenceImageLabels,
       projectAssetLabelRows
     );
-    if (shouldShowPanelMainImageSlot(data)) {
+    if (dedupeAgainstMain) {
       entries = filterPanelReferenceDisplayEntriesExcludingMainPreview(
         entries,
         mainForDedupe,
@@ -1662,44 +1704,7 @@ function NodeInspector({
     data.referenceImageLabels,
     data.imagePreview,
     data.panelMainSlotVisible,
-    projectAssetLabelRows,
-  ]);
-
-  const seedanceShowMainInRefGrid = useMemo(() => {
-    if (!isSeedance20 || seedanceMode !== 'reference') return false;
-    if (!shouldShowPanelMainImageSlot(data)) return false;
-    const p = resolvePanelMainSlotPreviewUrl(data);
-    if (!p || isLikelyMainVideoUrl(p)) {
-      return Boolean(String(data.imageLocalRef || '').trim());
-    }
-    const mainKey = panelRefDisplayDedupeKey(p, data.imageName, projectAssetLabelRows);
-    if (!mainKey) return true;
-    const refs = effectivePanelReferenceImages || [];
-    const dupInRefs = refs.some((raw, i) => {
-      const u = String(raw || '').trim();
-      if (!u) return false;
-      const cap = data.referenceImageLabels?.[i];
-      const k = panelRefDisplayDedupeKey(
-        resolvePanelReferenceSlotDisplayUrl(u, cap, projectAssetLabelRows),
-        cap,
-        projectAssetLabelRows
-      );
-      return k === mainKey;
-    });
-    if (dupInRefs && String(data.imageLocalRef || '').trim() && data.panelMainSlotVisible === false) {
-      return true;
-    }
-    return !dupInRefs;
-  }, [
-    isSeedance20,
-    seedanceMode,
-    data.imagePreview,
-    data.imageName,
-    data.panelMainSlotVisible,
-    data.panelMainImageUrl,
-    data.imageLocalRef,
-    effectivePanelReferenceImages,
-    data.referenceImageLabels,
+    seedanceShowMainInRefGrid,
     projectAssetLabelRows,
   ]);
 
@@ -2545,6 +2550,7 @@ function NodeInspector({
           referenceImages: next.referenceImages || [],
           referenceImageLabels: next.referenceImageLabels || [],
           imagePreview: data.imagePreview,
+          panelMainImageUrl: data.panelMainImageUrl,
           panelMainSlotVisible: data.panelMainSlotVisible,
         },
         {
@@ -3600,7 +3606,7 @@ function NodeInspector({
     const incomingDedupeOpts = {
       incomingLabel: opts?.assetName,
       projectAssets: projectAssetLabelRows,
-      imagePreview: d.imagePreview,
+      imagePreview: resolvePromptMainImagePreviewForRefs(d) ?? d.imagePreview,
       dedupeAgainstMain: true,
       elementIds: refElementIds,
       canvasSourceNodeId: opts?.canvasSourceNodeId,
@@ -4109,7 +4115,7 @@ function NodeInspector({
         !slotOccupiedByHydrate &&
         panelReferencesAlreadyContainIncoming(nextRefs, nextLabels, img, {
           projectAssets: projectAssetLabelRows,
-          imagePreview: fresh.imagePreview,
+          imagePreview: resolvePromptMainImagePreviewForRefs(fresh) ?? fresh.imagePreview,
           dedupeAgainstMain: true,
           elementIds: refElementIdsForBatch,
           targetSlotIndex: slotIdx,
@@ -4359,7 +4365,7 @@ function NodeInspector({
     const dedupeOpts = {
       incomingLabel: meta?.assetName,
       projectAssets: projectAssetLabelRows,
-      imagePreview: d.imagePreview,
+      imagePreview: resolvePromptMainImagePreviewForRefs(d) ?? d.imagePreview,
       dedupeAgainstMain: true,
       elementIds: getStandardRefElementIds(),
       canvasSourceNodeId: meta?.canvasSourceNodeId,
@@ -4631,12 +4637,12 @@ function NodeInspector({
   };
 
   const handleImage2ReferenceFile = async (slotIdx: number, file: File | undefined) => {
-    if (!isImage2 || !file || !file.type.startsWith('image/')) return;
+    if (!isImage2 || !file || (!file.type.startsWith('image/') && !/\.(jpe?g|png|webp|gif)$/i.test(file.name))) return;
     if (file.size > 10 * 1024 * 1024) {
       alert('单张图片不超过 10MB');
       return;
     }
-    if (slotIdx < 0 || slotIdx > 2) return;
+    if (slotIdx < 0 || slotIdx >= IMAGE2_MAX_PANEL_SLOTS) return;
     const needsMain = !image2ShowMainInRefGrid;
     if (needsMain && slotIdx === 0) {
       window.dispatchEvent(
@@ -5465,7 +5471,8 @@ function NodeInspector({
                                             }))
                                             .filter(
                                               ({ img }) =>
-                                                !shouldDedupePanelRefsAgainstMainPreview(data) ||
+                                                // 仅主图格实际展示时去重；否则保留与 imagePreview 同 URL 的参考槽
+                                                !omniInspectorShowMainImageSlot ||
                                                 !isPanelRefDuplicateOfMainImageSlot(
                                                   img,
                                                   data,
@@ -6039,7 +6046,7 @@ function NodeInspector({
                       </span>
                     </div>
                     <div
-                      className={`rounded-lg border bg-gray-950/40 p-3 transition-colors ${
+                      className={`rounded-lg border bg-gray-950/40 p-5 transition-colors ${
                         isDragOverRefs ? 'border-brand-500/60 bg-brand-500/5' : 'border-gray-700'
                       }`}
                       data-flowgen-media-drop="1"
@@ -6049,7 +6056,7 @@ function NodeInspector({
                       onDragLeave={handleDragLeave}
                       onDrop={handleRefDrop}
                     >
-                      <div className="grid grid-cols-4 gap-2">
+                      <div className="grid grid-cols-2 gap-4">
                         {Array.from({ length: IMAGE2_MAX_PANEL_SLOTS }, (_, slotIdx) => slotIdx).map((slotIdx) => {
                           const isMainSlot = image2ShowMainInRefGrid && slotIdx === 0;
                           const refOffset = image2ShowMainInRefGrid ? 1 : 0;
@@ -6122,16 +6129,36 @@ function NodeInspector({
                                     e.stopPropagation();
                                     void handleRefDrop(e);
                                   }}
-                                  className="w-full aspect-[4/3] rounded-lg border border-dashed border-gray-600 bg-gray-900/60 hover:border-gray-500 flex flex-col items-center justify-center gap-1.5 text-gray-400 transition-colors cursor-pointer"
+                                  className="w-full aspect-[4/3] rounded-lg border border-dashed border-gray-600 bg-gray-900/60 hover:border-gray-500 flex flex-col items-center justify-center gap-2 text-gray-400 transition-colors cursor-pointer"
                                 >
                                   <UploadCloud className="w-6 h-6" />
                                   <span className="text-[11px] text-gray-500">上传图片</span>
                                 </button>
                               ) : (
-                                <div className="w-full aspect-[4/3] rounded-lg border border-dashed border-gray-800 bg-gray-950/50 flex flex-col items-center justify-center gap-1 text-gray-600 opacity-70 pointer-events-none">
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    const inp = document.createElement('input');
+                                    inp.type = 'file';
+                                    inp.accept = 'image/jpeg,image/png,.jpg,.jpeg,.png';
+                                    inp.onchange = () => handleImage2ReferenceFile(slotIdx, inp.files?.[0]);
+                                    inp.click();
+                                  }}
+                                  onDragOver={(e) => {
+                                    e.preventDefault();
+                                    e.stopPropagation();
+                                    e.dataTransfer.dropEffect = 'copy';
+                                  }}
+                                  onDrop={(e) => {
+                                    e.preventDefault();
+                                    e.stopPropagation();
+                                    void handleRefDrop(e);
+                                  }}
+                                  className="w-full aspect-[4/3] rounded-lg border border-dashed border-gray-800 bg-gray-950/50 flex flex-col items-center justify-center gap-2 text-gray-600 opacity-70 hover:opacity-100 hover:border-gray-600 transition-colors cursor-pointer"
+                                >
                                   <UploadCloud className="w-5 h-5 opacity-50" />
                                   <span className="text-[10px]">上传图片</span>
-                                </div>
+                                </button>
                               )}
                             </div>
                           );
@@ -6234,7 +6261,8 @@ function NodeInspector({
                       const mainForRefGrid = panelReferenceLabelImagePreview(data) ?? data.imagePreview;
                       let refDisplayEntries = buildPanelReferenceDisplayEntries(refList, {
                         imagePreview: mainForRefGrid,
-                        dedupeAgainstMain: shouldDedupePanelRefsAgainstMainPreview(data),
+                        // 与 Seedance 一致：仅主图格实际展示时对参考槽去重
+                        dedupeAgainstMain: showMainInRefGrid,
                         referenceImageLabels: data.referenceImageLabels,
                         projectAssets: projectAssetLabelRows,
                       });

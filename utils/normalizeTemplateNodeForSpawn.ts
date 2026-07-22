@@ -1,5 +1,6 @@
 import type { Node } from 'reactflow';
 import type { NodeData } from '../types';
+import { NodeType } from '../types';
 import {
   canonicalProjectAssetFileUrl,
   isProjectAssetLibraryImageUrl,
@@ -56,6 +57,11 @@ export function normalizeGraphNodesProjectAssetBinding(
       !!parseProjectAssetIdsFromMediaUrl(d.imagePreview) ||
       (typeof d.imageLocalRef === 'string' && d.imageLocalRef.startsWith('flowgen-local:'));
     if (!hasBinding) return n;
+    // INPUT/PROCESSOR 节点运行后 panelMainSlotVisible===false 表示缩略图已切换为参考图，
+    // 此时不应将 imagePreview 替换为资产库 URL，避免刷新后缩略图显示错误
+    if ((n.type === NodeType.INPUT || n.type === NodeType.PROCESSOR) && d.panelMainSlotVisible === false) {
+      return n;
+    }
     const nextData = normalizeTemplateNodeDataForSpawn(n.data, pid);
     if (nextData === n.data) return n;
     changed = true;

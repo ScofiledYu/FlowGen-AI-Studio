@@ -53,6 +53,7 @@ import {
   buildNodeDetailsReferencePreview,
   buildSeedanceReferenceDetailsFromSnapshot,
   buildImageGenOutputReferenceDetailsFromSnapshot,
+  buildStillImageGenNodeDetailsReferencePreview,
   buildOmniInstructionVideoTabDetailsReferencePreview,
   buildOmniMultiTabDetailsReferencePreview,
   buildOmniPanelSourceForNodeDetails,
@@ -66,6 +67,17 @@ import {
   seedanceReferenceMovsForOutputDetails,
 } from '../utils/nodeDetailsPreview';
 import { resolveNodeDetailsSourceUrl } from '../utils/generatedOutputUrl';
+import {
+  canUseSaveFilePicker,
+  ensureJsonFileName,
+  saveJsonBlob,
+} from '../utils/saveJsonFile';
+import {
+  buildNodeDetailsPreviewFromGeneratedThumb,
+  findGeneratedThumbIndex,
+  resolveGeneratedThumbNavTarget,
+  type GeneratedThumbNavItem,
+} from '../utils/generatedThumbKeyboardNav';
 import {
   parseStoryboardSpawnRows,
   STORYBOARD_TEMPLATE_ERR,
@@ -106,7 +118,7 @@ import { DragDropContext } from './DragDropContext';
 import { ErrorBoundary } from './ErrorBoundary';
 import { Sidebar } from './Sidebar';
 import { ChatPanel } from './ChatPanel';
-import { Play, Download, Trash2, UploadCloud, Search, X, Clapperboard, Hand, MousePointer, LayoutGrid, Film, ChevronRight, StopCircle, Workflow, FileText, Info, Layers, Ratio, Monitor, Copy, Link as LinkIcon, ArrowRightLeft, Save, Frame, ImagePlus, GitBranch, Clock, Calendar, ChevronDown } from 'lucide-react';
+import { Play, Download, Trash2, UploadCloud, Search, X, Clapperboard, Hand, MousePointer, LayoutGrid, Film, ChevronRight, StopCircle, Workflow, FileText, Info, Layers, Ratio, Monitor, Copy, Link as LinkIcon, ArrowRightLeft, Save, Frame, ImagePlus, GitBranch, Clock, Calendar, ChevronDown, Image as ImageIcon } from 'lucide-react';
 import {
   uploadImage,
   uploadVideo,
@@ -163,8 +175,10 @@ import {
   FLOWGEN_MEDIA_URL_DROP,
   type FlowgenAssetDragItem,
   type FlowgenMediaUrlDropDetail,
+  buildAssetItemsFromMediaDrop,
   isAssetLibraryMediaDragSource,
   isCanvasNodeMediaDragSource,
+  shouldCreateCanvasNodesFromMediaDrop,
 } from '../utils/middleButtonMediaDrag';
 import {
   resolveInspectorNodeIdOnSelectionChange,
@@ -182,7 +196,6 @@ import {
   collectSeedanceReferencedMediaFromPrompt,
   getNodeInspectorPromptText,
   getCanonicalInspectorPromptText,
-  buildNodePromptUpdatePatch,
   buildCanonicalInspectorPromptPatch,
   buildReferenceIndexOptionsFromPlan,
   filterProjectAssetsForReferencedPlan,
@@ -236,6 +249,8 @@ import {
   buildOmniMultiGenerationParamsLabels,
   buildOmniMultiApiImageList,
   shouldPreferRunReferencePreviewOverLocalMain,
+  repairSeedanceReferenceGenerationParamsFromPanel,
+  pickSeedanceReferencePanelSnapshot,
   type UploadReferencedImageContext,
 } from '../utils/referencedMediaRun';
 import {
@@ -319,6 +334,7 @@ import { setCanvasRefreshPaused, setCanvasViewportMoving } from '../utils/canvas
 import type { PersistedCanvasChatV1 } from './ChatPanel';
 import { ProjectAssetLibrary } from './flowgen/ProjectAssetLibrary';
 import { FlowgenMiniMap } from './flowgen/FlowgenMiniMap';
+import { hasVisibleMiniMapNodes } from '../utils/flowgenMiniMapLayout';
 import { dedupeReferenceImageUrlsForSlotFallback } from '../utils/referenceImageUrlDedupe';
 import { pickVideoResourceUrlFromTaskStatus } from '../utils/taskStatusVideoUrl';
 import { resolvePreferredNodeDownloadUrl } from '../utils/generatedOutputUrl';
@@ -1702,6 +1718,165 @@ const CustomConnectionLine = ({ fromX, fromY, toX, toY }: ConnectionLineComponen
   );
 };
 
+/** localRef 字段 → 对应 image 字段的映射（用于 modelConfigs → 顶层同步） */
+const LOCAL_REF_SYNC_FIELDS: Array<{ localRefKey: string; imageKey: string }> = [
+  { localRefKey: 'referenceImageLocalRefs', imageKey: 'referenceImages' },
+  { localRefKey: 'klingOmniMultiReferenceLocalRefs', imageKey: 'klingOmniMultiReferenceImages' },
+  { localRefKey: 'klingOmniInstructionReferenceLocalRefs', imageKey: 'klingOmniInstructionReferenceImages' },
+  { localRefKey: 'klingOmniVideoReferenceLocalRefs', imageKey: 'klingOmniVideoReferenceImages' },
+];
+
+/**
+ * 同步：如果顶层 localRefs 为空，从 modelConfigs（当前选中模型）复制已有的 localRefs 到顶层。
+ * 纯同步操作，无 I/O。用于在所有持久化路径（flushOnLeave、auto-save、saveRemoteWorkspaceNow）中
+ * 确保刷新后 hydrate 能从 IndexedDB 恢复面板图片。
+ */
+function syncLocalRefsFromModelConfigs(nodeData: Record<string, any>): void {
+  const model = String(nodeData.selectedModel || '').trim();
+  if (!model) return;
+
+  const modelConfigs = nodeData.modelConfigs;
+  if (!modelConfigs || typeof modelConfigs !== 'object') return;
+
+  let cfg = (modelConfigs as Record<string, any>)[model];
+  // 兜底：image2 模型的 selectedModel 是 'image 2'（带空格），但 modelConfigs key 是 'image2'（无空格）
+  if (!cfg || typeof cfg !== 'object') {
+    const normalized = model.replace(/\s+/g, '');
+    if (normalized !== model) {
+      cfg = (modelConfigs as Record<string, any>)[normalized];
+    }
+  }
+  if (!cfg || typeof cfg !== 'object') return;
+
+  for (const { localRefKey, imageKey } of LOCAL_REF_SYNC_FIELDS) {
+    const topLocalRefs = nodeData[localRefKey] as string[] | undefined;
+    const hasTopLocalRefs = topLocalRefs && topLocalRefs.some((r: string) => String(r || '').trim());
+    if (hasTopLocalRefs) continue;
+
+    const cfgLocalRefs = cfg[localRefKey] as string[] | undefined;
+    if (!cfgLocalRefs || !cfgLocalRefs.some((r: string) => String(r || '').trim())) continue;
+
+    const topRefs = nodeData[imageKey] as string[] | undefined;
+    const maxLen = Math.max((topRefs || []).length, cfgLocalRefs.length);
+    const merged: string[] = Array.from({ length: maxLen }, (_, i) =>
+      String(cfgLocalRefs[i] || '').trim()
+    );
+    nodeData[localRefKey] = merged;
+  }
+}
+
+/**
+ * 持久化前预处理：确保 referenceImages 中所有 data:image URL 都有对应的 referenceImageLocalRefs
+ * 否则 sanitizePersistValueDeep 剥离 data: URL 后，刷新时无法从 IndexedDB 恢复面板图片
+ * 同时处理节点级和 modelConfigs 级的 referenceImages
+ */
+async function backfillPanelReferenceImageLocalRefs(
+  nodes: RFNode[],
+  localMediaScope: string,
+  putLocalMediaFile: (ref: string, file: File | Blob) => Promise<void>,
+  buildReferenceLocalRefForModel: (scope: string, nodeId: string, model: string, index: number) => string
+): Promise<RFNode[]> {
+  const result = nodes.map((node) => {
+    const data = { ...(node.data as NodeData) };
+    return { ...node, data };
+  });
+
+  for (const node of result) {
+    const data = node.data as NodeData;
+    const nodeId = node.id;
+    const model = String(data.selectedModel || '').trim();
+
+    // 处理所有参考图字段对（含 referenceImages 和 Omni 专用字段）
+    // 持久化前将 data:image URL 回填到 IndexedDB，避免刷新后 sanitize 剥离导致面板丢图
+    const modelConfigs = data.modelConfigs;
+    for (const { localRefKey, imageKey } of LOCAL_REF_SYNC_FIELDS) {
+      // 处理节点级
+      await backfillRefsArray(
+        data,
+        nodeId,
+        model,
+        imageKey,
+        localRefKey,
+        localMediaScope,
+        putLocalMediaFile,
+        buildReferenceLocalRefForModel
+      );
+
+      // 处理 modelConfigs 中各模型
+      if (modelConfigs && typeof modelConfigs === 'object') {
+        for (const [cfgModel, cfg] of Object.entries(modelConfigs as Record<string, any>)) {
+          if (!cfg || typeof cfg !== 'object') continue;
+          await backfillRefsArray(
+            cfg,
+            nodeId,
+            cfgModel,
+            imageKey,
+            localRefKey,
+            localMediaScope,
+            putLocalMediaFile,
+            buildReferenceLocalRefForModel
+          );
+        }
+      }
+    }
+
+    // 关键修复：将 modelConfigs 层的 localRefs 同步到顶层
+    // 纯同步操作，确保 modelConfigs 已有 localRefs 时无需重新上传 IndexedDB
+    // 仅 INPUT/PROCESSOR 节点有参考面板，OUTPUT/MOV 等无需同步
+    if (node.type === NodeType.INPUT || node.type === NodeType.PROCESSOR) {
+      syncLocalRefsFromModelConfigs(data as Record<string, any>);
+    }
+  }
+
+  return result;
+}
+
+async function backfillRefsArray(
+  container: Record<string, any>,
+  nodeId: string,
+  model: string,
+  imageKey: string,
+  localRefKey: string,
+  localMediaScope: string,
+  putLocalMediaFile: (ref: string, file: File | Blob) => Promise<void>,
+  buildReferenceLocalRefForModel: (scope: string, nodeId: string, model: string, index: number) => string
+): Promise<void> {
+  const refs = container[imageKey] as string[] | undefined;
+  if (!refs || !Array.isArray(refs)) return;
+
+  const localRefs = [...((container[localRefKey] as string[] | undefined) || [])];
+  let changed = false;
+
+  for (let i = 0; i < refs.length; i++) {
+    const url = String(refs[i] || '').trim();
+    if (!url.startsWith('data:image/')) continue;
+    if (localRefs[i] && String(localRefs[i] || '').trim()) continue;
+
+    try {
+      // 将 data:image URL 解码为 Blob 并存入 IndexedDB
+      const res = await fetch(url);
+      const blob = await res.blob();
+      const ext = blob.type?.includes('png') ? 'png' : 'jpg';
+      const file = new File([blob], `panel-ref-${i}.${ext}`, {
+        type: blob.type || 'image/jpeg',
+      });
+
+      const ref = buildReferenceLocalRefForModel(localMediaScope, nodeId, model, i);
+      await putLocalMediaFile(ref, file);
+
+      while (localRefs.length <= i) localRefs.push('');
+      localRefs[i] = ref;
+      changed = true;
+    } catch (e) {
+      console.warn('[flowgen] pre-persist ref localRef backfill failed for', localRefKey, 'slot', i, e);
+    }
+  }
+
+  if (changed) {
+    container[localRefKey] = localRefs;
+  }
+}
+
 const FlowEditor = ({
   projectName,
   onProjectNameChange,
@@ -2068,7 +2243,26 @@ const FlowEditor = ({
         !!options?.allowEmptyGraph ||
         (options?.force === true && nodesToSave.length === 0) ||
         graphIsIntentionallyEmpty;
+      // 持久化前：确保 referenceImages 中 data:image URL 有 referenceImageLocalRefs
+      // 否则刷新后 sanitize 剥离 data: URL 时将无法从 IndexedDB 恢复
+      if (nodesToSave.length > 0) {
+        nodesToSave = await backfillPanelReferenceImageLocalRefs(
+          nodesToSave,
+          localMediaScope,
+          putLocalMediaFile,
+          buildReferenceLocalRefForModel
+        );
+      }
       const snap = buildPersistSnapshot(nodesToSave, edgesToSave, storyboardToSave);
+      // 必须在 keepalive 大小检查前写入 localStorage，因为：
+      // 1. backfillPanelReferenceImageLocalRefs 已同步 modelConfigs localRefs 到顶层
+      // 2. 如果 keepalive 因 payload 过大被跳过，刷新后仍能从 localStorage 恢复
+      // 3. flushOnLeave 在 backfill 前写入的 localStorage 会被这里的正确数据覆盖
+      try {
+        writeProjectSnapshotToStorage(snap);
+      } catch {
+        /* ignore local snapshot save failures */
+      }
       const uid = getStoredUser()?.id || 'local';
       const chatByUser: Record<string, PersistedCanvasChatV1> = {};
       for (const [k, v] of Object.entries(chatByUserRef.current)) {
@@ -2402,7 +2596,15 @@ const FlowEditor = ({
         if (!p) return n;
         const next = { ...n.data };
         if (p.data.imagePreview) {
-          revokeBlobPreviewUrl(n.data.imagePreview);
+          const oldPreview = n.data.imagePreview;
+          // 运行后 imagePreview 切到 @参考图时，旧 blob 可能仍作 panelMainImageUrl 备份，勿误 revoke
+          const previewStillUsed =
+            Boolean(oldPreview) &&
+            (oldPreview === n.data.panelMainImageUrl ||
+              oldPreview === p.data.panelMainImageUrl ||
+              (n.data.referenceImages || []).includes(oldPreview!) ||
+              (p.data.referenceImages || []).includes(oldPreview!));
+          if (!previewStillUsed) revokeBlobPreviewUrl(oldPreview);
           next.imagePreview = p.data.imagePreview;
         }
         if (p.data.firstFrameImage) {
@@ -2414,7 +2616,14 @@ const FlowEditor = ({
           next.lastFrameImage = p.data.lastFrameImage;
         }
         if (p.data.panelMainImageUrl) {
-          revokeBlobPreviewUrl(n.data.panelMainImageUrl);
+          const oldBackup = n.data.panelMainImageUrl;
+          const backupStillUsed =
+            Boolean(oldBackup) &&
+            (oldBackup === next.imagePreview ||
+              oldBackup === p.data.imagePreview ||
+              (n.data.referenceImages || []).includes(oldBackup!) ||
+              (p.data.referenceImages || []).includes(oldBackup!));
+          if (!backupStillUsed) revokeBlobPreviewUrl(oldBackup);
           next.panelMainImageUrl = p.data.panelMainImageUrl;
         }
         if (p.data.referenceImages) {
@@ -3167,6 +3376,16 @@ const FlowEditor = ({
         nodesToSave,
         pendingRunPersistPatchesRef.current
       );
+      // 关键修复：在 buildPersistSnapshot 前同步 localRefs，确保 flushOnLeave 的 localStorage
+      // 写入已包含从 modelConfigs 同步的 localRefs。否则在 beforeunload 场景下，
+      // saveRemoteWorkspaceNow 的异步 backfill 可能来不及完成，导致刷新后图片丢失。
+      // 覆盖所有模型：Banana/Seedance (referenceImageLocalRefs)、
+      // 可灵3.0 Omni (klingOmniMulti/Instruction/VideoReferenceLocalRefs)
+      mergedNodes.forEach((node) => {
+        // 仅 INPUT/PROCESSOR 节点有参考面板，OUTPUT/MOV 等无需同步 localRefs
+        if (node.type !== NodeType.INPUT && node.type !== NodeType.PROCESSOR) return;
+        syncLocalRefsFromModelConfigs(node.data as Record<string, any>);
+      });
       const snap = buildPersistSnapshot(mergedNodes, edgesToSave, storyboardToSave);
       try {
         writeProjectSnapshotToStorage(snap);
@@ -3624,14 +3843,19 @@ const FlowEditor = ({
     return () => window.clearTimeout(t);
   }, [nodes.length, graphHydrationReady]);
 
-  /** 中键拖放：节点间主预览区写入 imagePreview（画布空白区不再创建新节点） */
+  /** 中键拖放：资产库→画布空白区创建节点；节点间主预览区写入 imagePreview */
   useEffect(() => {
     const onWin = (ev: Event) => {
       const d = (ev as CustomEvent<FlowgenMediaUrlDropDetail>).detail;
       if (!d) return;
 
-      // 画布空白区投放：不再创建新节点（保留节点面板投放功能）
+      // 资产库中键拖到画布空白区 → 新建节点；画布节点拖到空白区不新建
       if (d.dropZone === 'canvas-pane') {
+        if (!shouldCreateCanvasNodesFromMediaDrop(d)) return;
+        void (async () => {
+          const base = screenToFlowPosition({ x: d.clientX!, y: d.clientY! });
+          await createNodesFromAssetItems(base, buildAssetItemsFromMediaDrop(d));
+        })();
         return;
       }
 
@@ -3944,19 +4168,25 @@ const FlowEditor = ({
 
   // Modal Preview State (Now holds the full node data for details)
   const [previewNode, setPreviewNode] = useState<RFNode | null>(null);
+  /** Generated Outputs 所属源节点（INPUT/PROCESSOR）；左右键切换整份 Node Details 时用 */
+  const [previewThumbSourceNodeId, setPreviewThumbSourceNodeId] = useState<string | null>(null);
+  /** 当前打开的历史缩略图 id（与 thumbs[].id 对齐，保证左右键定位准确） */
+  const [previewActiveThumbId, setPreviewActiveThumbId] = useState<string | null>(null);
   const [inlineRefMovPlayingUrl, setInlineRefMovPlayingUrl] = useState<string | null>(null);
   useEffect(() => {
     setInlineRefMovPlayingUrl(null);
   }, [previewNode?.id]);
   // 预览面板保持与画布节点数据同步：否则重新生成后仍显示旧快照（Source URL / Reference Images）
+  // Generated Outputs 历史浏览（有 previewActiveThumbId）时禁止覆盖：整份 Details 以该条 thumb 快照为准
   useEffect(() => {
     if (!previewNode) return;
+    if (previewActiveThumbId) return;
     const latest = nodes.find((n) => n.id === previewNode.id);
     if (!latest) return;
     if (latest !== previewNode) {
       setPreviewNode(latest);
     }
-  }, [nodes, previewNode]);
+  }, [nodes, previewNode, previewActiveThumbId]);
   
   // Save Project Dialog State
   const [showSaveDialog, setShowSaveDialog] = useState(false);
@@ -3982,35 +4212,65 @@ const FlowEditor = ({
     return originalImagesRef.current.get(nodeId)!;
   };
 
-  // Function to create preview node from thumbnail data
-  const createPreviewNodeFromThumbnail = useCallback((thumbnail: { id: string; url: string; type: 'image' | 'video'; nodeId?: string; generationParams?: GenerationParams }, sourceNode: RFNode) => {
-    if (thumbnail.nodeId) {
-      // Try to find the actual output node
-      const outputNode = getNodes().find(n => n.id === thumbnail.nodeId);
-      if (outputNode) {
-        setPreviewNode(outputNode);
-        return;
+  // Function to create preview node from thumbnail data — 始终用该条历史快照重建整份 Node Details
+  const createPreviewNodeFromThumbnail = useCallback((thumbnail: { id: string; url: string; type: 'image' | 'video'; nodeId?: string; name?: string; generationParams?: GenerationParams; posterDataUrl?: string }, sourceNode: RFNode) => {
+    const built = buildNodeDetailsPreviewFromGeneratedThumb(
+      {
+        id: thumbnail.id,
+        url: thumbnail.url,
+        type: thumbnail.type,
+        nodeId: thumbnail.nodeId,
+        name: thumbnail.name,
+        generationParams: (thumbnail.generationParams || undefined) as Record<string, unknown> | undefined,
+        posterDataUrl: thumbnail.posterDataUrl,
+      },
+      {
+        position: sourceNode.position,
+        fallbackModel: String(sourceNode.data?.selectedModel || '').trim() || undefined,
       }
-    }
-    // If node not found, create a temporary preview node
-    const tempNode: RFNode = {
-      id: thumbnail.id,
-      type: thumbnail.type === 'video' ? NodeType.MOV : NodeType.OUTPUT,
-      position: sourceNode.position,
+    );
+    // 若画布上仍有对应 OUTPUT/MOV，合并其 id 便于选中，但 data 以历史快照为准（整份 Details）
+    const live =
+      thumbnail.nodeId && getNodes().find((n) => n.id === thumbnail.nodeId);
+    const preview: RFNode = {
+      ...(live || {}),
+      id: built.id,
+      type: built.type,
+      position: built.position,
       data: {
-        label: thumbnail.type === 'video' ? 'Output Mov Node' : 'Output Picture Node',
-        imagePreview: thumbnail.url,
-        generationParams: thumbnail.generationParams || sourceNode.data.generationParams,
-        taskId:
-          thumbnail.generationParams?.taskId ||
-          sourceNode.data.taskId ||
-          sourceNode.data.generationParams?.taskId,
-        imageName: thumbnail.type === 'video' ? 'Video.mov' : 'Generated.png',
-        status: 'completed'
-      }
-    };
-    setPreviewNode(tempNode);
+        ...(live?.data || {}),
+        ...built.data,
+        // 保留画布节点真实 id 映射，便于删除/下载时回溯
+        ...(thumbnail.nodeId ? { _historyOutputNodeId: thumbnail.nodeId } : {}),
+      },
+    } as RFNode;
+    setPreviewThumbSourceNodeId(sourceNode.id);
+    setPreviewActiveThumbId(thumbnail.id);
+    setPreviewNode(preview);
+    if (thumbnail.nodeId && getNodes().some((n) => n.id === thumbnail.nodeId)) {
+      setSelectedNodeId(thumbnail.nodeId);
+    }
   }, [getNodes]);
+
+  const openPreviewFromGeneratedThumb = useCallback(
+    (thumb: GeneratedThumbNavItem, sourceNodeId: string) => {
+      const sourceNode = getNodes().find((n) => n.id === sourceNodeId);
+      if (!sourceNode) return;
+      createPreviewNodeFromThumbnail(
+        {
+          id: thumb.id,
+          url: thumb.url,
+          type: thumb.type,
+          nodeId: thumb.nodeId,
+          name: thumb.name,
+          generationParams: thumb.generationParams as GenerationParams | undefined,
+          posterDataUrl: thumb.posterDataUrl,
+        },
+        sourceNode
+      );
+    },
+    [createPreviewNodeFromThumbnail, getNodes]
+  );
 
   // Video Sequence Player State
   const [isVideoPlayerOpen, setIsVideoPlayerOpen] = useState(false);
@@ -4141,8 +4401,47 @@ const FlowEditor = ({
 
   // Listen for thumbnail click events from CustomNode
   useEffect(() => {
-    const handlePreviewNode = (event: CustomEvent<RFNode>) => {
-      const node = event.detail;
+    const handlePreviewNode = (
+      event: CustomEvent<
+        | RFNode
+        | {
+            preview?: RFNode;
+            sourceNodeId?: string;
+            thumbId?: string;
+            thumb?: GeneratedThumbNavItem;
+          }
+      >
+    ) => {
+      const detail = event.detail;
+      if (
+        detail &&
+        typeof detail === 'object' &&
+        'thumb' in detail &&
+        (detail as { thumb?: GeneratedThumbNavItem }).thumb &&
+        (detail as { sourceNodeId?: string }).sourceNodeId
+      ) {
+        const { thumb, sourceNodeId } = detail as {
+          thumb: GeneratedThumbNavItem;
+          sourceNodeId: string;
+        };
+        openPreviewFromGeneratedThumb(thumb, sourceNodeId);
+        return;
+      }
+      const isWrapped =
+        detail &&
+        typeof detail === 'object' &&
+        'preview' in detail &&
+        (detail as { preview?: RFNode }).preview;
+      const node = (isWrapped ? (detail as { preview: RFNode }).preview : (detail as RFNode)) || null;
+      const sourceNodeId = isWrapped
+        ? String((detail as { sourceNodeId?: string }).sourceNodeId || '').trim() || null
+        : null;
+      const thumbId = isWrapped
+        ? String((detail as { thumbId?: string }).thumbId || '').trim() || null
+        : null;
+      if (!node) return;
+      setPreviewThumbSourceNodeId(sourceNodeId);
+      setPreviewActiveThumbId(thumbId || node.id || null);
       setPreviewNode(node);
       if (node?.id && getNodes().some((n) => n.id === node.id)) {
         setSelectedNodeId(node.id);
@@ -4152,7 +4451,86 @@ const FlowEditor = ({
     return () => {
       window.removeEventListener('flowgen:preview-node', handlePreviewNode as EventListener);
     };
-  }, [getNodes]);
+  }, [getNodes, openPreviewFromGeneratedThumb]);
+
+  const handlePreviewNav = useCallback(
+    (direction: 'prev' | 'next') => {
+      if (!previewNode) return;
+      const sourceId =
+        previewThumbSourceNodeId ||
+        (() => {
+          const all = getNodes();
+          for (const n of all) {
+            const thumbs = n.data?.generatedThumbnails;
+            if (!thumbs?.length) continue;
+            if (
+              thumbs.some(
+                (t) =>
+                  t.id === previewActiveThumbId ||
+                  t.id === previewNode.id ||
+                  t.nodeId === previewNode.id ||
+                  (previewNode.data?.imagePreview && t.url === previewNode.data.imagePreview)
+              )
+            ) {
+              return n.id;
+            }
+          }
+          return null;
+        })();
+      if (!sourceId) return;
+      const source = getNodes().find((n) => n.id === sourceId);
+      const thumbs = source?.data?.generatedThumbnails as GeneratedThumbNavItem[] | undefined;
+      if (!thumbs || thumbs.length < 2) return;
+      const target = resolveGeneratedThumbNavTarget(
+        thumbs,
+        {
+          id: previewNode.id,
+          imagePreview: previewNode.data?.imagePreview,
+          activeThumbId: previewActiveThumbId,
+        },
+        direction
+      );
+      if (!target) return;
+      openPreviewFromGeneratedThumb(target, sourceId);
+    },
+    [
+      previewNode,
+      previewThumbSourceNodeId,
+      previewActiveThumbId,
+      getNodes,
+      openPreviewFromGeneratedThumb,
+    ]
+  );
+
+  useEffect(() => {
+    if (!previewNode) return;
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight') return;
+      if (e.ctrlKey || e.metaKey || e.altKey) return;
+      const ae = document.activeElement as HTMLElement | null;
+      if (
+        ae &&
+        (ae.tagName === 'INPUT' ||
+          ae.tagName === 'TEXTAREA' ||
+          ae.tagName === 'SELECT' ||
+          ae.isContentEditable)
+      ) {
+        return;
+      }
+      e.preventDefault();
+      e.stopPropagation();
+      handlePreviewNav(e.key === 'ArrowLeft' ? 'prev' : 'next');
+    };
+    window.addEventListener('keydown', onKeyDown, true);
+    return () => window.removeEventListener('keydown', onKeyDown, true);
+  }, [previewNode, handlePreviewNav]);
+
+  useEffect(() => {
+    if (!previewNode) {
+      setPreviewThumbSourceNodeId(null);
+      setPreviewActiveThumbId(null);
+    }
+  }, [previewNode]);
 
   // 节点/Inspector 拖入外部文件时注册原图（主图、参考图、首尾帧、即梦多图），上传时优先用原图
   useEffect(() => {
@@ -5307,37 +5685,35 @@ const FlowEditor = ({
     catchUpGraphSideEffects,
   ]);
 
-  // 导出选中的节点（包含连接关系）
+  /** 右键「导出节点」：对齐顶栏文件夹「打开工程」——点击后立刻系统对话框（另存为 / 确认），不经应用内弹窗 */
   const handleExportNodes = useCallback(async () => {
     const currentNodes = getNodes();
     const currentEdges = getEdges();
-    const nodesToExport = currentNodes.filter(n => n.selected);
-    
+    const nodesToExport = currentNodes.filter((n) => n.selected);
+
     if (nodesToExport.length === 0) {
       alert('请先选择要导出的节点');
       setNodeContextMenu(null);
       return;
     }
 
+    // 先关菜单，但本函数仍在 click 手势栈内；尽快调起 picker（与 handleLoadProject 同结构）
+    setNodeContextMenu(null);
+
     try {
-      // 获取选中节点的ID集合
-      const exportedNodeIds = new Set(nodesToExport.map(n => n.id));
-      
-      // 找出所有连接选中节点之间的边（边的source和target都在选中的节点中）
-      const edgesToExport = currentEdges.filter(edge => 
-        exportedNodeIds.has(edge.source) && exportedNodeIds.has(edge.target)
+      const exportedNodeIds = new Set(nodesToExport.map((n) => n.id));
+      const edgesToExport = currentEdges.filter(
+        (edge) => exportedNodeIds.has(edge.source) && exportedNodeIds.has(edge.target)
       );
-      
-      // 准备导出的数据
+
       const exportData = {
-        nodes: nodesToExport.map(node => ({
+        nodes: nodesToExport.map((node) => ({
           id: node.id,
           type: node.type,
           position: node.position,
           data: node.data,
-          // 不包含 selected 状态，因为这是临时状态
         })),
-        edges: edgesToExport.map(edge => ({
+        edges: edgesToExport.map((edge) => ({
           id: edge.id,
           source: edge.source,
           target: edge.target,
@@ -5345,62 +5721,31 @@ const FlowEditor = ({
           targetHandle: edge.targetHandle,
           animated: edge.animated,
           style: edge.style,
-          // 保留边的其他属性
         })),
         exportedAt: new Date().toISOString(),
         nodeCount: nodesToExport.length,
-        edgeCount: edgesToExport.length
+        edgeCount: edgesToExport.length,
       };
 
-      const jsonStr = JSON.stringify(exportData, null, 2);
-      const blob = new Blob([jsonStr], { type: 'application/json' });
+      const nodeLabels = nodesToExport.map((n) => n.data.label || 'node').join('-');
+      const fileName = ensureJsonFileName(
+        `nodes-${nodeLabels.substring(0, 30)}-${Date.now()}`,
+        `nodes-export-${Date.now()}`
+      );
+      const blob = new Blob([JSON.stringify(exportData, null, 2)], { type: 'application/json' });
 
-      // 生成文件名
-      const nodeLabels = nodesToExport.map(n => n.data.label || 'node').join('-');
-      const fileName = `nodes-${nodeLabels.substring(0, 30)}-${Date.now()}.json`;
+      const result = await saveJsonBlob(blob, fileName, {
+        confirmDownloadMessage: `将导出 ${nodesToExport.length} 个节点、${edgesToExport.length} 条连接到下载目录：\n${fileName}\n\n（内网 HTTP 无法使用系统「另存为」，与打开工程在非安全上下文时的限制类似）\n确定导出？`,
+      });
 
-      // 尝试使用 File System Access API（现代浏览器）
-      if ('showSaveFilePicker' in window) {
-        try {
-          const fileHandle = await (window as any).showSaveFilePicker({
-            suggestedName: fileName,
-            types: [{
-              description: 'JSON Files',
-              accept: { 'application/json': ['.json'] }
-            }]
-          });
-          
-          const writable = await fileHandle.createWritable();
-          await writable.write(blob);
-          await writable.close();
-          
-          setNodeContextMenu(null);
-          alert(`✅ 已导出 ${nodesToExport.length} 个节点和 ${edgesToExport.length} 条连接关系到指定位置！`);
-          return;
-        } catch (err: any) {
-          // 用户取消选择，不显示错误
-          if (err.name === 'AbortError') {
-            setNodeContextMenu(null);
-            return;
-          }
-        }
+      if (result === 'aborted') return;
+      if (result === 'picker') {
+        alert(`✅ 已导出 ${nodesToExport.length} 个节点和 ${edgesToExport.length} 条连接关系到指定位置！`);
+      } else {
+        alert(`✅ 已导出 ${nodesToExport.length} 个节点和 ${edgesToExport.length} 条连接关系！`);
       }
-
-      // 传统下载方式
-      const url = URL.createObjectURL(blob);
-      const link = document.createElement('a');
-      link.href = url;
-      link.download = fileName;
-      document.body.appendChild(link);
-      link.click();
-      document.body.removeChild(link);
-      URL.revokeObjectURL(url);
-      
-      setNodeContextMenu(null);
-      alert(`✅ 已导出 ${nodesToExport.length} 个节点和 ${edgesToExport.length} 条连接关系！请在浏览器下载对话框中确认保存位置。`);
     } catch (_error) {
       alert('❌ 导出节点失败，请重试或检查浏览器下载权限');
-      setNodeContextMenu(null);
     }
   }, [getNodes, getEdges]);
 
@@ -5971,8 +6316,8 @@ const FlowEditor = ({
       } else if (reactFlowWrapper.current) {
         const pane = reactFlowWrapper.current.getBoundingClientRect();
         const flowPos = screenToFlowPosition({
-          x: event.clientX - pane.left,
-          y: event.clientY - pane.top,
+          x: event.clientX,
+          y: event.clientY,
         });
         setNodeContextMenu(null);
         setMenu({
@@ -6087,36 +6432,48 @@ const FlowEditor = ({
   );
 
   const addNodeFromMenu = useCallback((type: NodeType, label: string) => {
-    if (!menu || !connectingNodeId.current) return;
+    if (!menu) return;
 
     const id = getId();
-    const adjustedY = menu.flowPosition.y - 150; // Center the tall node
+    
+    const boundData = normalizeTemplateNodeDataForSpawn(
+      {
+        label,
+        imagePreview: undefined,
+        imageName: 'New_Node.png',
+        projectAssetId: undefined,
+        selectedModel: MODEL_NANO_BANANA_2,
+        status: 'idle',
+        imageLocalRef: undefined,
+      },
+      serverProjectId || undefined
+    );
     
     const newNode: RFNode = {
       id,
-      type,
-      position: { x: menu.flowPosition.x, y: adjustedY },
-      data: { label, description: `Auto-created ${label}`, imageName: 'New_Node.png' },
+      type: NodeType.PROCESSOR,
+      position: { x: menu.flowPosition.x, y: menu.flowPosition.y },
+      data: boundData,
+      selected: true,
     };
 
-    // Use spread syntax instead of concat
-    setNodes((nds) => [...nds, newNode]);
+    setNodes((nds) => [...nds.map((n) => (n.selected ? { ...n, selected: false } : n)), newNode]);
 
-    const newEdge: Edge = {
-      id: `e${connectingNodeId.current}-${id}`,
-      source: connectingHandleType.current === 'source' ? connectingNodeId.current : id,
-      target: connectingHandleType.current === 'source' ? id : connectingNodeId.current,
-      animated: true,
-      style: { stroke: '#6366f1', strokeWidth: 2 },
-    };
-
-    // Use spread syntax instead of concat
-    setEdges((eds) => [...eds, newEdge]);
+    if (connectingNodeId.current) {
+      const newEdge: Edge = {
+        id: `e${connectingNodeId.current}-${id}`,
+        source: connectingHandleType.current === 'source' ? connectingNodeId.current : id,
+        target: connectingHandleType.current === 'source' ? id : connectingNodeId.current,
+        animated: true,
+        style: { stroke: '#6366f1', strokeWidth: 2 },
+      };
+      setEdges((eds) => [...eds, newEdge]);
+    }
     
     setMenu(null);
     connectingNodeId.current = null;
     connectingHandleType.current = null;
-  }, [menu, setNodes, setEdges]);
+  }, [menu, setNodes, setEdges, normalizeTemplateNodeDataForSpawn, serverProjectId]);
 
   const closeMenu = useCallback(() => {
     setMenu(null);
@@ -6317,14 +6674,11 @@ const FlowEditor = ({
         pendingRunPersistPatchesRef.current.set(idToRun, next);
       };
 
-      /** 运行前：统一 tab/顶层创意描述，并把可识别的 @图片n 写成 @资产:展示名（各模型共用） */
+      /** 运行前：canonical 仅并入本次 run 快照，不写回节点创意描述（避免二次运行 @ 引用被 remap） */
       const promptCanonPatch = buildCanonicalInspectorPromptPatch(
         currentNode.data,
         projectAssetResolveOptsRef.current.projectAssets
       );
-      if (promptCanonPatch) {
-        updateNodeDataById(idToRun, promptCanonPatch);
-      }
       const runDataBase: NodeData = promptCanonPatch
         ? ({ ...currentNode.data, ...promptCanonPatch } as NodeData)
         : (currentNode.data as NodeData);
@@ -7171,6 +7525,11 @@ const FlowEditor = ({
                           : null;
                 // 面板保留全部拖入槽；generationParams / Node Details 仍用 imageUrls（仅 @ 到的素材）
                 const effectiveNanoPanelRefs = mergedNanoRefs;
+                const nanoMidGpInferredLabels = inferSeedanceReferenceDetailLabelsFromPrompt(
+                    prompt,
+                    imageUrls.length,
+                    projectAssetResolveOptsRef.current.projectAssets
+                );
                 setNodes((nds) =>
                     nds.map((n) => {
                         if (n.id !== idToRun) return n;
@@ -7182,6 +7541,20 @@ const FlowEditor = ({
                                 referenceImages: effectiveNanoPanelRefs,
                                 ...(mergedNanoLabels.some((l) => l.trim())
                                     ? { referenceImageLabels: mergedNanoLabels }
+                                    : {}),
+                                ...(imageUrls.length > 0
+                                    ? {
+                                          generationParams: {
+                                              ...(n.data.generationParams || {}),
+                                              model: MODEL_NANO_BANANA_2,
+                                              prompt,
+                                              referenceImages: [...imageUrls],
+                                              referenceImageLabels:
+                                                  nanoMidGpInferredLabels.length === imageUrls.length
+                                                      ? nanoMidGpInferredLabels
+                                                      : undefined,
+                                          },
+                                      }
                                     : {}),
                             },
                         };
@@ -9603,23 +9976,17 @@ const FlowEditor = ({
                 promptPlanReferencesMainImage(planImagesForPanel) ||
                 planImagesReferenceMainImageAsset(planImagesForPanel, currentNode.data, projectAssetResolveOptsRef.current.projectAssets)
               ) {
-                const seedancePromptAtRun = getCanonicalInspectorPromptText(
-                  runStartDataSnapshot,
-                  projectAssetResolveOptsRef.current.projectAssets
-                );
+                /** §5.8.7：仅同步参考槽/预览，不写回 canonical 创意描述 */
                 setNodes((nds) =>
                   nds.map((n) => {
                     if (n.id !== idToRun) return n;
-                    const promptSyncPatch = buildNodePromptUpdatePatch(
-                      n.data,
-                      seedancePromptAtRun
-                    );
                     const tabs = {
                       ...(n.data.seedanceTabConfigs || {}),
-                      ...(promptSyncPatch.seedanceTabConfigs || {}),
                     } as Record<string, unknown>;
-                    const refTab = { ...((tabs.reference as object) || {}) } as Record<string, unknown>;
-                    refTab.prompt = seedancePromptAtRun;
+                    const refTab = { ...((tabs.reference as object) || {}) } as Record<
+                      string,
+                      unknown
+                    >;
                     const effectivePanelRefs = [...mergedPanelRefs];
                     const effectivePanelLabels = [...mergedPanelLabels];
                     refTab.referenceImages = effectivePanelRefs;
@@ -9631,7 +9998,6 @@ const FlowEditor = ({
                       ...n,
                       data: {
                         ...n.data,
-                        ...promptSyncPatch,
                         seedanceTabConfigs: tabs,
                         ...(shouldPatchNodePreview ? seedancePreviewPatch : {}),
                         ...(seedanceHideMainSlotForCompactRefs
@@ -10297,14 +10663,12 @@ const FlowEditor = ({
             referenceImageLabels: runCaptureLabels?.length ? [...runCaptureLabels] : undefined,
         };
         if (isNanoBanana2Model(currentModelName)) {
-            const mainPrev = snapForGp.data.imagePreview;
             if (nanoRunReferenceSnapshot?.length) {
                 generationParams.referenceImages = dedupe(nanoRunReferenceSnapshot);
             } else {
-                const stripped = (generationParams.referenceImages || []).filter(
-                    (u) => !isDuplicateOfMainImagePreview(u, mainPrev)
-                );
-                generationParams.referenceImages = stripped.length ? stripped : undefined;
+                // §5.9.1 #2：无 @ 引用时 gp 不得写入面板全量 referenceImages
+                generationParams.referenceImages = undefined;
+                generationParams.referenceImageLabels = undefined;
             }
             generationParams.referenceMovs = undefined;
             generationParams.referenceAudios = undefined;
@@ -10495,17 +10859,11 @@ const FlowEditor = ({
             generationParams.firstFrameImageUrl = snapForGp.data.firstFrameImageUrl;
             generationParams.lastFrameImageUrl = snapForGp.data.lastFrameImageUrl;
         } else if (isImage2Model(currentModelName)) {
-            const mainPrev = snapForGp.data.imagePreview;
             if (image2ReferenceSnapshot?.length) {
                 generationParams.referenceImages = dedupe(image2ReferenceSnapshot);
             } else {
-                const stripped = (generationParams.referenceImages || []).filter(
-                    (u) =>
-                        !u.startsWith('blob:') &&
-                        !/^data:/i.test(u) &&
-                        !isDuplicateOfMainImagePreview(u, mainPrev)
-                );
-                generationParams.referenceImages = stripped.length ? stripped : undefined;
+                generationParams.referenceImages = undefined;
+                generationParams.referenceImageLabels = undefined;
             }
             generationParams.referenceMovs = undefined;
             generationParams.referenceAudios = undefined;
@@ -10566,11 +10924,8 @@ const FlowEditor = ({
 
         applyRunPanelFieldsToGenerationParams(generationParams, snapForGp.data, currentModelName);
 
-        if (generatedImages.length > 0) {
-          generationParams.outputUrl = generatedImages[0];
-          if (generatedImages.length > 1) {
-            generationParams.outputUrls = [...generatedImages];
-          }
+        if (generatedImages.length > 1) {
+          generationParams.outputUrls = [...generatedImages];
         }
 
         const outputCount = generatedImages.length;
@@ -10618,12 +10973,15 @@ const FlowEditor = ({
                         ...stillImageOutputPatch,
                         label: outputNaming.label, 
                         ...(outputNaming.customName ? { customName: outputNaming.customName } : {}),
-                        imagePreview: newNodePreview, 
+                        imagePreview: newNodePreview,
                         selectedModel: nextDefaultModel,
                         status: 'idle',
                         generatedAt: generatedAtIso,
                         imageName: outputNaming.imageName,
-                        generationParams: generationParams,
+                        generationParams: {
+                            ...generationParams,
+                            outputUrl: generatedImages[idx],
+                        },
                         taskId: generationParams.taskId,
                         // 创意描述 / 图片 / 视频 / 音频 / 首尾帧参考不继承到 OUTPUT 面板（仅保留在 generationParams 快照供 Node Details）
                         prompt: undefined,
@@ -10854,10 +11212,8 @@ const FlowEditor = ({
                           ).panelMainSlotVisible;
                           const refTab = {
                             ...((n.data.seedanceTabConfigs?.reference as object) || {}),
-                            prompt: getCanonicalInspectorPromptText(
-                              snapForGp.data,
-                              projectAssetResolveOptsRef.current.projectAssets
-                            ),
+                            /** §5.8.7：运行收尾保留用户原文，gp/API 仍用 canonical */
+                            prompt: getNodeInspectorPromptText(snapForGp.data),
                             referenceImages: [...panelRefsFromRun],
                             ...(panelLabelsFromRun?.length
                               ? { referenceImageLabels: [...panelLabelsFromRun] }
@@ -12255,8 +12611,8 @@ const FlowEditor = ({
         return false;
       }
 
-      // 尝试使用 File System Access API（现代浏览器，需要 HTTPS）
-      if ('showSaveFilePicker' in window) {
+      // 尝试使用 File System Access API（需 HTTPS / localhost；内网 http://IP 不可用）
+      if (canUseSaveFilePicker()) {
         try {
           const fileHandle = await (window as any).showSaveFilePicker({
             suggestedName: fileName,
@@ -12281,7 +12637,7 @@ const FlowEditor = ({
         }
       }
 
-      // 传统下载方式（用户可以在浏览器下载对话框中修改文件名和路径）
+      // 传统下载方式（用户可在应用内对话框改文件名；内网 HTTP 无系统另存为）
       const url = URL.createObjectURL(blob);
       const link = document.createElement('a');
       link.href = url;
@@ -12292,7 +12648,11 @@ const FlowEditor = ({
       URL.revokeObjectURL(url);
       
       finishManualProjectSave(fileName);
-      alert('✅ 工程已保存！请在浏览器下载对话框中确认保存位置。');
+      alert(
+        canUseSaveFilePicker()
+          ? '✅ 工程已保存！请在浏览器下载对话框中确认保存位置。'
+          : '✅ 工程已保存到浏览器下载目录！\n（当前为内网 HTTP，无法弹出系统「另存为」；可先在上方修改文件名。）'
+      );
       return true;
     } catch (_error) {
       alert('❌ 保存工程失败，请重试或检查磁盘与浏览器权限');
@@ -12434,6 +12794,24 @@ const FlowEditor = ({
             void hydrateLocalMediaPreviews();
           };
 
+          // 导入后将视口居中到新导入的节点区域，避免节点出现在不可见区域
+          // setTimeout + rAF 双层延迟，确保 React Flow 完成节点渲染和尺寸测量后再 fitView
+          const fitViewOnImportedNodes = () => {
+            const fitTargets = adjustedNodes.filter(hasReasonableNodePosition);
+            if (fitTargets.length > 0) {
+              setTimeout(() => {
+                requestAnimationFrame(() => {
+                  fitView({
+                    nodes: fitTargets,
+                    padding: 0.18,
+                    maxZoom: 1.15,
+                    duration: 0,
+                  });
+                });
+              }, 100);
+            }
+          };
+
           if (adjustedNodes.length >= FLOW_LAZY_HYDRATION_NODE_THRESHOLD) {
             hydrateGraphWithLazyReveal(
               normalizedImportedNodes,
@@ -12441,12 +12819,18 @@ const FlowEditor = ({
               adjustedNodes.map((n) => n.id),
               setNodes,
               setEdges,
-              { onComplete: afterImportHydrateAndPersist }
+              {
+                onComplete: () => {
+                  afterImportHydrateAndPersist();
+                  fitViewOnImportedNodes();
+                },
+              }
             );
           } else {
             setNodes(normalizedImportedNodes);
             setEdges(finalEdges);
             afterImportHydrateAndPersist();
+            fitViewOnImportedNodes();
           }
 
           // 不依赖 React 提交时机：用已算好的图立即写入服务端，避免清空后导入仍保存空画布
@@ -12474,6 +12858,7 @@ const FlowEditor = ({
       hydratePersistedRemotePreviews,
       hydrateLocalMediaPreviews,
       persistImportedGraphSnapshot,
+      fitView,
     ]
   );
 
@@ -13229,9 +13614,15 @@ const FlowEditor = ({
       const listB = Array.isArray(b) ? b : [];
       const d = previewNode.data as any;
       const g = (previewNode.data.generationParams as any) || {};
-      const outputResultUrlForRefMovs = String(previewNode.data.imagePreview || '').trim();
       const isOutputLikeForRefMovs =
         previewNode.type === NodeType.MOV || previewNode.type === NodeType.OUTPUT;
+      // 输出节点：用于过滤自身生成结果的 URL 应取 generationParams.outputUrl（实际生成结果），
+      // 而非 imagePreview。中间 MOV 节点的 imagePreview 可能是上游参考视频，使用它会导致
+      // referenceMovs 中的参考视频被错误过滤（seedanceReferenceMovsForOutputDetails 中的 scrub 逻辑）。
+      const outputResultUrlForRefMovs = String(
+        (isOutputLikeForRefMovs && previewNode.data.generationParams?.outputUrl) ||
+        previewNode.data.imagePreview || ''
+      ).trim();
       const scrubGeneratedResultFromRefMovs = (
         items: Array<{ url: string; posterDataUrl?: string }>
       ): Array<{ url: string; posterDataUrl?: string }> => {
@@ -13487,7 +13878,12 @@ const FlowEditor = ({
         const poster = pickReferenceMovPoster(m.url, m.posterDataUrl);
         return poster ? { url: m.url, posterDataUrl: poster } : { url: m.url };
       };
-      const outputResultUrl = previewNode.data.imagePreview;
+      // 输出节点：用于过滤自身生成结果的 URL 应取 generationParams.outputUrl（实际生成结果），
+      // 而非 imagePreview。中间 MOV 节点的 imagePreview 可能是上游参考视频，使用它会导致
+      // referenceMovs 中的参考视频被错误过滤。
+      const outputResultUrl = isOutputNode && previewNode.data.generationParams?.outputUrl
+        ? previewNode.data.generationParams.outputUrl
+        : previewNode.data.imagePreview;
       const outputResultKey = normalizeVideoUrlForDedupe(outputResultUrl);
       for (const m of rawRefMovs) {
         if (!m?.url) continue;
@@ -13913,45 +14309,42 @@ const FlowEditor = ({
         ? (g.referenceImages as string[]).filter(Boolean)
         : [];
       const outUrl = previewNode.data.imagePreview;
-      if (snapRefs.length > 0) {
-        const snapLabels = Array.isArray(g.referenceImageLabels)
-          ? (g.referenceImageLabels as string[])
-          : [];
-        const fromSnap = buildImageGenOutputReferenceDetailsFromSnapshot({
-          snapshotRefs: snapRefs,
-          snapshotLabels: snapLabels,
-          projectAssets: projectAssetLabelRows,
-          prompt: baseParams.prompt,
-          ...(isOutputLikeForDetails
-            ? {
-                outputImagePreview: outUrl,
-                isRunSnapshotRef: isRunSnapshotReferenceImage,
-                isSameAsOutput: isSameImageOutputAsset,
-              }
-            : {}),
-        });
-        return {
-          ...baseParams,
-          aspectRatio: pickNodeDetailsParam<string>('aspectRatio') || '1:1',
-          resolution: pickNodeDetailsParam<string>('resolution') || '1K',
-          referenceImages: compactRefImagesForDetails(fromSnap.referenceImages),
-          referenceImageDetailItems: fromSnap.referenceImageDetailItems,
-          referenceMovs: [],
-        };
-      }
-      const panelSource: Partial<NodeData> = enrichPanelSourceFromGenerationSnapshot(
+      const panelSourceNano: Partial<NodeData> = enrichPanelSourceFromGenerationSnapshot(
         isOutputLikeForDetails && ancestorData
           ? { ...ancestorData, selectedModel: modelStr }
           : { ...previewNode.data, selectedModel: modelStr },
         g
       );
+      const fromStillImageDetails = buildStillImageGenNodeDetailsReferencePreview({
+        panelSource: panelSourceNano,
+        snapRefs,
+        snapLabels: Array.isArray(g.referenceImageLabels)
+          ? (g.referenceImageLabels as string[])
+          : undefined,
+        prompt: baseParams.prompt,
+        projectAssets: projectAssetLabelRows,
+        isOutputLike: isOutputLikeForDetails,
+        outputImagePreview: outUrl,
+        isRunSnapshotRef: isRunSnapshotReferenceImage,
+        isSameAsOutput: isSameImageOutputAsset,
+      });
+      if (fromStillImageDetails) {
+        return {
+          ...baseParams,
+          aspectRatio: pickNodeDetailsParam<string>('aspectRatio') || '1:1',
+          resolution: pickNodeDetailsParam<string>('resolution') || '1K',
+          referenceImages: compactRefImagesForDetails(fromStillImageDetails.referenceImages),
+          referenceImageDetailItems: fromStillImageDetails.referenceImageDetailItems,
+          referenceMovs: [],
+        };
+      }
       const urlPool = dedupeImageUrls([
         ...snapRefs,
-        ...(Array.isArray(panelSource.referenceImages) ? panelSource.referenceImages! : []),
-        ...(panelSource.imagePreview ? [panelSource.imagePreview] : []),
+        ...(Array.isArray(panelSourceNano.referenceImages) ? panelSourceNano.referenceImages! : []),
+        ...(panelSourceNano.imagePreview ? [panelSourceNano.imagePreview] : []),
       ]);
       const refPreview = buildNodeDetailsReferencePreview({
-        panelSource,
+        panelSource: panelSourceNano,
         urlPool,
         projectAssets: projectAssetLabelRows,
         filterItem: (it) =>
@@ -13982,46 +14375,43 @@ const FlowEditor = ({
         if (isOutputLikeForDetails && outUrl && isSameImageOutputAsset(s, outUrl)) return false;
         return true;
       };
-      if (snapRefs.length > 0) {
-        const snapLabels = Array.isArray(g?.referenceImageLabels)
-          ? (g!.referenceImageLabels as string[])
-          : Array.isArray(d.referenceImageLabels)
-            ? d.referenceImageLabels
-            : [];
-        const fromSnap = buildImageGenOutputReferenceDetailsFromSnapshot({
-          snapshotRefs: snapRefs,
-          snapshotLabels: snapLabels,
-          projectAssets: projectAssetLabelRows,
-          prompt: baseParams.prompt,
-          ...(isOutputLikeForDetails
-            ? {
-                outputImagePreview: outUrl,
-                isRunSnapshotRef: isRunSnapshotReferenceImage,
-                isSameAsOutput: isSameImageOutputAsset,
-                urlAllowed: image2RefUrlOk,
-              }
-            : { urlAllowed: image2RefUrlOk }),
-        });
-        return {
-          ...baseParams,
-          referenceImages: fromSnap.referenceImages,
-          referenceImageDetailItems: fromSnap.referenceImageDetailItems,
-          referenceMovs: [],
-        };
-      }
-      const panelSource: Partial<NodeData> = enrichPanelSourceFromGenerationSnapshot(
+      const panelSourceImage2: Partial<NodeData> = enrichPanelSourceFromGenerationSnapshot(
         isOutputLikeForDetails && ancestorData
           ? { ...ancestorData, selectedModel: modelStr }
           : { ...d, selectedModel: modelStr },
         g
       );
+      const fromStillImageDetails = buildStillImageGenNodeDetailsReferencePreview({
+        panelSource: panelSourceImage2,
+        snapRefs,
+        snapLabels: Array.isArray(g?.referenceImageLabels)
+          ? (g!.referenceImageLabels as string[])
+          : Array.isArray(d.referenceImageLabels)
+            ? d.referenceImageLabels
+            : undefined,
+        prompt: baseParams.prompt,
+        projectAssets: projectAssetLabelRows,
+        isOutputLike: isOutputLikeForDetails,
+        outputImagePreview: outUrl,
+        isRunSnapshotRef: isRunSnapshotReferenceImage,
+        isSameAsOutput: isSameImageOutputAsset,
+        urlAllowed: image2RefUrlOk,
+      });
+      if (fromStillImageDetails) {
+        return {
+          ...baseParams,
+          referenceImages: fromStillImageDetails.referenceImages,
+          referenceImageDetailItems: fromStillImageDetails.referenceImageDetailItems,
+          referenceMovs: [],
+        };
+      }
       const urlPool = dedupeImageUrls([
         ...snapRefs,
-        ...(Array.isArray(panelSource.referenceImages) ? panelSource.referenceImages! : []),
-        ...(panelSource.imagePreview ? [panelSource.imagePreview] : []),
+        ...(Array.isArray(panelSourceImage2.referenceImages) ? panelSourceImage2.referenceImages! : []),
+        ...(panelSourceImage2.imagePreview ? [panelSourceImage2.imagePreview] : []),
       ]);
       const refPreview = buildNodeDetailsReferencePreview({
-        panelSource,
+        panelSource: panelSourceImage2,
         urlPool,
         projectAssets: projectAssetLabelRows,
         maxItems: 3,
@@ -14078,15 +14468,16 @@ const FlowEditor = ({
       const pair = resolveFramePair();
       if (runSeedanceMode === 'reference' || baseRefMovs.length > 0) {
         const movUrlSet = new Set((baseRefMovs || []).map((m) => m.url).filter(Boolean));
-        const snapRefs = Array.isArray(gp?.referenceImages)
-          ? (gp!.referenceImages as string[]).filter(Boolean)
+        const snapRefsRaw = Array.isArray(gp?.referenceImages)
+          ? (gp!.referenceImages as string[])
           : [];
-        if (snapRefs.length > 0) {
+        const hasAnyRef = snapRefsRaw.some((u) => String(u || '').trim());
+        if (hasAnyRef) {
           const snapLabels = Array.isArray(gp?.referenceImageLabels)
             ? (gp!.referenceImageLabels as string[])
             : [];
           const fromSnap = buildSeedanceReferenceDetailsFromSnapshot({
-            snapshotRefs: snapRefs.filter((u) => !movUrlSet.has(u)),
+            snapshotRefs: snapRefsRaw.filter((u) => !movUrlSet.has(u)),
             snapshotLabels: snapLabels,
             projectAssets: projectAssetLabelRows,
             prompt: baseParams.prompt,
@@ -14103,7 +14494,7 @@ const FlowEditor = ({
             ? { ...ancestorData, selectedModel: modelStr, seedanceGenerationMode: 'reference' }
             : { ...previewNode.data, selectedModel: modelStr, seedanceGenerationMode: 'reference' };
         const urlPool = dedupeImageUrls([
-          ...snapRefs,
+          ...snapRefsRaw.filter(Boolean),
           ...(panelSource.imagePreview && shouldIncludeImagePreviewInNodeDetailsUrlPool(panelSource)
             ? [panelSource.imagePreview]
             : []),
@@ -14354,10 +14745,12 @@ const FlowEditor = ({
                          previewNode.type === NodeType.MOV ||
                          isVideoPreviewUrl(nodeDetailsHeroUrl) ? (
                              <video 
+                                key={nodeDetailsHeroUrl}
                                 src={resolveUrlForVideoCapture(nodeDetailsHeroUrl)} 
                                 poster={previewVideoPosterUrl}
                                 controls 
-                                preload="metadata"
+                                preload="auto"
+                                playsInline
                                 className="max-w-full max-h-full object-contain"
                                 onError={(e) => {
                                   const el = e.currentTarget;
@@ -14385,6 +14778,24 @@ const FlowEditor = ({
                          <div className="absolute top-4 left-4 text-white/50 text-xs font-mono bg-black/50 px-2 py-1 rounded pointer-events-none">
                              PREVIEW MODE (DOUBLE CLICK TO CLOSE)
                          </div>
+                         <button
+                             onClick={() => handlePreviewNav('prev')}
+                             className="absolute left-4 top-1/2 -translate-y-1/2 p-3 bg-black/60 hover:bg-black/80 text-white rounded-full transition-colors backdrop-blur-sm"
+                             title="上一个历史记录"
+                         >
+                             <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                                 <path d="m15 18-6-6 6-6"/>
+                             </svg>
+                         </button>
+                         <button
+                             onClick={() => handlePreviewNav('next')}
+                             className="absolute right-4 top-1/2 -translate-y-1/2 p-3 bg-black/60 hover:bg-black/80 text-white rounded-full transition-colors backdrop-blur-sm"
+                             title="下一个历史记录"
+                         >
+                             <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                                 <path d="m9 18 6-6-6-6"/>
+                             </svg>
+                         </button>
                     </div>
 
                     {/* Right: Info Panel（与 Input Picture Node 完全一致：Prompt / Reference Images / Video Frame / Source URL / Used Parameters） */}
@@ -14413,9 +14824,29 @@ const FlowEditor = ({
                                       'multi',
                                     jimengGenerationMode: runParams.jimengGenerationMode || (previewParams as GenerationParams).jimengGenerationMode,
                                 });
-                                return tabLine ? (
-                                    <p className="mt-1.5 text-xs text-brand-400/90 font-medium">{tabLine}</p>
-                                ) : null;
+                                const sourceForHint =
+                                  previewThumbSourceNodeId &&
+                                  getNodes().find((n) => n.id === previewThumbSourceNodeId);
+                                const thumbs = sourceForHint?.data?.generatedThumbnails || [];
+                                const thumbCount = thumbs.length;
+                                const curIdx = findGeneratedThumbIndex(thumbs, {
+                                  id: previewNode.id,
+                                  imagePreview: previewNode.data?.imagePreview,
+                                  activeThumbId: previewActiveThumbId,
+                                });
+                                return (
+                                  <>
+                                    {tabLine ? (
+                                      <p className="mt-1.5 text-xs text-brand-400/90 font-medium">{tabLine}</p>
+                                    ) : null}
+                                    {thumbCount > 1 ? (
+                                      <p className="mt-1 text-[10px] text-gray-500">
+                                        ← → 切换整份 Node Details · Generated Outputs 历史{' '}
+                                        {curIdx >= 0 ? `${curIdx + 1}/${thumbCount}` : `(${thumbCount})`}
+                                      </p>
+                                    ) : null}
+                                  </>
+                                );
                             })()}
                             </div>
                             <button 
@@ -15160,13 +15591,13 @@ const FlowEditor = ({
                     
                     <div className="p-2 flex flex-col gap-1 max-h-64 overflow-y-auto custom-scrollbar">
                         <button 
-                        onClick={() => addNodeFromMenu(NodeType.PROCESSOR, 'GenAI Node')}
+                        onClick={() => addNodeFromMenu(NodeType.INPUT, 'Input Picture Node')}
                         className="flex items-center gap-3 px-3 py-2.5 text-sm text-gray-300 hover:bg-brand-600 hover:text-white rounded-lg transition-all text-left group"
                         >
-                        <UploadCloud className="w-5 h-5 text-purple-400 group-hover:text-white" />
+                        <ImageIcon className="w-5 h-5 text-blue-400 group-hover:text-white" />
                         <div className="flex flex-col">
                             <span className="font-medium leading-none mb-1">Image Node</span>
-                            <span className="text-[10px] text-gray-500 group-hover:text-gray-300">With Model & Copilot</span>
+                            <span className="text-[10px] text-gray-500 group-hover:text-gray-300">Select local file</span>
                         </div>
                         </button>
                     </div>
@@ -15366,22 +15797,24 @@ const FlowEditor = ({
                     color="#4a5568" 
                 />
                 <Controls className="!bg-gray-800 !border-gray-700 !fill-gray-300 [&>button]:!border-b-gray-700 hover:[&>button]:!bg-gray-700 hover:[&>button]:!fill-white" />
-                <FlowgenMiniMap
-                  nodeColor={(n) => {
-                    if (n.type === NodeType.BACKDROP) return '#78716c';
-                    if (n.selected) return '#22d3ee';
-                    return '#818cf8';
-                  }}
-                  nodeStrokeColor={(n) => (n.selected ? '#f0f9ff' : '#4338ca')}
-                  nodeStrokeWidth={3}
-                  nodeBorderRadius={4}
-                  className="!absolute !bottom-[15px] !right-[230px] !left-auto !top-auto !m-0 !h-auto !w-[200px] !bg-gray-800 !border-gray-700 !rounded-lg !shadow-xl"
-                  maskColor="rgba(15, 23, 42, 0.5)"
-                  maskStrokeColor="rgb(34, 211, 238)"
-                  maskStrokeWidth={2}
-                  pannable
-                  zoomable
-                />
+                {hasVisibleMiniMapNodes(nodes) && (
+                  <FlowgenMiniMap
+                    nodeColor={(n) => {
+                      if (n.type === NodeType.BACKDROP) return '#78716c';
+                      if (n.selected) return '#22d3ee';
+                      return '#818cf8';
+                    }}
+                    nodeStrokeColor={(n) => (n.selected ? '#f0f9ff' : '#4338ca')}
+                    nodeStrokeWidth={3}
+                    nodeBorderRadius={4}
+                    className="!absolute !bottom-[15px] !right-[230px] !left-auto !top-auto !m-0 !h-[150px] !w-[150px] !bg-gray-800 !border-gray-700 !rounded-lg !shadow-xl"
+                    maskColor="rgba(15, 23, 42, 0.5)"
+                    maskStrokeColor="rgb(34, 211, 238)"
+                    maskStrokeWidth={2}
+                    pannable
+                    zoomable
+                  />
+                )}
                 
                 {showManualSaveReminder && (
                 <Panel position="top-left">
@@ -15683,9 +16116,9 @@ const FlowEditor = ({
                                 <div className="px-3 py-2 bg-gray-800 border border-gray-700 rounded-lg text-gray-400 text-sm">
                                     {saveFilePath
                                       ? saveFilePath
-                                      : ('showOpenFilePicker' in window)
+                                      : canUseSaveFilePicker()
                                         ? '未关联本地文件：保存时可选择路径；用「打开工程」选文件后可写回原位置'
-                                        : '将在浏览器默认下载文件夹中保存（可在下载对话框中修改路径）'}
+                                        : '当前为非安全上下文（如内网 http://IP）：将保存到浏览器下载目录（可先改上方文件名）'}
                                 </div>
                             </div>
                         </div>

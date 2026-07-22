@@ -95,6 +95,30 @@ describe('hydratePersistedNodePreviews', () => {
     expect(out[1].data.imagePreview).toBe('https://cos.example.com/imagesGenerations/sunset.png');
   });
 
+  it('export JSON: @主图 + COS imagePreview + imageLocalRef must not clear on hydrate', () => {
+    const main =
+      'https://aitop100app-1251510006.cos.ap-shanghai.myqcloud.com/openApi/212508/8cdbc6d8-15fc-4cc9-bd87-a1f23c97b22b.png';
+    const ref0 =
+      'https://aitop100app-1251510006.cos.ap-shanghai.myqcloud.com/openApi/212508/c2f1bc63-b984-4103-aac1-389be1532eac.png';
+    const proc: RFNode = {
+      id: 'node_0_1783922001453',
+      type: NodeType.PROCESSOR,
+      position: { x: 0, y: 0 },
+      data: {
+        imagePreview: main,
+        imageLocalRef: 'flowgen-local:dd73b906-2dd5-40be-a70d-762fba12e36e_14:node_0:main',
+        panelMainSlotVisible: true,
+        referenceImages: [ref0],
+        prompt: '@主图参考@图片1的风格生产',
+        generationParams: {
+          referenceImages: [main, ref0],
+        },
+      },
+    };
+    const hydrated = hydrateNodeImagePreviewFromPersisted(proc);
+    expect(hydrated.data.imagePreview).toBe(main);
+  });
+
   it('processor with blob preview hydrates to first gp ref not outputUrl', () => {
     const outputUrl = 'https://cos.example.com/imagesGenerations/owl.png';
     const firstRef = 'https://cos.example.com/openApi/forest.png';

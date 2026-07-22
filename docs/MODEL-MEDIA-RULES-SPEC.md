@@ -79,6 +79,12 @@
 - Seedance 参考生 OUTPUT：`buildSeedanceReferenceDetailsFromSnapshot`（gp 顺序 + 标签）
 - Omni instruction/video：参考视频区不展示「本次生成结果视频」
 
+**Generated Outputs 历史 ← →（`skill.md` §5.12·S级）：**
+
+- 从节点历史条打开 Details 后，左右键切换**整份面板**（预览 + Prompt/refs/Used Parameters）
+- 必须用 `buildNodeDetailsPreviewFromGeneratedThumb`（该条 `thumb.generationParams`）；`previewActiveThumbId` 有值时禁止 live 节点 sync 覆盖
+- **禁止**只换左侧媒体 URL；必跑 `src/test/utils/generatedThumbKeyboardNav.test.ts`
+
 ### 1.5 缩略图与主预览
 
 | 项 | 规则 |
@@ -89,6 +95,7 @@
 | 运行后主图 | 未 `@主图` → `panelMainSlotVisible=false` + `panelMainImageUrl` 备份 |
 | 编辑态主图格 | `shouldShowPanelMainImageSlot`：有 `@图片n`/`@资产` 但无 `@主图` → **隐藏主图格**；纯文本 prompt → 仍展示 |
 | 重新选中 | **仅**仍 `@主图`（或无图片类 `@`）时 restore 主图格 |
+| **主图 URL = 参考槽 URL（§5.11.2）** | 展示：仅主图格**实际展示**时对参考槽去重；idle sync 用 `shouldDedupePanelRefsAgainstMainForSync`（overlap 时不清空槽） |
 | OUTPUT/MOV spawn | 视频结果写 `imagePreview`；面板首尾帧格清空（Details 读 gp） |
 
 ---
@@ -130,6 +137,8 @@
 |------|----------|------|
 | **test:gate** | vitest + node-details + panel-refs + **panel-main-slot** + **batch-run-schedule** + model-contract + i2v + first-frame | `npm run test:gate` |
 | **test:panel-main-slot** | 全模型主图格 × 创意描述（`PANEL_MAIN_IMAGE_SLOT_SCENARIOS`） | 已并入 gate |
+| **test:20260709-*-main-dup-ref-panel** | 主图=参考槽同 URL：展示不丢图 + sync 不清空（`skill.md` **§5.11.2**） | 已并入 gate 第 34–35 步 |
+| **vitest generatedThumbKeyboardNav** | Node Details ←→ 整份 Generated Outputs 历史（`skill.md` **§5.12**） | 已并入 gate vitest 步 |
 | **test:model-contract** | 表驱动：各模型面板→@→plan→API→gp→Details→OUTPUT sanitize | `npm run test:model-contract` |
 | **test:panel-partial-ref** | **全模型各 tab：面板保留未@槽 + Details 仅@引用 + 运行后新图可@** | 已并入 gate |
 | **test:node-details** | 各模型 Details 构建 | 140 项 |

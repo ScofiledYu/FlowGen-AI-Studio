@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   backdropFlowSizeChanged,
   backdropLabelScreenHeightFromPresentation,
+  backdropResizeHandleNeedsPointerEventsAuto,
   BACKDROP_LABEL_EDIT_BLOCK_MS,
   getBackdropFlowSizeFromNode,
   nextBackdropLabelEditBlockUntil,
@@ -68,5 +69,14 @@ describe('backdropLabel', () => {
     expect(nextBackdropLabelEditBlockUntil(now, 'afterWheelOrViewport')).toBe(
       now + BACKDROP_LABEL_EDIT_BLOCK_MS.afterWheelOrViewport
     );
+  });
+
+  it('resize handle class must restore pointer-events under pointer-events-none root', () => {
+    expect(
+      backdropResizeHandleNeedsPointerEventsAuto(
+        'pointer-events-auto !z-20 !h-3.5 !w-3.5 nodrag nopan'
+      )
+    ).toBe(true);
+    expect(backdropResizeHandleNeedsPointerEventsAuto('!h-3 !w-3 nodrag nopan')).toBe(false);
   });
 });

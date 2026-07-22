@@ -12,6 +12,7 @@ import {
   panelReferenceSlotLabel,
   refImageOrdinalForSlot,
   resolvePictureTokenSlotIndex,
+  resolvePromptMainImagePreviewForRefs,
   type PanelRefSlotLabelMode,
 } from './promptMediaRefs';
 
@@ -952,6 +953,7 @@ export function referenceImagesDedupePatchIfNeeded(
     | 'referenceImages'
     | 'referenceImageLabels'
     | 'imagePreview'
+    | 'panelMainImageUrl'
     | 'panelMainSlotVisible'
     | 'selectedModel'
     | 'prompt'
@@ -966,18 +968,21 @@ export function referenceImagesDedupePatchIfNeeded(
 ): Partial<Pick<NodeData, 'referenceImages' | 'referenceImageLabels'>> | undefined {
   const refs = data.referenceImages || [];
   if (!refs.length) return undefined;
+  // 运行后 imagePreview 常为画布首个 @ 参考；主图格用 panelMainImageUrl。去重必须对主图槽 URL，
+  // 否则会把 @图片n 槽误清（banana-主图是资产库中图片.json）。
+  const mainForDedupe = resolvePromptMainImagePreviewForRefs(data as NodeData);
   const dedupeAgainstMain =
     options?.dedupeAgainstMain ??
-    (Boolean(data.imagePreview?.trim()) && data.panelMainSlotVisible !== false);
+    (Boolean(mainForDedupe?.trim()) && data.panelMainSlotVisible !== false);
   const deduped = dedupeReferenceImageSlots(refs, data.referenceImageLabels, {
-    imagePreview: data.imagePreview,
+    imagePreview: mainForDedupe,
     dedupeAgainstMain,
     projectAssets: options?.projectAssets,
   });
   const syncedLabels = syncGenericReferenceImageLabelsToSlotOrdinals(
     deduped.referenceImages,
     deduped.referenceImageLabels,
-    data.imagePreview,
+    mainForDedupe,
     options?.prompt ?? getNodeInspectorPromptText(data as NodeData)
   );
   const sameRefs =

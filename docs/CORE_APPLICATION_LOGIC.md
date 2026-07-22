@@ -297,7 +297,7 @@ Inspector 内本地上传视频会用 **`createVideoPosterLite`**（轻量截帧
 
 - **复制节点**：`copySelectedNodesToClipboard`（等同 Ctrl+C；无 HTTPS 时仍可用页内 ref 粘贴）。  
 - **创建背景框**：`handleCreateBackdropFromSelection` — 对当前选中（排除 BACKDROP、CHAIN_FOLDER）算外包矩形 + padding，新建 `BACKDROP` 并写入 `backdropChildIds`。  
-- **导出节点**：`handleExportNodes` — 仅导出**选中节点**及**两端都在选中集合内的边**；JSON 含 `nodes`/`edges`/`exportedAt`/计数；优先 `showSaveFilePicker`，否则 `<a download>`。
+- **导出节点**：`handleExportNodes` — 对齐顶栏文件夹「打开工程」：点击后立刻系统对话框。HTTPS/localhost → `showSaveFilePicker`；内网 `http://IP` → `confirm` 后再 `<a download>`（无静默下载）。`canUseSaveFilePicker` = API ∧ `isSecureContext`。
 
 ### 6.4 `menu`（ADD NODE）
 

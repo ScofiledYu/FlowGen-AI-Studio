@@ -13,6 +13,7 @@ import {
   reconcileSourceRunStateAfterOutputNodesRemoved,
   clearStaleRunTaskBeforeFreshRun,
   restoreUploadPhaseRunningUi,
+  buildRecoveryGraphUpdates,
 } from '../../../utils/runRecovery';
 
 function simNode(partial: {
@@ -431,6 +432,70 @@ describe('runRecovery', () => {
     expect(gp.seedanceGenerationMode).toBe('reference');
     expect(gp.referenceImages).toEqual([panelA, panelB]);
     expect(gp.referenceImageLabels).toEqual(['主图', '图片3']);
+  });
+
+  it('Nano recovery: gp 从 @图片n 面板补齐 + preview 切到首个@参考 + OUTPUT 继承 Nano', () => {
+    const main = '/flowgen-api/projects/14/assets/main/file';
+    const pic3 = 'https://cos.example/pic3.png';
+    const pic6 = 'https://cos.example/pic6.png';
+    const runNode = simNode({
+      id: 'nano-run',
+      data: {
+        selectedModel: 'Nano Banana 2.0',
+        prompt: '@图片3参考@图片6风格生成',
+        imagePreview: main,
+        panelMainImageUrl: main,
+        aspectRatio: '16:9',
+        taskId: '1553425',
+        referenceImages: ['https://a/1', 'https://a/2', pic3, '', '', pic6, ''],
+        referenceImageLabels: ['夏茉', '萧逍', '图片3', '图片4', '图片5', '图片6', '图片7'],
+        generationParams: { taskId: '1553425' },
+      },
+    });
+    const gp = mergeRecoveryGenerationParamsFromRunNode(runNode, {
+      taskId: '1553425',
+      model: 'Nano Banana 2.0',
+      outputUrl: 'https://cos.example/out.png',
+    });
+    expect(gp.referenceImages).toEqual([pic3, pic6]);
+    expect(gp.aspectRatio).toBe('16:9');
+
+    const { nodes } = buildRecoveryGraphUpdates({
+      nodes: [runNode],
+      edges: [],
+      runNodeId: runNode.id,
+      mediaUrls: ['https://cos.example/out.png'],
+      taskIdJoined: '1553425',
+      createNodeId: () => 'out-1',
+    });
+    const run = nodes.find((n) => n.id === runNode.id)!;
+    const out = nodes.find((n) => n.type === NodeType.OUTPUT)!;
+    expect(run.data.imagePreview).toBe(pic3);
+    expect(run.data.panelMainSlotVisible).toBe(false);
+    expect(run.data.panelMainImageUrl).toBe(main);
+    expect(out.data.selectedModel).toBe('Nano Banana 2.0');
+    expect(out.data.generationParams?.referenceImages).toEqual([pic3, pic6]);
+  });
+
+  it('mergeRecoveryGenerationParamsFromRunNode clears stale Nano gp panel refs when prompt has no @', () => {
+    const runNode = simNode({
+      id: 'nano',
+      data: {
+        selectedModel: 'Nano Banana 2.0',
+        prompt: '',
+        referenceImages: ['https://a/1', 'https://a/2', 'https://a/3'],
+        generationParams: {
+          referenceImages: ['https://a/1', 'https://a/2', 'https://a/3', 'https://a/4'],
+          model: 'Nano Banana 2.0',
+        },
+      },
+    });
+    const gp = mergeRecoveryGenerationParamsFromRunNode(runNode, {
+      taskId: 't1',
+      model: 'Nano Banana 2.0',
+      outputUrl: 'https://cos.example/out.png',
+    });
+    expect(gp.referenceImages).toBeUndefined();
   });
 
   it('mergeRecoveryGenerationParamsFromRunNode falls back to gp when panel has no refs', () => {

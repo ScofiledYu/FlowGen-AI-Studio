@@ -5,6 +5,7 @@ import {
   computeMiniMapViewBoxWithViewUnion,
   computeMiniMapViewBoxWithViewportCap,
   estimateMinNodePixelSize,
+  hasVisibleMiniMapNodes,
 } from '../../../utils/flowgenMiniMapLayout';
 
 /** workspace/14 量级：219 节点、纵向分镜 */
@@ -12,10 +13,10 @@ const STORYBOARD_BOUNDS = { x: -4609, y: 6, width: 7472, height: 43099 };
 const TYPICAL_NODE = { width: 324, height: 240 };
 
 describe('flowgenMiniMapLayout', () => {
-  it('adaptive size keeps reference width and raises height for tall layouts', () => {
+  it('fixed size returns 150x150 for any layout', () => {
     const size = computeAdaptiveMiniMapSize(STORYBOARD_BOUNDS);
-    expect(size.width).toBe(200);
-    expect(size.height).toBe(400);
+    expect(size.width).toBe(150);
+    expect(size.height).toBe(150);
   });
 
   it('nodes-only viewBox stays stable when viewport is zoomed out (no viewBB union)', () => {
@@ -33,10 +34,12 @@ describe('flowgenMiniMapLayout', () => {
     expect(nodesOnly.viewScale).toBeLessThan(withUnion.viewScale);
   });
 
-  it('storyboard project nodes stay visible on minimap (>=2px) after layout fix', () => {
-    const size = computeAdaptiveMiniMapSize(STORYBOARD_BOUNDS);
-    expect(size.height).toBe(400);
-    const viewBox = computeMiniMapViewBox(STORYBOARD_BOUNDS, size.width, size.height);
+  it('typical project nodes stay visible on minimap (>=2px) with fixed 150x150', () => {
+    // 使用均衡宽高比的 bounds，确保 150x150 固定尺寸下节点仍 >=2px
+    const balancedBounds = { x: 0, y: 0, width: 12000, height: 8000 };
+    const size = computeAdaptiveMiniMapSize(balancedBounds);
+    expect(size).toEqual({ width: 150, height: 150 });
+    const viewBox = computeMiniMapViewBox(balancedBounds, size.width, size.height);
     const px = estimateMinNodePixelSize(
       TYPICAL_NODE.width,
       TYPICAL_NODE.height,
@@ -47,10 +50,10 @@ describe('flowgenMiniMapLayout', () => {
     expect(px).toBeGreaterThanOrEqual(2);
   });
 
-  it('wide layouts keep reference 200x150 footprint', () => {
+  it('wide layouts keep fixed 150x150 footprint', () => {
     const wide = { x: 0, y: 0, width: 8000, height: 2000 };
     const size = computeAdaptiveMiniMapSize(wide);
-    expect(size).toEqual({ width: 200, height: 150 });
+    expect(size).toEqual({ width: 150, height: 150 });
   });
 
   it('viewportCap: viewport inside bounds → same as base', () => {
@@ -97,5 +100,32 @@ describe('flowgenMiniMapLayout', () => {
     const capped = computeMiniMapViewBoxWithViewportCap(bounds, viewportOverflow, size.width, size.height);
     const px = estimateMinNodePixelSize(200, 150, capped, size.width, size.height);
     expect(px).toBeGreaterThanOrEqual(2);
+  });
+
+  it('hasVisibleMiniMapNodes: empty canvas should not show MiniMap', () => {
+    expect(hasVisibleMiniMapNodes([])).toBe(false);
+  });
+
+  it('hasVisibleMiniMapNodes: only backdrop/chainFolder should not show MiniMap', () => {
+    expect(
+      hasVisibleMiniMapNodes([
+        { type: 'backdropNode' },
+        { type: 'chainFolderNode' },
+      ]),
+    ).toBe(false);
+  });
+
+  it('hasVisibleMiniMapNodes: any working node should show MiniMap', () => {
+    expect(hasVisibleMiniMapNodes([{ type: 'inputNode' }])).toBe(true);
+    expect(hasVisibleMiniMapNodes([{ type: 'processorNode' }])).toBe(true);
+    expect(hasVisibleMiniMapNodes([{ type: 'outputNode' }])).toBe(true);
+    expect(hasVisibleMiniMapNodes([{ type: 'movNode' }])).toBe(true);
+    // 混合场景：背景框 + 工作节点
+    expect(
+      hasVisibleMiniMapNodes([
+        { type: 'backdropNode' },
+        { type: 'inputNode' },
+      ]),
+    ).toBe(true);
   });
 });

@@ -1503,8 +1503,8 @@ console.log('\n=== 11g. image2 OUTPUT：@资产+@图片1 按 API 快照顺序（
     fromSnap.referenceImageDetailItems.map((i) => i.label).join(',')
   );
   ok(
-    'image2 OUTPUT URL 与快照一致（大牙可解析为资产库 URL）',
-    fromSnap.referenceImageDetailItems[0]?.url === libDaya &&
+    'image2 OUTPUT URL 与快照一致（Node Details 使用 COS 地址而非资产库地址）',
+    fromSnap.referenceImageDetailItems[0]?.url === dayaUp &&
       fromSnap.referenceImageDetailItems[1]?.url === pic1Up,
     `${fromSnap.referenceImageDetailItems.map((i) => i.url).join(' | ')}`
   );
@@ -1847,6 +1847,56 @@ console.log('\n=== 11r. vvvvv：Nano 稀疏 @图片5+@图片2+@图片6，Details
   eq(fromSnap.referenceImages.length, 3, 'Details 仅 API 3 张');
   ok('Details 不含未 @ 槽 data URL', !fromSnap.referenceImages.some((u) => u.startsWith('data:')));
   ok('Details 不含主图格', !fromSnap.referenceImageDetailItems.some((i) => i.label === '主图'));
+}
+
+console.log('\n=== 14. 多输出节点 Source URL 不重复（spawn 后各节点 gp.outputUrl 对应自身结果） ===\n');
+{
+  const img0 =
+    'https://aitop100app-1251510006.cos.ap-shanghai.myqcloud.com/imagesGenerations/out-0.png';
+  const img1 =
+    'https://aitop100app-1251510006.cos.ap-shanghai.myqcloud.com/imagesGenerations/out-1.png';
+
+  // 模拟 FlowEditor spawn 后应产生的数据结构：每个 OUTPUT 节点有独立的 gp.outputUrl
+  const outputNode0 = simOutputNode(
+    {
+      selectedModel: MODEL_NANO_BANANA_2,
+      prompt: '@资产:卷卷出现在@资产:原始丛林小路中',
+      referenceImages: [
+        'https://aitop100app-1251510006.cos.ap-shanghai.myqcloud.com/openApi/212508/ref-a.png',
+        'https://aitop100app-1251510006.cos.ap-shanghai.myqcloud.com/openApi/212508/ref-b.png',
+      ],
+      numberOfImages: '2张',
+    },
+    MODEL_NANO_BANANA_2,
+    {
+      outputUrl: img0,
+      outputUrls: [img0, img1],
+      taskId: '1662365, 1662366',
+    }
+  );
+  const outputNode1 = simOutputNode(
+    {
+      selectedModel: MODEL_NANO_BANANA_2,
+      prompt: '@资产:卷卷出现在@资产:原始丛林小路中',
+      referenceImages: [
+        'https://aitop100app-1251510006.cos.ap-shanghai.myqcloud.com/openApi/212508/ref-a.png',
+        'https://aitop100app-1251510006.cos.ap-shanghai.myqcloud.com/openApi/212508/ref-b.png',
+      ],
+      numberOfImages: '2张',
+    },
+    MODEL_NANO_BANANA_2,
+    {
+      outputUrl: img1,
+      outputUrls: [img0, img1],
+      taskId: '1662365, 1662366',
+    }
+  );
+
+  const src0 = resolveNodeDetailsSourceUrl(outputNode0, NodeType.OUTPUT);
+  const src1 = resolveNodeDetailsSourceUrl(outputNode1, NodeType.OUTPUT);
+  eq(src0, img0, 'OUTPUT 节点 0 的 Source URL 为第 1 张结果');
+  eq(src1, img1, 'OUTPUT 节点 1 的 Source URL 为第 2 张结果');
+  ok('两个 OUTPUT 节点 Source URL 不相同', src0 !== src1);
 }
 
 console.log('\n=== 汇总 ===\n');

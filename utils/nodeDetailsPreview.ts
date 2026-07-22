@@ -10,6 +10,7 @@ import {
   getSeedanceDefaultResolution,
   normalizeSeedanceAspectForTextRef,
 } from './seedanceAspectRatio';
+import { pickStillImageRecoveryApiReferenceImages } from './referencedMediaRun';
 import { SEEDANCE_DURATION_DEFAULT_LABEL } from './seedanceDuration';
 import {
   buildReferenceImageDetailItemsFromPanel,
@@ -31,6 +32,7 @@ import {
   panelRefDisplayDedupeKey,
   projectAssetMediaPairKeyFromUrl,
   resolvePanelReferenceSlotDisplayUrl,
+  isGenericPanelRefLabel,
   type ProjectAssetLabelRow,
 } from './referenceImageSlotLabels';
 import { parseProjectAssetIdsFromMediaUrl } from './projectAssetPreview';
@@ -206,6 +208,32 @@ export function resolveNodeDetailsHeroImageUrl(
   }
 ): string | undefined {
   const main = String(data.imagePreview || '').trim();
+
+  // Seedance 参考生 MOV/OUTPUT 节点：PREVIEW MODE 优先展示参考视频（@主视频），而非生成的 imagePreview
+  // 但 Generated Outputs 历史预览（有 _historyOutputNodeId）应展示实际生成的视频，不走此逻辑
+  const isHistoryPreview = !!(data as any)._historyOutputNodeId;
+  const isSeedanceRef =
+    typeof data.selectedModel === 'string' &&
+    (data.selectedModel.includes('seedance2.0') || data.selectedModel.includes('seedance1.5')) &&
+    data.seedanceGenerationMode === 'reference';
+  if (!isHistoryPreview && isLikelyMainVideoUrl(main) && isSeedanceRef && data.referenceMovs?.length) {
+    const refMovUrl = String(data.referenceMovs[0]?.url || '').trim();
+    if (refMovUrl) return refMovUrl;
+  }
+
+  // 可灵3.0 Omni 指令变换/视频参考：MOV/OUTPUT 节点 PREVIEW MODE 优先展示参考视频（@主视频），而非生成的 imagePreview
+  // 与 Seedance 参考生逻辑一致；generationParams.klingOmniTab 优先于节点顶层 klingOmniTab（后者可能不一致）
+  const gp = data.generationParams as any;
+  const omniTab = gp?.klingOmniTab || data.klingOmniTab;
+  const isOmniVideoRef =
+    typeof data.selectedModel === 'string' &&
+    data.selectedModel === '可灵3.0 Omni' &&
+    (omniTab === 'instruction' || omniTab === 'video');
+  if (!isHistoryPreview && isLikelyMainVideoUrl(main) && isOmniVideoRef && data.referenceMovs?.length) {
+    const refMovUrl = String(data.referenceMovs[0]?.url || '').trim();
+    if (refMovUrl) return refMovUrl;
+  }
+
   if (!nodeUsesHiddenMainPreviewSlot(data)) return main || undefined;
 
   const items = options?.referenceImageDetailItems || [];
@@ -235,6 +263,9 @@ export function resolveNodeDetailsHeroImageUrl(
       return main;
     }
   }
+
+  // 非 Seedance 参考生的视频节点：imagePreview 是视频 URL 时直接返回视频，不被参考图覆盖
+  if (isLikelyMainVideoUrl(main)) return main;
 
   return items[0]?.url?.trim() || undefined;
 }
@@ -283,9 +314,7 @@ export function resolveReferenceImageDetailItemsWithUrlPool(
   const pool = urlPool.map((u) => String(u || '').trim()).filter(Boolean);
   const used = new Set<number>();
   return items.map((item) => {
-    const correctedUrl = options?.projectAssets?.length
-      ? resolvePanelReferenceSlotDisplayUrl(item.url, item.label, options.projectAssets)
-      : item.url;
+    const correctedUrl = item.url;
 
     const byLabel = poolIndexForLabeledAsset(item.label, pool, used, options?.projectAssets);
     if (byLabel >= 0) {
@@ -398,9 +427,7 @@ export function buildNodeDetailsReferencePreview(input: {
   maxItems?: number;
   projectAssets?: ProjectAssetLabelRow[];
 }): { referenceImages: string[]; referenceImageDetailItems: ReferenceImageDetailItem[] } {
-  let detailItems = buildReferenceImageDetailItemsFromPanel(input.panelSource, {
-    projectAssets: input.projectAssets,
-  });
+  let detailItems = buildReferenceImageDetailItemsFromPanel(input.panelSource, {});
   detailItems = resolveReferenceImageDetailItemsWithUrlPool(detailItems, input.urlPool, {
     projectAssets: input.projectAssets,
   });
@@ -520,6 +547,54 @@ export function buildImageGenOutputReferenceDetailsFromSnapshot(input: {
   };
 }
 
+/**
+ * Nano / image2 Node Details：优先 gp 快照；gp 空时从创意描述 @ 引用 + 面板槽解析（勿回退全量面板）。
+ * §5.9.1 #2：Details 仅展示 @ 到的素材。
+ */
+export function buildStillImageGenNodeDetailsReferencePreview(input: {
+  panelSource: Partial<NodeData>;
+  snapRefs: string[];
+  snapLabels?: string[];
+  prompt?: string;
+  projectAssets?: ProjectAssetLabelRow[];
+  isOutputLike?: boolean;
+  outputImagePreview?: string;
+  isRunSnapshotRef?: (url: string) => boolean;
+  isSameAsOutput?: (refUrl: string, outputUrl: string) => boolean;
+  urlAllowed?: (url: string) => boolean;
+}): { referenceImages: string[]; referenceImageDetailItems: ReferenceImageDetailItem[] } | null {
+  const snapRefs = input.snapRefs.map((u) => String(u || '').trim()).filter(Boolean);
+  const snapOpts = {
+    snapshotLabels: input.snapLabels,
+    projectAssets: input.projectAssets,
+    prompt: input.prompt,
+    ...(input.isOutputLike
+      ? {
+          outputImagePreview: input.outputImagePreview,
+          isRunSnapshotRef: input.isRunSnapshotRef,
+          isSameAsOutput: input.isSameAsOutput,
+        }
+      : {}),
+    ...(input.urlAllowed ? { urlAllowed: input.urlAllowed } : {}),
+  };
+  if (snapRefs.length > 0) {
+    return buildImageGenOutputReferenceDetailsFromSnapshot({
+      snapshotRefs: snapRefs,
+      ...snapOpts,
+    });
+  }
+  const recovered = pickStillImageRecoveryApiReferenceImages(
+    input.panelSource,
+    input.projectAssets
+  );
+  if (!recovered?.referenceImages?.length) return null;
+  return buildImageGenOutputReferenceDetailsFromSnapshot({
+    snapshotRefs: recovered.referenceImages,
+    snapshotLabels: recovered.referenceImageLabels,
+    ...snapOpts,
+  });
+}
+
 /** Seedance 参考生 OUTPUT/MOV：Node Details 只展示 generationParams 里本次 API 实际上传的 referenceImages */
 export function buildSeedanceReferenceDetailsFromSnapshot(input: {
   snapshotRefs: string[];
@@ -527,36 +602,110 @@ export function buildSeedanceReferenceDetailsFromSnapshot(input: {
   projectAssets?: ProjectAssetLabelRow[];
   prompt?: string;
 }): { referenceImages: string[]; referenceImageDetailItems: ReferenceImageDetailItem[] } {
-  const urls = sanitizeDetailsReferenceImageUrls(
-    input.snapshotRefs.map((u) => String(u || '').trim()).filter(Boolean)
-  );
-  const labels = input.snapshotLabels || [];
+  const rawRefs = input.snapshotRefs;
+  const rawLabels = input.snapshotLabels || [];
+  // 快照 referenceImages 常为紧凑数组，但 referenceImageLabels 仍保留面板槽位（含空槽）。
+  // 先按原始非空 URL 的索引对齐标签，避免标签与 URL 错位。
+  const compacted: { url: string; label: string }[] = [];
+  for (let i = 0; i < rawRefs.length; i++) {
+    const u = String(rawRefs[i] || '').trim();
+    if (!u) continue;
+    compacted.push({ url: u, label: String(rawLabels[i] || '').trim() });
+  }
   const promptText = String(input.prompt || '').trim();
+  const pa = input.projectAssets;
+  const promptImageTokenCount = promptText
+    ? countUniquePromptImageRefTokens(promptText, pa)
+    : 0;
+  // §5.9.1 #2：Details 仅展示创意描述 @ 到的素材。
+  // 面板中拖入了未被 prompt @ 引用的图片时，快照会包含多余 URL，需按 prompt 标签过滤。
+  let filtered = compacted;
+  if (promptImageTokenCount > 0 && compacted.length > promptImageTokenCount) {
+    // @资产: token 需要 projectAssets 才能被 matchAllPromptMediaTokens 识别；
+    // 若 prompt 含 @资产: 但 projectAssets 缺失，token 计数会偏小，此时不过滤避免误删。
+    const hasAssetMention = promptText.includes('@资产:');
+    const canReliablyFilter = !hasAssetMention || (pa?.length ?? 0) > 0;
+    if (canReliablyFilter) {
+      const expectedLabels = new Set(
+        inferSeedanceReferenceDetailLabelsFromPrompt(
+          promptText,
+          promptImageTokenCount,
+          pa
+        ).map((l) => l.trim())
+      );
+      const matched = compacted.filter((c) => expectedLabels.has(c.label.trim()));
+      if (matched.length > 0) {
+        filtered = matched;
+      }
+    }
+  }
+  const urls = sanitizeDetailsReferenceImageUrls(filtered.map((c) => c.url));
+  const labels = filtered.map((c) => c.label);
   const inferred = promptText
     ? inferSeedanceReferenceDetailLabelsFromPrompt(
         promptText,
         urls.length,
-        input.projectAssets
+        pa
       )
     : [];
-  const promptImageTokenCount = promptText
-    ? countUniquePromptImageRefTokens(promptText, input.projectAssets)
-    : 0;
-  /** @资产 与 @图片n 混排时 API 顺序≠面板槽；快照若误存面板标签会错配，以 prompt 顺序为准 */
+  /** @资产 与 @图片n 混排时 API 顺序≠面板槽；快照若误存面板标签会错配。
+   *  标签集与 inferred 一致时：按 prompt 顺序重排 URL 与标签，避免「标签与图片错位」；
+   *  标签集不一致时（gp 标签为 stale 面板数据）：沿用旧行为，用 inferred 标签直接覆盖。 */
   const preferPromptLabels =
     promptImageTokenCount > 0 &&
     promptImageTokenCount >= urls.length &&
     inferred.length === urls.length;
-  const pa = input.projectAssets;
+  // preferPromptLabels 时，按 prompt 推断顺序重排 URL 与标签
+  let finalUrls = urls;
+  let finalLabels = labels;
+  let useInferredLabels = preferPromptLabels;
+  if (preferPromptLabels) {
+    const compactedLabelSet = new Set(labels.map((l) => l.trim()));
+    const inferredLabelSet = new Set(inferred.map((l) => l.trim()));
+    const labelSetsMatch =
+      compactedLabelSet.size === inferredLabelSet.size &&
+      [...compactedLabelSet].every((l) => inferredLabelSet.has(l));
+    if (labelSetsMatch) {
+      // 标签集一致但顺序不同：重排 URL 与标签，避免错位
+      const labelToUrl = new Map<string, string>();
+      for (let i = 0; i < labels.length; i++) {
+        labelToUrl.set(labels[i].trim(), urls[i]);
+      }
+      const reorderedUrls: string[] = [];
+      const reorderedLabels: string[] = [];
+      for (const infLabel of inferred) {
+        const trimmed = infLabel.trim();
+        const url = labelToUrl.get(trimmed);
+        if (url) {
+          reorderedUrls.push(url);
+          reorderedLabels.push(trimmed);
+        }
+      }
+      // 兜底：保留未被 inferred 命中的原始项
+      for (let i = 0; i < labels.length; i++) {
+        const trimmed = labels[i].trim();
+        if (!reorderedLabels.includes(trimmed)) {
+          reorderedUrls.push(urls[i]);
+          reorderedLabels.push(trimmed);
+        }
+      }
+      if (reorderedUrls.length === urls.length) {
+        finalUrls = reorderedUrls;
+        finalLabels = reorderedLabels;
+      }
+      useInferredLabels = false; // 已重排，无需 inferred 覆盖
+    }
+    // labelSetsMatch 为 false：gp 标签为 stale 面板数据，沿用旧行为用 inferred 标签
+  }
   return {
-    referenceImages: urls,
-    referenceImageDetailItems: urls.map((url, i) => {
+    referenceImages: finalUrls,
+    referenceImageDetailItems: finalUrls.map((url, i) => {
       const label = preferPromptLabels
-        ? inferred[i]?.trim() || labels[i]?.trim() || `图片${i + 1}`
+        ? (useInferredLabels
+            ? inferred[i]?.trim() || labels[i]?.trim() || `图片${i + 1}`
+            : finalLabels[i]?.trim() || inferred[i]?.trim() || `图片${i + 1}`)
         : labels[i]?.trim() || inferred[i]?.trim() || `图片${i + 1}`;
-      const displayUrl = pa?.length
-        ? resolvePanelReferenceSlotDisplayUrl(url, label, pa) || url
-        : url;
+      const displayUrl = url;
       return { label, url: displayUrl, slotIndex: i };
     }),
   };
@@ -1145,7 +1294,10 @@ export function buildOmniInstructionVideoTabDetailsReferencePreview(input: {
   const snapRefs = sanitizeDetailsReferenceImageUrls(
     input.snapshotRefs.filter((u) => u && !input.movUrlSet.has(u))
   );
-  let slotRefs = ((panel[refKey as keyof NodeData] as string[] | undefined) || []).filter(Boolean);
+  // 过滤掉 blob:/data: 等临时 URL，避免刷新后 slotRefs 计数膨胀导致 omniPanelFilledCountExceedsPromptImageRefs 误判
+  let slotRefs = ((panel[refKey as keyof NodeData] as string[] | undefined) || [])
+    .filter(Boolean)
+    .filter((u) => !/^(blob|data):/i.test(u));
   const promptEarly = String(input.prompt ?? omniInstructionVideoTabPromptForDetails(panel)).trim();
 
   panel = coerceOmniInstructionVideoMainPreviewForDetails(panel, snapRefs, promptEarly);
@@ -1486,7 +1638,6 @@ export function buildOmniMultiPromptTokenReferenceItems(
   const items: ReferenceImageDetailItem[] = [];
   const seenTokens = new Set<string>();
   const urlSeen = new Set<string>();
-  let assetSeq = 0;
   const tokenEntries: Array<{ token: string; slotIndex: number; label: string }> = [];
 
   for (const { token } of matchAllPromptMediaTokens(promptTrim, projectAssets)) {
@@ -1496,8 +1647,7 @@ export function buildOmniMultiPromptTokenReferenceItems(
 
     let slotIndex: number;
     if (token.startsWith('@资产:')) {
-      slotIndex = assetSeq;
-      assetSeq += 1;
+      slotIndex = 0; // 临时值，后续根据非资产 token 数量调整
     } else {
       const idx = omniMultiPromptImageTokenSlotIndex(token);
       if (idx == null) continue;
@@ -1513,6 +1663,17 @@ export function buildOmniMultiPromptTokenReferenceItems(
 
   if (tokenEntries.length === 0) return null;
 
+  // 调整 @资产: token 的 slotIndex，避免与 @图片N 冲突
+  // @资产: 放在所有 @图片N 之后，确保各自映射到正确的 referenceImages 索引
+  const nonAssetCount = tokenEntries.filter(e => !e.token.startsWith('@资产:')).length;
+  let assetSeq = 0;
+  for (const entry of tokenEntries) {
+    if (entry.token.startsWith('@资产:')) {
+      entry.slotIndex = nonAssetCount > 0 ? nonAssetCount + assetSeq : 1 + assetSeq;
+      assetSeq += 1;
+    }
+  }
+
   const minSlot = tokenEntries.reduce((m, t) => Math.min(m, t.slotIndex), Infinity);
   /** Omni multi API：首帧 + @图片n 上传时 snapRefs 比 @ token 多 1，且最小槽位非 图片1（如 @图片2 @图片4） */
   const leadingFirstFrame =
@@ -1521,8 +1682,7 @@ export function buildOmniMultiPromptTokenReferenceItems(
 
   const maxSlot = tokenEntries.reduce((m, t) => Math.max(m, t.slotIndex), -1);
   const useSequential =
-    maxSlot >= effectiveSnapRefs.length ||
-    effectiveSnapRefs.length === tokenEntries.length;
+    maxSlot >= effectiveSnapRefs.length;
   let seqIdx = 0;
 
   for (const entry of tokenEntries) {
@@ -1594,7 +1754,10 @@ export function buildOmniMultiTabDetailsReferencePreview(input: {
     });
   }
 
-  const activeSlotRefs = (panel.klingOmniMultiReferenceImages || []).filter(Boolean);
+  // 过滤掉 blob:/data: 等临时 URL，避免刷新后计数膨胀导致 omniPanelFilledCountExceedsPromptImageRefs 误判
+  const activeSlotRefs = (panel.klingOmniMultiReferenceImages || [])
+    .filter(Boolean)
+    .filter((u) => !/^(blob|data):/i.test(u));
 
   const filterItem =
     input.filterItem ?? ((it: ReferenceImageDetailItem) => Boolean(it.url) && !input.movUrlSet.has(it.url));
@@ -1840,9 +2003,16 @@ export function buildOmniPanelSourceForNodeDetails(input: {
         (base as Record<string, unknown>)[key] = [...ancVal!];
       }
     };
-    mergeStringArrayIfEmpty('klingOmniMultiReferenceImages');
-    mergeStringArrayIfEmpty('klingOmniVideoReferenceImages');
-    mergeStringArrayIfEmpty('klingOmniInstructionReferenceImages');
+    // §5.9.1 #2：Details 仅展示创意描述 @ 到的素材。
+    // 当 gp 已有有效参考图时，不从祖先合并 tab 专属参考图字段，
+    // 避免输出节点 Node Details 显示未 @ 引用的面板槽位（含 blob 临时图）。
+    const gpHasRefImages =
+      Array.isArray(g.referenceImages) && g.referenceImages.filter(Boolean).length > 0;
+    if (!gpHasRefImages) {
+      mergeStringArrayIfEmpty('klingOmniMultiReferenceImages');
+      mergeStringArrayIfEmpty('klingOmniVideoReferenceImages');
+      mergeStringArrayIfEmpty('klingOmniInstructionReferenceImages');
+    }
     mergeStringArrayIfEmpty('referenceImages');
     mergeStringArrayIfEmpty('referenceImageLabels');
   }

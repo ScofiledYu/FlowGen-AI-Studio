@@ -104,3 +104,11 @@ export function nextBackdropLabelEditBlockUntil(
 ): number {
   return now + BACKDROP_LABEL_EDIT_BLOCK_MS[kind];
 }
+
+/**
+ * 背景框根节点为 pointer-events-none（避免挡住框内节点），
+ * 缩放手柄 class 必须含 pointer-events-auto，否则无法拖拽缩放。
+ */
+export function backdropResizeHandleNeedsPointerEventsAuto(handleClassName: string): boolean {
+  return /\bpointer-events-auto\b/.test(handleClassName);
+}

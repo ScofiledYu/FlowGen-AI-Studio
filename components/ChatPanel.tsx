@@ -1,6 +1,6 @@
 import React, { useMemo, useState, useRef, useEffect, useImperativeHandle, memo, useCallback } from 'react';
 import { Node } from 'reactflow';
-import { Send, Loader2, ChevronDown, ChevronUp, MessageSquare, User, Bot, X, Brain, Link2, Image as ImageIcon, ArrowRight, Ban, FileSpreadsheet, Table2, GitBranch, Zap, Sparkles } from 'lucide-react';
+import { Send, Loader2, ChevronDown, ChevronUp, MessageSquare, User, Bot, X, Brain, Link2, Image as ImageIcon, ArrowRight, Ban, FileSpreadsheet, Table2, GitBranch, Zap, Sparkles, FileText } from 'lucide-react';
 import { NodeType, NodeData } from '../types';
 import axios from 'axios';
 import { uploadImage } from '../services/aitop';
@@ -47,6 +47,8 @@ import {
   mergeWithWebSearchProcess,
   guardAssistantReplyContent,
   assistantReplyHasVisibleMain,
+  recoverAssistantReplyFromRaw,
+  flattenAssistantSectionsWhenProcessDisabled,
   isDetailRichUserQuestion,
   needsWebSearchSynthesisPass,
   prepareWebSearchFirstPassContent,
@@ -62,6 +64,10 @@ import {
   sanitizeAssistantDisplayText,
   isLikelyMainOnlySearchDump,
 } from '../utils/assistantMessageLayout';
+import {
+  Document, Packer, Paragraph, TextRun, HeadingLevel, AlignmentType,
+  Table, TableRow, TableCell, WidthType, BorderStyle,
+} from 'docx';
 import {
   AITOP_LLM_API,
   AITOP_CHAT_MODELS,
@@ -758,7 +764,7 @@ function ChatTableHtml({ rows }: { rows: string[][] }) {
 const AI_MODELS = buildChatAiModelsForUi();
 
 /** ????????setState ???????????? OOM / ????*/
-const CHAT_STREAM_UI_INTERVAL_MS = 48;
+const CHAT_STREAM_UI_INTERVAL_MS = 30;
 
 /** AITop100 ??????/???????? */
 const AITOP_LLM_FETCH_TIMEOUT_MS = 45_000;
@@ -768,15 +774,15 @@ const AITOP_LLM_STREAM_IDLE_TIMEOUT_MS = 60_000;
 const QWEN_AXIOS_TIMEOUT_MS = 600_000;
 const QWEN_AXIOS_TIMEOUT_LIGHT_MS = 600_000;
 /** Gemini ????????????????Claude?????????? */
-const GEMINI_FETCH_TIMEOUT_MS_NORMAL = 25_000;
+const GEMINI_FETCH_TIMEOUT_MS_NORMAL = 90_000;
 /** Claude ?????? Gemini???????? */
-const CLAUDE_FETCH_TIMEOUT_MS_NORMAL = 35_000;
+const CLAUDE_FETCH_TIMEOUT_MS_NORMAL = 90_000;
 const GEMINI_FETCH_TIMEOUT_MS_WEB = 90_000;
 /** ?????????????????????????????? */
 const AITOP_SUMMARIZE_FETCH_TIMEOUT_MS = 90_000;
 const AITOP_SUMMARIZE_STREAM_IDLE_TIMEOUT_MS = 90_000;
-/** ?????????????????????????????????*/
-const AITOP_LLM_STREAM_IDLE_DEEP_MS = 120_000;
+/** 思考模式流式空闲超时：复杂推理（物理题/数学证明）首 token 可能较慢，放宽到 180s 避免误判超时 */
+const AITOP_LLM_STREAM_IDLE_DEEP_MS = 180_000;
 /** ????????????????????????????????????? fallback ??*/
 const FAST_SWITCH_ON_UPSTREAM_FALLBACK = true;
 /** ???????????? 1 ????? Claude/Gemini/Qwen ??? */
@@ -786,7 +792,18 @@ const DEGRADED_FETCH_TIMEOUT_MS = 12_000;
 const DEGRADED_STREAM_IDLE_TIMEOUT_MS = 20_000;
 /** Skill + 长剧本等大 payload 时的 AiTop 超时上限（勿与 SUMMARIZE 90s 混用） */
 const AITOP_HEAVY_PAYLOAD_FETCH_CAP_MS = 120_000;
-const AITOP_HEAVY_PAYLOAD_STREAM_IDLE_CAP_MS = 180_000;
+const AITOP_HEAVY_PAYLOAD_STREAM_IDLE_CAP_MS = 240_000;
+
+/** 长输出自动续写：已输出超过此字数才触发（借鉴 grok-build 的错误分类思路） */
+const AITOP_CONTINUATION_MIN_CHARS = 1000;
+/** 自动续写最大轮数（防止无限循环和费用失控；3 轮覆盖约 4.8 万字） */
+const MAX_AITOP_CONTINUATION_ROUNDS = 3;
+/** 续写 prompt 中携带的已输出尾部字数（借鉴 grok-build truncate_middle_words 保留尾部上下文） */
+const AITOP_CONTINUATION_TAIL_CHARS = 1500;
+/** 续写前等待毫秒数（借鉴 grok-build 指数退避思路，给上游恢复窗口） */
+const AITOP_CONTINUATION_DELAY_MS = 1500;
+/** 空响应(0字)同模型重试次数上限（借鉴 grok-build AttemptOutcome::Empty） */
+const AITOP_EMPTY_RESPONSE_RETRY_MAX = 1;
 
 function resolveAitopPayloadHeavyMultiplier(payloadCharLen: number): number {
   if (payloadCharLen >= 30_000) return 2.5;
@@ -885,6 +902,8 @@ function preserveIncompleteStreamOnError(opts: {
   fullReasoning: string;
   collectReasoning: boolean;
   allowWebSearchExtractFromMain?: boolean;
+  webSearchEnabled?: boolean;
+  thinkingEnabled?: boolean;
   webSearchQuery?: string;
   userQuestion: string;
   assistantMessageId: string;
@@ -902,11 +921,17 @@ function preserveIncompleteStreamOnError(opts: {
     opts.fullReasoning,
     opts.collectReasoning,
     opts.webSearchQuery,
-    opts.allowWebSearchExtractFromMain
+    opts.allowWebSearchExtractFromMain,
+    {
+      webSearchEnabled: opts.webSearchEnabled,
+      thinkingEnabled: opts.thinkingEnabled,
+    }
   );
   let body = guardAssistantReplyContent(clipMessageContent(composed), {
-    synthesizedRaw: composed,
+    synthesizedRaw: opts.fullContent || composed,
     userQuestion: opts.userQuestion,
+    webSearchEnabled: opts.webSearchEnabled,
+    thinkingEnabled: opts.thinkingEnabled,
   });
   const finalized = finalizeAssistantMessageContent(body);
   if (finalized.content) body = finalized.content;
@@ -1307,18 +1332,27 @@ function composeStreamedAssistantMessage(
   apiReasoning: string,
   collectApiReasoning: boolean,
   probeQuery?: string,
-  allowWebSearchExtractFromMain = true
+  allowWebSearchExtractFromMain = false,
+  processModeOpts?: { webSearchEnabled?: boolean; thinkingEnabled?: boolean }
 ): string {
   const hasApiReasoning = !!(apiReasoning || '').trim();
-  let composed = composeAssistantMessage(
-    normalizeAssistantStream({
-      content: rawContent,
-      apiReasoning,
-      collectApiReasoning,
-      skipExtractThinkingFromMain: collectApiReasoning && hasApiReasoning,
-      allowWebSearchExtractFromMain,
-    })
-  );
+  let sections = normalizeAssistantStream({
+    content: rawContent,
+    apiReasoning,
+    collectApiReasoning,
+    skipExtractThinkingFromMain: collectApiReasoning && hasApiReasoning,
+    allowWebSearchExtractFromMain,
+    allowThinkingExtractFromMain: collectApiReasoning,
+  });
+  if (processModeOpts) {
+    sections = flattenAssistantSectionsWhenProcessDisabled(sections, processModeOpts);
+  } else if (!allowWebSearchExtractFromMain && !collectApiReasoning) {
+    sections = flattenAssistantSectionsWhenProcessDisabled(sections, {
+      webSearchEnabled: false,
+      thinkingEnabled: false,
+    });
+  }
+  let composed = composeAssistantMessage(sections);
   if ((probeQuery || '').trim()) {
     composed = augmentWebSearchWithProbeQuery(composed, probeQuery!);
   }
@@ -1400,6 +1434,17 @@ function getQwenStreamDeltaContent(data: any): string {
 function getQwenStreamFinishReason(data: any): string | undefined {
   const fr = data?.choices?.[0]?.finish_reason;
   return typeof fr === 'string' && fr ? fr : undefined;
+}
+
+/** 提取 AiTop SSE 流中的 finish_reason（借鉴 FastChat finish_reason 追踪） */
+function getAitopStreamFinishReason(data: any): string | undefined {
+  // AiTop 直接字段
+  if (typeof data?.finish_reason === 'string' && data.finish_reason) return data.finish_reason;
+  if (typeof data?.finishReason === 'string' && data.finishReason) return data.finishReason;
+  // OpenAI 兼容格式
+  const fr = data?.choices?.[0]?.finish_reason;
+  if (typeof fr === 'string' && fr) return fr;
+  return undefined;
 }
 
 function getStreamContentChunk(data: any): string {
@@ -1526,8 +1571,26 @@ function pruneTurnToSingleAssistantReply(
 function truncateChatText(text: string, maxLen: number): string {
   const t = (text || '').trim();
   if (t.length <= maxLen) return t;
-  return `${t.slice(0, maxLen)}\n?????????`;
+  return `${t.slice(0, maxLen)}\n...（内容已截断）`;
 }
+
+/** 客户端 Token 估算（借鉴 llama.cpp LLMContextManager.estimateTokens） */
+function estimateChatTokens(messages: ChatMessage[]): number {
+  let total = 0;
+  for (const msg of messages) {
+    if (isMetaChatMessage(msg)) continue;
+    const text = msg.content || '';
+    // 中文字符 ≈ 1.5 token，英文单词 ≈ 1.3 token，其他字符 ≈ 0.3 token
+    const chineseChars = (text.match(/[\u4e00-\u9fff\u3400-\u4dbf]/g) || []).length;
+    const englishWords = (text.match(/[a-zA-Z]+/g) || []).length;
+    const otherLen = text.length - chineseChars - englishWords;
+    total += Math.round(chineseChars * 1.5 + englishWords * 1.3 + otherLen * 0.3);
+  }
+  return total;
+}
+
+/** Token 估算阈值（超过此值在输入框旁显示提示） */
+const CHAT_TOKEN_WARNING_THRESHOLD = 8000;
 
 /** ????????????????? Gemini ?? reasoning ?? Claude ?? */
 function sanitizeContentForCrossModelHistory(content: string): string {
@@ -1689,7 +1752,64 @@ type LlmSendRetryOptions = {
   summarizeRetryCount?: number;
   /** ?????????????????? */
   summarizeCompact?: boolean;
+  /** 长输出自动续写上下文（流中断且已输出较长时，同模型继续输出而非切换模型） */
+  continuationContext?: {
+    round: number;
+    priorContent: string;
+    priorReasoning: string;
+    originalInput: string;
+    assistantMessageId: string;
+  };
 };
+
+/**
+ * 判断流中断是否可自动续写（借鉴 grok-build classify_error → RetryDecision 思路）。
+ * 仅当"已输出内容较长 + 错误为超时/流中断类 + 非鉴权/余额/内容过滤"时返回 true。
+ */
+function isContinuableStreamError(
+  error: unknown,
+  partialLen: number,
+  round: number
+): boolean {
+  if (round >= MAX_AITOP_CONTINUATION_ROUNDS) return false;
+  if (partialLen < AITOP_CONTINUATION_MIN_CHARS) return false;
+  const msg = error instanceof Error ? error.message : String(error || '');
+  if (!msg) return true; // 无明确错误信息但已输出较长内容，倾向续写
+  // 鉴权 / 余额 / 内容过滤类错误不续写
+  if (AITOP_AUTH_SIGNAL_RE.test(msg)) return false;
+  if (/余额|配额|quota|insufficient|内容过滤|content.?filter|违规|敏感/i.test(msg)) return false;
+  // 超时 / 流中断 / 空闲超时 / 网络瞬断类错误可续写
+  if (/超时|timeout|timed?\s*out|空闲|idle|流中断|连接|abort|network|ETIMEDOUT|ECONN|Failed to fetch|load failed|未返回|响应体为空|无有效/i.test(msg)) {
+    return true;
+  }
+  // 上游兜底文案类不续写（由 fallback 逻辑处理）
+  if (/兜底|fallback|upstream/i.test(msg)) return false;
+  // 其他未知错误，已输出较长则倾向续写
+  return true;
+}
+
+/** 检测上下文溢出错误（借鉴 llama.cpp isContextOverflow 机制） */
+function isContextOverflowError(error: unknown): boolean {
+  const msg = error instanceof Error ? error.message : String(error || '');
+  return /context.?length|exceed.?context|context.?overflow|context.?size|上下文.?长|token.?limit|max.?token|context.?window|too.?long|exceed.?max|context.?limit|n_ctx/i.test(msg);
+}
+
+/** 构造续写 prompt：携带原问题 + 已输出内容尾部（借鉴 grok-build truncate_middle_words 保留尾部上下文） */
+function buildContinuationPrompt(
+  originalInput: string,
+  priorContent: string
+): string {
+  const tail = (priorContent || '').slice(-AITOP_CONTINUATION_TAIL_CHARS);
+  return [
+    '【用户原问题】',
+    originalInput || '',
+    '',
+    '【已输出内容尾部（请严格接着继续，不要重复已输出内容）】',
+    tail,
+    '',
+    '请接着上文继续输出，保持连贯性，不要重复已输出内容。',
+  ].join('\n');
+}
 
 /** AiTop `llm/see` ?? HTTP 200 ????????????????????????????????? */
 function isLikelyUpstreamFallbackText(text: string): boolean {
@@ -1893,7 +2013,7 @@ function toLogError(err: unknown): string {
   }
 }
 
-/** ??????????????????????? */
+/** 流式渲染助手正文（借鉴 grok-build / FastChat 直接渲染，不使用打字机动画） */
 const StreamingAssistantMain = memo(function StreamingAssistantMain({
   content,
   isStreaming,
@@ -1904,38 +2024,24 @@ const StreamingAssistantMain = memo(function StreamingAssistantMain({
   const main = sanitizeAssistantDisplayText(
     resolveAssistantDisplaySections(content || '').main
   ).trim();
-  const [revealedLen, setRevealedLen] = useState(0);
-
-  useEffect(() => {
-    if (!isStreaming) {
-      setRevealedLen(main.length);
-      return;
+  // 借鉴 FastChat：TTFB 期间显示三点跳动 loading 动画，消除空白等待感
+  if (!main) {
+    if (isStreaming) {
+      return (
+        <div className="flex items-center gap-1 py-1" aria-label="正在思考">
+          <span className="w-2 h-2 rounded-full bg-brand-400/80 animate-bounce" style={{ animationDelay: '0ms' }} />
+          <span className="w-2 h-2 rounded-full bg-brand-400/80 animate-bounce" style={{ animationDelay: '150ms' }} />
+          <span className="w-2 h-2 rounded-full bg-brand-400/80 animate-bounce" style={{ animationDelay: '300ms' }} />
+        </div>
+      );
     }
-    setRevealedLen((n) => (main.length < n ? main.length : n));
-  }, [main, isStreaming]);
-
-  useEffect(() => {
-    if (!isStreaming) return;
-    const tick = window.setInterval(() => {
-      setRevealedLen((n) => {
-        const target = main.length;
-        if (n >= target) return n;
-        const backlog = target - n;
-        const step = backlog > 160 ? 10 : backlog > 48 ? 4 : 1;
-        return Math.min(target, n + step);
-      });
-    }, 22);
-    return () => window.clearInterval(tick);
-  }, [main.length, isStreaming, main]);
-
-  if (!main) return null;
-  const shown = main.slice(0, revealedLen);
-  const catchingUp = isStreaming && revealedLen < main.length;
+    return null;
+  }
 
   return (
     <div className="text-sm leading-relaxed whitespace-pre-wrap font-[450] select-text text-gray-100">
-      {shown}
-      {catchingUp ? (
+      {main}
+      {isStreaming ? (
         <span
           className="inline-block w-0.5 h-[1em] align-[-0.12em] ml-0.5 bg-brand-400/90 animate-pulse"
           aria-hidden
@@ -2093,6 +2199,7 @@ const ChatMessageRow = memo(function ChatMessageRow({
     <div
       className={`flex items-end ${message.role === 'user' ? 'justify-end' : 'justify-start'} gap-3 animate-[slideIn_0.3s_ease-out]`}
       style={{ animationDelay: `${Math.min(index, 20) * 50}ms` }}
+      data-message-id={message.id}
     >
       {message.role === 'assistant' && (
         <div className="relative flex-shrink-0">
@@ -2181,7 +2288,7 @@ const ChatMessageRow = memo(function ChatMessageRow({
                 >
                   <img
                     src={displayImageSrc(imageUrl)}
-                    alt={`???? ${imgIndex + 1}`}
+                    alt={`图片 ${imgIndex + 1}`}
                     className="w-full max-h-64 object-cover"
                     loading="lazy"
                   />
@@ -2420,6 +2527,7 @@ export const ChatPanel = React.forwardRef<ChatPanelHandle, ChatPanelProps>(
   const [contextTableRows, setContextTableRows] = useState<string[][] | null>(null);
   const [showNodePreview, setShowNodePreview] = useState<boolean>(true); // ??????????
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number } | null>(null); // ????
+  const [contextMessageId, setContextMessageId] = useState<string | null>(null); // 右键消息 ID
   const [chatId, setChatId] = useState<string>(initialChatState.chatId); // Gemini / Claude ????id
   const [historyOpen, setHistoryOpen] = useState(false);
   const [historyLoading, setHistoryLoading] = useState(false);
@@ -2456,6 +2564,8 @@ export const ChatPanel = React.forwardRef<ChatPanelHandle, ChatPanelProps>(
   } | null>(null);
   /** 主模型流式失败后保留的已生成字数，供 fallback 提示使用 */
   const lastFailedStreamCharsRef = useRef(0);
+  const isSendingRef = useRef(false); // 并发发送锁（借鉴 FastChat limit_worker_concurrency）
+  const webSearchProbeCacheRef = useRef<string | null>(null); // 联网检索 probe 结果缓存，避免 fallback 链重复调用
 
   const beginDegradedUiForModelSwitch = useCallback((hadThinkingOrWeb: boolean) => {
     degradedOnceAfterModelSwitchRef.current = true;
@@ -2547,6 +2657,7 @@ export const ChatPanel = React.forwardRef<ChatPanelHandle, ChatPanelProps>(
       if (!panelEl || !panelEl.contains(target)) {
         setContextMenu(null);
         setSessionExportMenu(null);
+        setContextMessageId(null);
         return;
       }
 
@@ -2555,7 +2666,15 @@ export const ChatPanel = React.forwardRef<ChatPanelHandle, ChatPanelProps>(
         setContextMenu(null);
         return;
       }
-      
+
+                // 检测右键点击的消息行
+      const msgRow = target.closest('[data-message-id]') as HTMLElement | null;
+      if (msgRow) {
+        setContextMessageId(msgRow.getAttribute('data-message-id'));
+      } else {
+        setContextMessageId(null);
+      }
+
                 // ??????
       if (
         target.tagName === 'TEXTAREA' ||
@@ -2906,6 +3025,21 @@ export const ChatPanel = React.forwardRef<ChatPanelHandle, ChatPanelProps>(
     } catch (primaryError) {
       const primaryLabel = modelLabelById(modelId);
       const fallbackChain = fallbackChainByPrimary(modelId);
+
+      // 上下文溢出检测（借鉴 llama.cpp isContextOverflow）：不切换模型，直接提示用户
+      if (isContextOverflowError(primaryError)) {
+        setMessages((prev) => [
+          ...prev,
+          {
+            id: `context-overflow-${Date.now()}`,
+            role: 'assistant' as const,
+            content: `**⚠️ 对话上下文过长**\n\n当前对话历史已超出模型上下文窗口限制，建议开启新对话或删除部分历史消息后重试。`,
+            timestamp: new Date(),
+          },
+        ]);
+        return finishTurn(modelId);
+      }
+
       if (fallbackChain.length === 0) throw primaryError;
 
       let effectivePrimaryError: unknown = primaryError;
@@ -3507,7 +3641,7 @@ export const ChatPanel = React.forwardRef<ChatPanelHandle, ChatPanelProps>(
                       (selectedNode && selectedNode.type === NodeType.MOV);
     
     if (isVideoUrl) {
-      throw new Error('Qwen???????????????????????????????????????');
+      throw new Error('Qwen 暂不支持视频输入，请移除视频后重试');
     }
     
     // base64??????AiTop????????URL
@@ -3516,7 +3650,7 @@ export const ChatPanel = React.forwardRef<ChatPanelHandle, ChatPanelProps>(
       if (uploadedUrl) {
         return uploadedUrl;
     } else {
-        throw new Error('base64?????AiTop??');
+        throw new Error('base64 图片上传至 AiTop 失败');
       }
     }
     
@@ -3526,7 +3660,7 @@ export const ChatPanel = React.forwardRef<ChatPanelHandle, ChatPanelProps>(
       if (uploadedUrl) {
         return uploadedUrl;
       } else {
-        throw new Error('blob?????AiTop??');
+        throw new Error('blob 图片上传至 AiTop 失败');
       }
     }
     
@@ -3546,6 +3680,11 @@ export const ChatPanel = React.forwardRef<ChatPanelHandle, ChatPanelProps>(
   };
 
   const handleSend = async () => {
+    // 并发发送锁（借鉴 FastChat limit_worker_concurrency）
+    if (isSendingRef.current) return;
+    isSendingRef.current = true;
+    webSearchProbeCacheRef.current = null; // 新消息：清空 probe 缓存
+    try {
     // ?? referencedImages??????? referencedImage + attachedImages
     const allImages: string[] = [];
     const imageSet = new Set<string>(); // ????
@@ -3743,6 +3882,9 @@ export const ChatPanel = React.forwardRef<ChatPanelHandle, ChatPanelProps>(
     } finally {
       setIsLoading(false);
     }
+    } finally {
+      isSendingRef.current = false;
+    }
   };
 
   const handleSendPresetToModel = async (presetName: string, presetContent: string) => {
@@ -3867,7 +4009,7 @@ export const ChatPanel = React.forwardRef<ChatPanelHandle, ChatPanelProps>(
             try {
               return await processImageUrl(imageUrl);
             } catch (error) {
-              throw new Error(`?? ${index + 1} ????: ${error instanceof Error ? error.message : String(error)}`);
+              throw new Error(`第 ${index + 1} 张图片处理失败: ${error instanceof Error ? error.message : String(error)}`);
             }
           })
         );
@@ -3880,7 +4022,7 @@ export const ChatPanel = React.forwardRef<ChatPanelHandle, ChatPanelProps>(
         });
       } catch (error) {
         const errorMessage = error instanceof Error ? error.message : String(error);
-        throw new Error(`??????: ${errorMessage}`);
+        throw new Error(`图片处理失败: ${errorMessage}`);
       }
     }
     const forcedWebSearchOff = forcedWebSearchOffGemini;
@@ -3894,9 +4036,10 @@ export const ChatPanel = React.forwardRef<ChatPanelHandle, ChatPanelProps>(
         : (useDegraded || lightweight ? false : useWebSearch);
     const isGeminiWebSearchFirstPass =
       !!effectiveWebSearch && !retryOptions?.summarizeSearchDumpText;
-    // ???????? chatId??? AiTop ????????
+    // 联网搜索复用当前对话 chatId（借鉴 FastChat 会话持久化），保留上下文连续性
     let currentChatId = forcedChatId || generateChatId();
-    if (isGeminiWebSearchFirstPass) {
+    if (isGeminiWebSearchFirstPass && !chatIdRef.current) {
+      // 仅在全新对话（无现有 chatId）时创建临时 ID；已有对话则复用原 chatId
       currentChatId = createEphemeralChatId();
     }
     const baseMessage = buildAitopMessageWithHistory(
@@ -3911,25 +4054,39 @@ export const ChatPanel = React.forwardRef<ChatPanelHandle, ChatPanelProps>(
     );
     let message: string;
     let geminiWebSearchQuery = '';
-    if (retryOptions?.summarizeSearchDumpText) {
+    if (retryOptions?.continuationContext) {
+      // 长输出自动续写：不携带历史，只用原问题 + 已输出尾部
+      message = buildContinuationPrompt(
+        retryOptions.continuationContext.originalInput,
+        retryOptions.continuationContext.priorContent
+      );
+    } else if (retryOptions?.summarizeSearchDumpText) {
       message = buildSearchDumpSummarizePrompt(currentInput || '', retryOptions.summarizeSearchDumpText, {
         compact: !!retryOptions.summarizeCompact,
         dialogueContext: webDialogueCtx,
         skillBlock: resolveProjectSkillBlock(),
       });
     } else if (isGeminiWebSearchFirstPass) {
-      const probeRewriteChatId = createEphemeralChatId();
-      const probeQuery = await resolveWebSearchProbeMessageForAitop(
-        {
-          url: AITOP_LLM_API.URL,
-          apiKey: AITOP_LLM_API.API_KEY,
-          model: apiModelName,
-        },
-        persistSnapshotRef.current.messages,
-        currentInput || '',
-        imageTail,
-        probeRewriteChatId
-      );
+      // 复用缓存：避免 fallback 链中每次重试都重新调用 probe（每次约 10s 超时）
+      let probeQuery: string;
+      if (webSearchProbeCacheRef.current !== null) {
+        probeQuery = webSearchProbeCacheRef.current;
+        console.warn('[chat] web search probe using cached result', { query: probeQuery.slice(0, 120) });
+      } else {
+        const probeRewriteChatId = createEphemeralChatId();
+        probeQuery = await resolveWebSearchProbeMessageForAitop(
+          {
+            url: AITOP_LLM_API.URL,
+            apiKey: AITOP_LLM_API.API_KEY,
+            model: apiModelName,
+          },
+          persistSnapshotRef.current.messages,
+          currentInput || '',
+          imageTail,
+          probeRewriteChatId
+        );
+        webSearchProbeCacheRef.current = probeQuery;
+      }
       geminiWebSearchQuery = probeQuery;
       message = probeQuery;
     } else {
@@ -3948,18 +4105,21 @@ export const ChatPanel = React.forwardRef<ChatPanelHandle, ChatPanelProps>(
       message: message,
       model: apiModelName,
       tip: ' ',
-      webSearch: effectiveWebSearch
+      webSearch: effectiveWebSearch,
+      stream: true, // 借鉴 FastChat：请求上游流式输出，降低 TTFB 感知延迟
     };
     
     const isSummarizeRetry = !!retryOptions?.summarizeSearchDumpText;
-    // ???? high??????????? low/high
+    const thinkingEnabledForTurn = thinkingMode !== 'off';
+    // 联网总结二次 pass：仍尊重用户思考开关，禁止「仅开联网」却强制 thinking:true
     if (isSummarizeRetry) {
-      payload.thinkingLevel = 'high';
-      payload.thinking = true;
+      payload.thinking = thinkingEnabledForTurn;
+      payload.thinkingLevel =
+        payload.thinking && !useDegraded && thinkingMode === 'deep' ? 'high' : 'low';
     } else {
       payload.thinkingLevel =
         !useDegraded && !lightweight && thinkingMode === 'deep' ? 'high' : 'low';
-      payload.thinking = thinkingMode !== 'off';
+      payload.thinking = thinkingEnabledForTurn;
     }
     payload.tip = buildAitopTip({
       thinking: !!payload.thinking,
@@ -3991,20 +4151,22 @@ export const ChatPanel = React.forwardRef<ChatPanelHandle, ChatPanelProps>(
     
     
     // ?? Assistant ?????????????
-    const assistantMessageId = 'assistant-' + Date.now();
-    const assistantMessage: ChatMessage = {
-      id: assistantMessageId,
-      role: 'assistant',
-      content: '',
-      timestamp: new Date(),
-      isStreaming: true,
-    };
-    
-    setMessages(prev => [...prev, assistantMessage]);
+    const continuationCtx = retryOptions?.continuationContext;
+    const assistantMessageId = continuationCtx?.assistantMessageId || ('assistant-' + Date.now());
+    if (!continuationCtx) {
+      const assistantMessage: ChatMessage = {
+        id: assistantMessageId,
+        role: 'assistant',
+        content: '',
+        timestamp: new Date(),
+        isStreaming: true,
+      };
+      setMessages(prev => [...prev, assistantMessage]);
+    }
     
     let upstreamRequestId: string | undefined;
-    let fullContent = '';
-    let fullReasoning = '';
+    let fullContent = continuationCtx?.priorContent || '';
+    let fullReasoning = continuationCtx?.priorReasoning || '';
     try {
       const ac = new AbortController();
       const fetchTimer = window.setTimeout(() => ac.abort(), geminiFetchTimeoutMs);
@@ -4017,6 +4179,10 @@ export const ChatPanel = React.forwardRef<ChatPanelHandle, ChatPanelProps>(
           signal: ac.signal,
         });
         upstreamRequestId = pickRequestIdFromHeaders(response.headers);
+        // 检测 relay 层重试（server.js 在 502/504 时重试一次），用于诊断慢首包
+        if (response.headers.get('x-relay-retry') === '1') {
+          console.warn(`[chat][${modelLabel}] relay 层重试了一次（502/504），首包可能偏慢`);
+        }
       } catch (e) {
         if (e instanceof DOMException && e.name === 'AbortError') {
           throw new Error(
@@ -4105,23 +4271,34 @@ export const ChatPanel = React.forwardRef<ChatPanelHandle, ChatPanelProps>(
       fullContent = '';
       fullReasoning = '';
       let buffer = '';
-      let lastStreamUiAt = 0;
 
-      const collectApiReasoning = thinkingMode !== 'off' || isSummarizeRetry;
-      const flushStreamUiIfDue = () => {
-        const t = Date.now();
-        if (t - lastStreamUiAt < CHAT_STREAM_UI_INTERVAL_MS) return;
-        lastStreamUiAt = t;
-        const streamed = clipMessageContent(
-          composeStreamedAssistantMessage(
-            fullContent,
-            fullReasoning,
-            collectApiReasoning,
-            geminiWebSearchQuery,
-            effectiveWebSearch
+      const collectApiReasoning = thinkingEnabledForTurn;
+      const guardContentOpts = {
+        userQuestion: currentInput || '',
+        webSearchEnabled: isSummarizeRetry ? useWebSearch && !lightweight : effectiveWebSearch,
+        thinkingEnabled: thinkingEnabledForTurn,
+      };
+
+      // 借鉴 FastChat/llama.cpp：数据到达即显示
+      // 关键修复：用 requestAnimationFrame 合并渲染，并配合读取循环每轮让出主线程到绘制步骤。
+      // 旧版 30ms Date.now() 节流在"微任务自旋"下永远到不了浏览器绘制步骤，导致最后一起刷新。
+      let rafPending = false;
+
+      // 流式过程中：轻量渲染，直接用原始 fullContent，跳过 finalizeAssistantMessageContent 的重解析
+      // （表格抽取 / 分段重组统一交给流结束时的 updateStreamUI 处理，保证最终展示正确）
+      const renderStreamingLightweight = () => {
+        setMessages((prev) =>
+          prev.map((msg) =>
+            msg.id === assistantMessageId
+              ? { ...msg, content: fullContent, isStreaming: true }
+              : msg
           )
         );
-        const finalized = finalizeAssistantMessageContent(streamed);
+      };
+
+      // 流结束：完整解析（表格抽取 / 分段重组），保证最终展示正确
+      const updateStreamUI = () => {
+        const finalized = finalizeAssistantMessageContent(fullContent);
         setMessages((prev) =>
           prev.map((msg) =>
             msg.id === assistantMessageId
@@ -4136,7 +4313,28 @@ export const ChatPanel = React.forwardRef<ChatPanelHandle, ChatPanelProps>(
         );
       };
 
+      // 一帧最多渲染一次，且回调在绘制步骤执行，确保逐帧可见
+      const flushStreamUiIfDue = () => {
+        if (rafPending) return;
+        rafPending = true;
+        requestAnimationFrame(() => {
+          rafPending = false;
+          renderStreamingLightweight();
+        });
+      };
+
+      const flushStreamUiImmediate = () => {
+        rafPending = false;
+        updateStreamUI();
+      };
+
+      const cleanupReveal = () => {
+        // 兼容旧调用：立即刷新 UI 显示完整内容
+        flushStreamUiImmediate();
+      };
+
       let geminiDoneByFlag = false;
+      let geminiFinishReason: string | undefined;
       const handleGeminiStreamData = (data: any) => {
         const apiErr = extractAitopApiErrorFromPayload(data);
         if (apiErr) {
@@ -4153,12 +4351,14 @@ export const ChatPanel = React.forwardRef<ChatPanelHandle, ChatPanelProps>(
           pickRequestIdFromStreamPayload(data)
         );
         const contentChunk = getStreamContentChunk(data);
-        if (contentChunk) fullContent += contentChunk;
+        if (contentChunk) {
+          fullContent += contentChunk;
+          flushStreamUiIfDue();
+        }
         if (collectApiReasoning) {
           const reasoningChunk = getStreamReasoningChunk(data);
           if (reasoningChunk) fullReasoning += reasoningChunk;
         }
-        flushStreamUiIfDue();
         if (data.error) {
           let errorMsg = `**错误类型：** ${data.error.type || '未知'}\n**错误消息：** ${data.error.message || '无详细错误信息'}`;
           if (data.error.code) {
@@ -4171,6 +4371,8 @@ export const ChatPanel = React.forwardRef<ChatPanelHandle, ChatPanelProps>(
             })
           );
         }
+        const fr = getAitopStreamFinishReason(data);
+        if (fr) geminiFinishReason = fr;
         if (data.isDone) geminiDoneByFlag = true;
       };
 
@@ -4182,7 +4384,7 @@ export const ChatPanel = React.forwardRef<ChatPanelHandle, ChatPanelProps>(
             new Error(
               formatAitopErr(
                 modelLabel,
-                `**问题：** ????${geminiStreamIdleTimeoutMs / 1000} ???????????????????????????????????`,
+                `**问题：** 流式输出在 ${geminiStreamIdleTimeoutMs / 1000} 秒内无新数据，连接可能已中断。请稍后重试。`,
                 { chatId: currentChatId, requestId: upstreamRequestId }
               )
             )
@@ -4212,6 +4414,8 @@ export const ChatPanel = React.forwardRef<ChatPanelHandle, ChatPanelProps>(
             warnChatSseLineParseSkipped(modelLabel, payloadLine, e);
           }
         }
+        // 关键：每批处理完让出主线程到绘制步骤，防止微任务自旋导致"最后一起刷新"
+        await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
         if (geminiDoneByFlag) break;
       }
 
@@ -4228,13 +4432,19 @@ export const ChatPanel = React.forwardRef<ChatPanelHandle, ChatPanelProps>(
           warnChatSseLineParseSkipped(modelLabel, geminiTailPayload, e);
         }
       }
-      
+
+      let geminiStreamContent = fullContent;
+      if (!thinkingEnabledForTurn && (fullReasoning || '').trim() && !(fullContent || '').trim()) {
+        geminiStreamContent = fullReasoning;
+      }
+
       let composedGemini = composeStreamedAssistantMessage(
-        fullContent,
+        geminiStreamContent,
         fullReasoning,
         collectApiReasoning,
         geminiWebSearchQuery,
-        effectiveWebSearch
+        effectiveWebSearch,
+        guardContentOpts
       );
       if (retryOptions?.summarizeSearchDumpText) {
         composedGemini = mergeWithWebSearchProcess(
@@ -4255,10 +4465,15 @@ export const ChatPanel = React.forwardRef<ChatPanelHandle, ChatPanelProps>(
               needsSummarize: false,
             };
       let finalContent = guardAssistantReplyContent(geminiWebFirstPass.content, {
-        synthesizedRaw: composedGemini,
-        userQuestion: currentInput || '',
+        synthesizedRaw: geminiStreamContent || composedGemini,
+        ...guardContentOpts,
       });
       warnIfLlmSeeLikelyUpstreamFallback(modelLabel, finalContent);
+
+      // finish_reason 追踪（借鉴 FastChat）：当流因 max_tokens 截断时追加提示
+      if (geminiFinishReason === 'length') {
+        finalContent += `\n\n⚠️ **输出已达上限被截断。** 如需完整内容，请缩小单次提问范围或分批发送。`;
+      }
 
       const geminiUpstreamFallback = detectUpstreamFallback({
         content: fullContent,
@@ -4344,13 +4559,32 @@ export const ChatPanel = React.forwardRef<ChatPanelHandle, ChatPanelProps>(
       }
 
       finalContent = guardAssistantReplyContent(finalContent, {
-        synthesizedRaw: composedGemini,
-        userQuestion: currentInput || '',
+        synthesizedRaw: geminiStreamContent || composedGemini,
+        ...guardContentOpts,
       });
-      const finalized = finalizeAssistantMessageContent(finalContent);
-      const geminiHasVisibleMain =
-        assistantReplyHasVisibleMain(finalized.content) ||
+      let finalized = finalizeAssistantMessageContent(finalContent);
+      const visibilityOpts = {
+        ...guardContentOpts,
+        rawFallback: geminiStreamContent || fullContent,
+      };
+      let geminiHasVisibleMain =
+        assistantReplyHasVisibleMain(finalized.content, visibilityOpts) ||
         !!(finalized.tableRows && finalized.tableRows.length > 0);
+      if (!geminiHasVisibleMain && (geminiStreamContent || '').trim().length >= 32) {
+        const recovered = recoverAssistantReplyFromRaw(geminiStreamContent, {
+          ...guardContentOpts,
+          userQuestion: currentInput || '',
+        });
+        const recoveredFinal = finalizeAssistantMessageContent(recovered);
+        if (
+          assistantReplyHasVisibleMain(recoveredFinal.content, guardContentOpts) ||
+          !!(recoveredFinal.tableRows && recoveredFinal.tableRows.length > 0)
+        ) {
+          finalContent = recovered;
+          finalized = recoveredFinal;
+          geminiHasVisibleMain = true;
+        }
+      }
       if (!geminiHasVisibleMain) {
         throw new Error(
           formatAitopErr(
@@ -4360,6 +4594,8 @@ export const ChatPanel = React.forwardRef<ChatPanelHandle, ChatPanelProps>(
           )
         );
       }
+      // 停止逐字动画，由下方 setMessages 闪现完整内容
+      cleanupReveal();
       setMessages((prev) =>
         prev.map((msg) =>
           msg.id === assistantMessageId
@@ -4375,13 +4611,79 @@ export const ChatPanel = React.forwardRef<ChatPanelHandle, ChatPanelProps>(
 
       
     } catch (error) {
+      // 改进4：空响应(0字)同模型重试（借鉴 grok-build AttemptOutcome::Empty）
+      const isEmptyResponse = (fullContent || '').trim().length === 0
+        && (fullReasoning || '').trim().length === 0;
+      if (isEmptyResponse && !continuationCtx && retryCount < AITOP_EMPTY_RESPONSE_RETRY_MAX) {
+        // 移除空的 assistant 消息后同模型重试
+        setMessages(prev => prev.filter(msg => msg.id !== assistantMessageId));
+        try {
+          await handleAitopLlmSend(
+            uiModelId,
+            currentInput,
+            currentImages,
+            forcedChatId,
+            retryCount + 1,
+            retryOptions
+          );
+          return;
+        } catch (retryError) {
+          throw retryError;
+        }
+      }
+
+      // 长输出自动续写：流中断且已输出较长时，同模型继续输出而非切换模型
+      const continuationRound = continuationCtx?.round || 0;
+      if (isContinuableStreamError(error, (fullContent || '').length, continuationRound)) {
+        // 改进1：续写视觉提示（借鉴 grok-build Retrying 事件通知 UI）
+        setMessages(prev => prev.map(msg =>
+          msg.id === assistantMessageId
+            ? { ...msg, content: (msg.content || '') + '\n\n> ⏳ 正在继续输出…' }
+            : msg
+        ));
+        // 改进3：续写前小延迟（借鉴 LangChain wait_exponential 指数退避思路，给上游恢复窗口）
+        // 第 N 轮续写延迟 N * AITOP_CONTINUATION_DELAY_MS（递增退避）
+        const continuationDelayMs = AITOP_CONTINUATION_DELAY_MS * (continuationRound + 1);
+        if (continuationDelayMs > 0) {
+          await new Promise(r => setTimeout(r, continuationDelayMs));
+        }
+        // 续写时复用同一条 assistant 消息，fullContent 已包含 priorContent
+        try {
+          await handleAitopLlmSend(
+            uiModelId,
+            continuationCtx?.originalInput || currentInput,
+            currentImages,
+            forcedChatId,
+            retryCount,
+            {
+              ...retryOptions,
+              continuationContext: {
+                round: continuationRound + 1,
+                priorContent: fullContent,
+                priorReasoning: fullReasoning,
+                originalInput: continuationCtx?.originalInput || currentInput || '',
+                assistantMessageId,
+              },
+            }
+          );
+          return; // 续写成功，不 throw
+        } catch (continuationError) {
+          // 续写也失败：递归调用内部已处理 preserveIncompleteStreamOnError，
+          // 直接 re-throw 跳过本层重复处理，让外层 fallback 接管
+          throw continuationError;
+        }
+      }
       const partialChars = preserveIncompleteStreamOnError({
         modelLabel,
         modelSlug,
         fullContent,
         fullReasoning,
-        collectReasoning: thinkingMode !== 'off' || !!retryOptions?.summarizeSearchDumpText,
+        collectReasoning: thinkingMode !== 'off',
         allowWebSearchExtractFromMain: effectiveWebSearch,
+        webSearchEnabled: retryOptions?.summarizeSearchDumpText
+          ? useWebSearch && !lightweight
+          : effectiveWebSearch,
+        thinkingEnabled: thinkingMode !== 'off',
         userQuestion: currentInput || '',
         assistantMessageId,
         setMessages,
@@ -4391,6 +4693,29 @@ export const ChatPanel = React.forwardRef<ChatPanelHandle, ChatPanelProps>(
         lastFailedStreamCharsRef.current,
         partialChars
       );
+
+      // 流中断保留已输出内容（借鉴 FastChat 流内错误嵌入）：
+      // 当已输出较长内容时，直接保留已输出内容 + 中断提示，不再切换模型
+      const shouldPreservePartial = (fullContent || '').trim().length >= 200;
+      if (shouldPreservePartial) {
+        const finalized = finalizeAssistantMessageContent(
+          (fullContent || '') + '\n\n---\n> ⚠️ **回复中断**：流式输出在传输过程中意外中断，以上为已获取的部分内容。'
+        );
+        setMessages((prev) =>
+          prev.map((msg) =>
+            msg.id === assistantMessageId
+              ? {
+                  ...msg,
+                  content: finalized.content,
+                  tableRows: finalized.tableRows,
+                  isStreaming: false,
+                }
+              : msg
+          )
+        );
+        return; // 保留部分内容，不触发 fallback 切换模型
+      }
+
       if (error instanceof Error) {
         throw error;
       }
@@ -4423,7 +4748,7 @@ export const ChatPanel = React.forwardRef<ChatPanelHandle, ChatPanelProps>(
 
     const userText =
       currentInput ||
-      (currentImages.length > 0 ? `??? ${currentImages.length} ????` : '?????????');
+      (currentImages.length > 0 ? `请分析这 ${currentImages.length} 张图片` : '请描述你的问题');
     const lightweight = currentImages.length === 0 && isLightweightPrompt(userText);
     const hasImages = currentImages.length > 0;
     const qwenApiUrl = QWEN_API_CONFIG.URL;
@@ -4448,7 +4773,7 @@ export const ChatPanel = React.forwardRef<ChatPanelHandle, ChatPanelProps>(
         });
       } catch (error) {
         const errorMessage = error instanceof Error ? error.message : String(error);
-        throw new Error(`??????: ${errorMessage}`);
+        throw new Error(`图片处理失败: ${errorMessage}`);
       }
     }
 
@@ -4576,13 +4901,27 @@ export const ChatPanel = React.forwardRef<ChatPanelHandle, ChatPanelProps>(
       const reader = response.body.getReader();
       const decoder = new TextDecoder('utf-8');
       let buffer = '';
-      let lastStreamUiAt = 0;
       let finishReason: string | undefined;
 
-      const flushQwenStreamUi = () => {
-        const t = Date.now();
-        if (t - lastStreamUiAt < CHAT_STREAM_UI_INTERVAL_MS) return;
-        lastStreamUiAt = t;
+      // 借鉴 FastChat/llama.cpp：数据到达即显示
+      // 关键修复：用 requestAnimationFrame 合并渲染，并配合读取循环每轮让出主线程到绘制步骤。
+      // 旧版 30ms Date.now() 节流在"微任务自旋"下永远到不了浏览器绘制步骤，导致最后一起刷新。
+      let rafPending = false;
+
+      // 流式过程中：轻量渲染，直接用原始 fullContent，跳过 finalizeAssistantMessageContent 的重解析
+      // （表格抽取 / 分段重组统一交给流结束时的 updateStreamUI 处理，保证最终展示正确）
+      const renderStreamingLightweight = () => {
+        setMessages((prev) =>
+          prev.map((msg) =>
+            msg.id === assistantMessageId
+              ? { ...msg, content: fullContent, isStreaming: true }
+              : msg
+          )
+        );
+      };
+
+      // 流结束：完整解析（表格抽取 / 分段重组），保证最终展示正确
+      const updateStreamUI = () => {
         const finalized = finalizeAssistantMessageContent(fullContent);
         setMessages((prev) =>
           prev.map((msg) =>
@@ -4598,6 +4937,26 @@ export const ChatPanel = React.forwardRef<ChatPanelHandle, ChatPanelProps>(
         );
       };
 
+      // 一帧最多渲染一次，且回调在绘制步骤执行，确保逐帧可见
+      const flushStreamUiIfDue = () => {
+        if (rafPending) return;
+        rafPending = true;
+        requestAnimationFrame(() => {
+          rafPending = false;
+          renderStreamingLightweight();
+        });
+      };
+
+      const flushStreamUiImmediate = () => {
+        rafPending = false;
+        updateStreamUI();
+      };
+
+      const cleanupReveal = () => {
+        // 兼容旧调用：立即刷新 UI 显示完整内容
+        flushStreamUiImmediate();
+      };
+
       const consumeQwenSseLine = (line: string) => {
         const payloadLine = parseStreamPayloadLine(line);
         if (!payloadLine) return;
@@ -4606,7 +4965,7 @@ export const ChatPanel = React.forwardRef<ChatPanelHandle, ChatPanelProps>(
           const chunk = getQwenStreamDeltaContent(data);
           if (chunk) {
             fullContent += chunk;
-            flushQwenStreamUi();
+            flushStreamUiIfDue();
           }
           const fr = getQwenStreamFinishReason(data);
           if (fr) finishReason = fr;
@@ -4631,6 +4990,8 @@ export const ChatPanel = React.forwardRef<ChatPanelHandle, ChatPanelProps>(
         const lines = buffer.split('\n');
         buffer = lines.pop() || '';
         for (const line of lines) consumeQwenSseLine(line);
+        // 关键：每批处理完让出主线程到绘制步骤，防止微任务自旋导致"最后一起刷新"
+        await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
       }
       if (buffer.trim()) consumeQwenSseLine(buffer);
 
@@ -4671,6 +5032,8 @@ export const ChatPanel = React.forwardRef<ChatPanelHandle, ChatPanelProps>(
       const persistChatId =
         activeSessionChatIdRef.current || chatIdRef.current || currentChatId;
 
+      // 停止逐字动画，由下方 setMessages 闪现完整内容
+      cleanupReveal();
       setMessages((prev) => {
         const next = prev.map((msg) =>
           msg.id === assistantMessageId
@@ -4947,9 +5310,248 @@ export const ChatPanel = React.forwardRef<ChatPanelHandle, ChatPanelProps>(
     try {
       await exportRowsAsXlsx(rows, exportSelectionFileBase());
     } catch (e) {
-      alert('?? xlsx ???????? CSV?');
+      alert('xlsx 导出失败，是否尝试 CSV？');
     }
     clearContextMenuSelection();
+  };
+
+  /** 导出右键消息为 Word 文档 */
+  const handleExportMessageAsWord = async () => {
+    const msgId = contextMessageId;
+    if (!msgId) {
+      setContextMenu(null);
+      return;
+    }
+    const msg = messages.find((m) => m.id === msgId);
+    if (!msg) {
+      setContextMenu(null);
+      return;
+    }
+    try {
+      const content = msg.content || '';
+      // 解析 markdown 段落
+      const lines = content.split('\n');
+      const paragraphs: Paragraph[] = [];
+      let inCodeBlock = false;
+      let codeLines: string[] = [];
+      let codeLang = '';
+      let inTable = false;
+      let tableRows: string[][] = [];
+
+      const flushTable = () => {
+        if (tableRows.length === 0) return;
+        const maxCols = Math.max(...tableRows.map((r) => r.length));
+        const border = { style: BorderStyle.SINGLE, size: 1, color: 'AAAAAA' };
+        const borders = { top: border, bottom: border, left: border, right: border };
+        const table = new Table({
+          width: { size: 100, type: WidthType.PERCENTAGE },
+          rows: tableRows.map((row, ri) =>
+            new TableRow({
+              children: Array.from({ length: maxCols }, (_, ci) => {
+                const text = row[ci] || '';
+                const isHeader = ri === 0;
+                return new TableCell({
+                  children: [new Paragraph({ children: [new TextRun({ text, bold: isHeader })] })],
+                  borders,
+                  shading: isHeader ? { fill: 'F0F0F0' } : undefined,
+                });
+              }),
+            })
+          ),
+        });
+        paragraphs.push(new Paragraph({ children: [] }));
+        (paragraphs as any).push(table);
+        tableRows = [];
+        inTable = false;
+      };
+
+      const flushCode = () => {
+        if (codeLines.length === 0) return;
+        paragraphs.push(
+          new Paragraph({
+            children: [new TextRun({ text: codeLines.join('\n'), font: 'Consolas', size: 20 })],
+            shading: { fill: 'F5F5F5' },
+            spacing: { before: 100, after: 100 },
+          })
+        );
+        codeLines = [];
+        codeLang = '';
+        inCodeBlock = false;
+      };
+
+      for (const line of lines) {
+        // 代码块
+        if (line.startsWith('```')) {
+          if (inCodeBlock) {
+            flushCode();
+          } else {
+            inCodeBlock = true;
+            codeLang = line.slice(3).trim();
+          }
+          continue;
+        }
+        if (inCodeBlock) {
+          codeLines.push(line);
+          continue;
+        }
+
+        // 表格行（| col | col |）
+        if (/^\|.*\|$/.test(line.trim())) {
+          // 跳过分隔行 |---|---|
+          if (/^\|[\s\-:]+\|$/.test(line.trim())) continue;
+          const cells = line.split('|').slice(1, -1).map((c) => c.trim());
+          tableRows.push(cells);
+          inTable = true;
+          continue;
+        }
+        if (inTable) {
+          flushTable();
+        }
+
+        // 标题
+        const headingMatch = line.match(/^(#{1,6})\s+(.+)$/);
+        if (headingMatch) {
+          const level = headingMatch[1].length;
+          const headingLevels = [
+            HeadingLevel.HEADING_1, HeadingLevel.HEADING_2, HeadingLevel.HEADING_3,
+            HeadingLevel.HEADING_4, HeadingLevel.HEADING_5, HeadingLevel.HEADING_6,
+          ];
+          paragraphs.push(
+            new Paragraph({
+              children: [new TextRun({ text: headingMatch[2], bold: true, size: 28 - level * 2 })],
+              heading: headingLevels[level - 1],
+              spacing: { before: 200, after: 100 },
+            })
+          );
+          continue;
+        }
+
+        // 无序列表
+        if (/^[\-\*]\s+/.test(line)) {
+          paragraphs.push(
+            new Paragraph({
+              children: [new TextRun({ text: line.replace(/^[\-\*]\s+/, '• '), size: 22 })],
+              spacing: { before: 40, after: 40 },
+            })
+          );
+          continue;
+        }
+
+        // 有序列表
+        const olMatch = line.match(/^(\d+)[\.\)]\s+(.+)$/);
+        if (olMatch) {
+          paragraphs.push(
+            new Paragraph({
+              children: [new TextRun({ text: `${olMatch[1]}. ${olMatch[2]}`, size: 22 })],
+              spacing: { before: 40, after: 40 },
+            })
+          );
+          continue;
+        }
+
+        // 引用
+        if (line.startsWith('> ')) {
+          paragraphs.push(
+            new Paragraph({
+              children: [new TextRun({ text: line.slice(2), italics: true, color: '666666', size: 22 })],
+              indent: { left: 400 },
+              spacing: { before: 40, after: 40 },
+            })
+          );
+          continue;
+        }
+
+        // 空行
+        if (line.trim() === '') {
+          paragraphs.push(new Paragraph({ children: [] }));
+          continue;
+        }
+
+        // 普通文本：处理 **bold** 和 *italic*
+        const parts: TextRun[] = [];
+        let remaining = line;
+        while (remaining.length > 0) {
+          const boldMatch = remaining.match(/\*\*(.+?)\*\*/);
+          const italicMatch = remaining.match(/(?<!\*)\*(?!\*)(.+?)(?<!\*)\*(?!\*)/);
+          let firstMatch: { index: number; length: number; text: string; bold: boolean; italic: boolean } | null = null;
+          if (boldMatch && boldMatch.index !== undefined) {
+            firstMatch = { index: boldMatch.index, length: boldMatch[0].length, text: boldMatch[1], bold: true, italic: false };
+          }
+          if (italicMatch && italicMatch.index !== undefined) {
+            if (!firstMatch || italicMatch.index < firstMatch.index) {
+              firstMatch = { index: italicMatch.index, length: italicMatch[0].length, text: italicMatch[1], bold: false, italic: true };
+            }
+          }
+          if (!firstMatch) {
+            parts.push(new TextRun({ text: remaining, size: 22 }));
+            break;
+          }
+          if (firstMatch.index > 0) {
+            parts.push(new TextRun({ text: remaining.slice(0, firstMatch.index), size: 22 }));
+          }
+          parts.push(new TextRun({ text: firstMatch.text, bold: firstMatch.bold, italics: firstMatch.italic, size: 22 }));
+          remaining = remaining.slice(firstMatch.index + firstMatch.length);
+        }
+        paragraphs.push(
+          new Paragraph({ children: parts, spacing: { before: 40, after: 40 } })
+        );
+      }
+      if (inCodeBlock) flushCode();
+      if (inTable) flushTable();
+
+      // 追加结构化表格数据（content 中可能不含 markdown 表格文本）
+      if (msg.tableRows && msg.tableRows.length > 0) {
+        const maxCols = Math.max(...msg.tableRows.map((r) => r.length));
+        const border = { style: BorderStyle.SINGLE, size: 1, color: 'AAAAAA' };
+        const borders = { top: border, bottom: border, left: border, right: border };
+        const table = new Table({
+          width: { size: 100, type: WidthType.PERCENTAGE },
+          rows: msg.tableRows.map((row, ri) =>
+            new TableRow({
+              children: Array.from({ length: maxCols }, (_, ci) => {
+                const text = row[ci] || '';
+                const isHeader = ri === 0;
+                return new TableCell({
+                  children: [new Paragraph({ children: [new TextRun({ text, bold: isHeader })] })],
+                  borders,
+                  shading: isHeader ? { fill: 'F0F0F0' } : undefined,
+                });
+              }),
+            })
+          ),
+        });
+        paragraphs.push(new Paragraph({ children: [] }));
+        (paragraphs as any).push(table);
+      }
+
+      const doc = new Document({
+        sections: [{
+          properties: {},
+          children: [
+            new Paragraph({
+              children: [new TextRun({ text: `${msg.role === 'assistant' ? 'AI 回复' : '用户消息'} - ${new Date(msg.timestamp).toLocaleString('zh-CN')}`, bold: true, size: 20, color: '888888' })],
+              alignment: AlignmentType.RIGHT,
+              spacing: { after: 200 },
+            }),
+            ...paragraphs,
+          ],
+        }],
+      });
+
+      const blob = await Packer.toBlob(doc);
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `${exportSelectionFileBase()}.docx`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+    } catch (e) {
+      alert('导出 Word 文档失败');
+    }
+    setContextMenu(null);
+    setContextMessageId(null);
   };
 
   /** ???????????????????????????????????? */
@@ -4965,7 +5567,7 @@ export const ChatPanel = React.forwardRef<ChatPanelHandle, ChatPanelProps>(
       {
         id: 'table-preview-' + Date.now(),
         role: 'assistant',
-        content: '??????????????????????????????? CSV / xlsx??',
+        content: '已生成表格预览，可导出为 CSV / xlsx',
         tableRows: matrix,
         timestamp: new Date(),
       },
@@ -5092,7 +5694,7 @@ export const ChatPanel = React.forwardRef<ChatPanelHandle, ChatPanelProps>(
         try {
           const response = await fetch(imageUrl);
           if (!response.ok) {
-            throw new Error(`HTTP??: ${response.status} ${response.statusText}`);
+            throw new Error(`HTTP 错误: ${response.status} ${response.statusText}`);
           }
           const blob = await response.blob();
           
@@ -5101,13 +5703,13 @@ export const ChatPanel = React.forwardRef<ChatPanelHandle, ChatPanelProps>(
             reader.onloadend = () => {
               const result = reader.result as string;
               if (!result) {
-                reject(new Error('FileReader ??????'));
+                reject(new Error('FileReader 返回结果为空'));
                 return;
               }
               resolve(result);
             };
             reader.onerror = (e) => {
-              reject(new Error('FileReader ????'));
+              reject(new Error('FileReader 读取失败'));
             };
             reader.readAsDataURL(blob);
           });
@@ -5124,7 +5726,7 @@ export const ChatPanel = React.forwardRef<ChatPanelHandle, ChatPanelProps>(
         const response = await fetch(proxyUrl);
         if (!response.ok) {
           const errorText = await response.text();
-          throw new Error(`??????: ${response.status} ${response.statusText}`);
+          throw new Error(`图片代理请求失败: ${response.status} ${response.statusText}`);
         }
         
         // ??Content-Type
@@ -5133,7 +5735,7 @@ export const ChatPanel = React.forwardRef<ChatPanelHandle, ChatPanelProps>(
         const blob = await response.blob();
         
         if (blob.size === 0) {
-          throw new Error('?????????');
+          throw new Error('图片内容为空');
         }
         
         return new Promise((resolve, reject) => {
@@ -5141,20 +5743,20 @@ export const ChatPanel = React.forwardRef<ChatPanelHandle, ChatPanelProps>(
           reader.onloadend = () => {
             const result = reader.result as string;
             if (!result) {
-              reject(new Error('FileReader ??????'));
+              reject(new Error('FileReader 返回结果为空'));
               return;
             }
             
             // ??base64??
             if (!result.startsWith('data:image/')) {
-              reject(new Error('Base64 ??????? data:image/ ??'));
+              reject(new Error('Base64 结果不是有效的 data:image/ 格式'));
               return;
             }
             
             resolve(result);
           };
           reader.onerror = (e) => {
-              reject(new Error('FileReader ????'));
+              reject(new Error('FileReader 读取失败'));
           };
           reader.readAsDataURL(blob);
         });
@@ -5166,7 +5768,7 @@ export const ChatPanel = React.forwardRef<ChatPanelHandle, ChatPanelProps>(
             credentials: 'omit'
           });
           if (!response.ok) {
-            throw new Error(`HTTP??: ${response.status} ${response.statusText}`);
+            throw new Error(`HTTP 错误: ${response.status} ${response.statusText}`);
           }
           const blob = await response.blob();
           
@@ -5175,13 +5777,13 @@ export const ChatPanel = React.forwardRef<ChatPanelHandle, ChatPanelProps>(
             reader.onloadend = () => {
               const result = reader.result as string;
               if (!result) {
-                reject(new Error('FileReader ??????'));
+                reject(new Error('FileReader 返回结果为空'));
                 return;
               }
               resolve(result);
             };
             reader.onerror = (e) => {
-              reject(new Error('FileReader ????'));
+              reject(new Error('FileReader 读取失败'));
             };
             reader.readAsDataURL(blob);
           });
@@ -5195,7 +5797,7 @@ export const ChatPanel = React.forwardRef<ChatPanelHandle, ChatPanelProps>(
             const timeoutId = setTimeout(() => {
               if (!isResolved) {
                 isResolved = true;
-                reject(new Error('????????0??'));
+                reject(new Error('图片加载超时（30秒）'));
               }
             }, 30000);
             
@@ -5209,7 +5811,7 @@ export const ChatPanel = React.forwardRef<ChatPanelHandle, ChatPanelProps>(
                 if (!ctx) {
                   isResolved = true;
                   clearTimeout(timeoutId);
-                  reject(new Error('???? canvas ???'));
+                  reject(new Error('无法获取 canvas 上下文'));
                   return;
                 }
                 ctx.drawImage(img, 0, 0);
@@ -5230,7 +5832,7 @@ export const ChatPanel = React.forwardRef<ChatPanelHandle, ChatPanelProps>(
               if (!isResolved) {
                 isResolved = true;
                 clearTimeout(timeoutId);
-                reject(new Error(`???????: ???fetch?canvas????????URL: ${imageUrl.substring(0, 100)}`));
+                reject(new Error(`图片加载失败: 无法通过 fetch、canvas 或直连加载 URL: ${imageUrl.substring(0, 100)}`));
               }
             };
             
@@ -5303,6 +5905,23 @@ export const ChatPanel = React.forwardRef<ChatPanelHandle, ChatPanelProps>(
             <span className="flex items-center gap-2 min-w-0">
               <span className="w-5 flex items-center justify-center text-base leading-none">{selectedModelData?.icon}</span>
               <span className="text-xs font-medium truncate">{selectedModelData?.name}</span>
+              {/* 模型速度小圆点：Qwen 绿(公司内部部署)，DeepSeek/Doubao 黄(国内api)，Claude/Gemini 红(第三方api) */}
+              <span
+                className={`w-1.5 h-1.5 rounded-full flex-shrink-0 ${
+                  selectedModel === 'qwen'
+                    ? 'bg-emerald-400'
+                    : selectedModel === 'deepseek-v4-pro' || selectedModel === 'doubao-seed-2.0'
+                    ? 'bg-amber-400'
+                    : 'bg-red-400'
+                }`}
+                title={
+                  selectedModel === 'qwen'
+                    ? '稳定，快速：公司内部部署'
+                    : selectedModel === 'deepseek-v4-pro' || selectedModel === 'doubao-seed-2.0'
+                    ? '较稳定，速度普通：国内api访问'
+                    : '不稳定，较慢：第三方api访问'
+                }
+              />
             </span>
             {showModelSelector ? (
               <ChevronUp size={12} className="text-gray-400 group-hover:text-brand-400 transition-colors" />
@@ -5312,9 +5931,23 @@ export const ChatPanel = React.forwardRef<ChatPanelHandle, ChatPanelProps>(
           </button>
           
           {showModelSelector && (
-            <div className="absolute right-0 top-full mt-2 w-56 bg-gray-900/98 backdrop-blur-xl border border-gray-700/60 rounded-2xl shadow-2xl z-50 overflow-hidden animate-[fadeIn_0.15s_ease-out]">
+            <div className="absolute right-0 top-full mt-2 w-64 bg-gray-900/98 backdrop-blur-xl border border-gray-700/60 rounded-2xl shadow-2xl z-50 overflow-hidden animate-[fadeIn_0.15s_ease-out]">
               <div className="p-2">
-              {AI_MODELS.filter((m) => m.id !== selectedModel).map((model) => (
+              {AI_MODELS.filter((m) => m.id !== selectedModel).map((model) => {
+                // 模型速度标识：Qwen 绿(公司内部部署)，DeepSeek/Doubao 黄(国内api)，Claude/Gemini 红(第三方api)
+                const speedDot =
+                  model.id === 'qwen' ? '🟢'
+                  : model.id === 'deepseek-v4-pro' || model.id === 'doubao-seed-2.0' ? '🟡'
+                  : '🔴';
+                const speedTip =
+                  model.id === 'qwen' ? '稳定，快速：公司内部部署'
+                  : model.id === 'deepseek-v4-pro' || model.id === 'doubao-seed-2.0' ? '较稳定，速度普通：国内api访问'
+                  : '不稳定，较慢：第三方api访问';
+                const speedLabel =
+                  model.id === 'qwen' ? '稳定快速'
+                  : model.id === 'deepseek-v4-pro' || model.id === 'doubao-seed-2.0' ? '较稳定'
+                  : '不稳定';
+                return (
                 <button
                   key={model.id}
                   onClick={() => handleModelSelect(model.id)}
@@ -5324,8 +5957,18 @@ export const ChatPanel = React.forwardRef<ChatPanelHandle, ChatPanelProps>(
                   >
                     <span className="text-base">{model.icon}</span>
                     <span className="flex-1 truncate">{model.name}</span>
+                    <span className="text-[10px] text-gray-500 group-hover:text-gray-400 flex items-center gap-1" title={speedTip}>
+                      <span>{speedDot}</span>
+                      <span className="hidden group-hover:inline">{speedLabel}</span>
+                    </span>
                 </button>
-              ))}
+                );
+              })}
+              </div>
+              <div className="px-3 py-2 border-t border-gray-800/60 text-[10px] text-gray-500 leading-relaxed">
+                🟢 稳定，快速：公司内部部署<br/>
+                🟡 较稳定，速度普通：国内api访问<br/>
+                🔴 不稳定，较慢：第三方api访问
               </div>
             </div>
           )}
@@ -5569,23 +6212,31 @@ export const ChatPanel = React.forwardRef<ChatPanelHandle, ChatPanelProps>(
               />
             ))}
             
-            {/* ?????- ??????*/}
-        {isLoading && (
-              <div className="flex items-end justify-start gap-3 animate-[slideIn_0.3s_ease-out]">
-                <div className="relative flex-shrink-0">
-                  <div className="absolute -inset-1 bg-gradient-to-br from-brand-500/40 to-purple-500/40 rounded-full blur-md animate-pulse"></div>
-                  <div className="relative w-11 h-11 rounded-full bg-gradient-to-br from-gray-800 to-gray-900 border-2 border-brand-500/40 flex items-center justify-center shadow-xl">
-                    <Bot size={20} className="text-brand-400" strokeWidth={2.5} />
-            </div>
+            {/* 流式指示器：仅在已收到流式 assistant 消息时不显示，避免与实时输出内容重复 */}
+            {(() => {
+              const lastMsg = visibleMessages[visibleMessages.length - 1];
+              const hasStreamingAssistant =
+                isLoading &&
+                lastMsg?.role === 'assistant' &&
+                (lastMsg as ChatMessage).isStreaming;
+              if (hasStreamingAssistant) return null;
+              return isLoading ? (
+                <div className="flex items-end justify-start gap-3 animate-[slideIn_0.3s_ease-out]">
+                  <div className="relative flex-shrink-0">
+                    <div className="absolute -inset-1 bg-gradient-to-br from-brand-500/40 to-purple-500/40 rounded-full blur-md animate-pulse"></div>
+                    <div className="relative w-11 h-11 rounded-full bg-gradient-to-br from-gray-800 to-gray-900 border-2 border-brand-500/40 flex items-center justify-center shadow-xl">
+                      <Bot size={20} className="text-brand-400" strokeWidth={2.5} />
+                    </div>
+                  </div>
+                  <div className="bg-gradient-to-br from-gray-800/90 to-gray-900/90 text-gray-200 rounded-2xl p-4 shadow-2xl border border-gray-700/60 backdrop-blur-sm">
+                    <div className="flex items-center gap-3">
+                      <Loader2 size={18} className="animate-spin text-brand-400" strokeWidth={2.5} />
+                      <span className="text-sm font-medium">正在生成回复...</span>
+                    </div>
+                  </div>
                 </div>
-                <div className="bg-gradient-to-br from-gray-800/90 to-gray-900/90 text-gray-200 rounded-2xl p-4 shadow-2xl border border-gray-700/60 backdrop-blur-sm">
-                  <div className="flex items-center gap-3">
-                    <Loader2 size={18} className="animate-spin text-brand-400" strokeWidth={2.5} />
-                    <span className="text-sm font-medium">正在生成回复...</span>
-              </div>
-            </div>
-          </div>
-        )}
+              ) : null;
+            })()}
         <div ref={messagesEndRef} />
           </>
         )}
@@ -5617,6 +6268,17 @@ export const ChatPanel = React.forwardRef<ChatPanelHandle, ChatPanelProps>(
                 <Sparkles size={16} strokeWidth={2.5} className="text-purple-400" />
                 <span>发送分镜进阶版</span>
               </button>
+              {contextMessageId && (
+                <button
+                  type="button"
+                  onClick={() => void handleExportMessageAsWord()}
+                  className="w-full text-left px-4 py-3 text-sm font-medium text-white hover:bg-gradient-to-r hover:from-amber-900/40 hover:to-gray-800 transition-all duration-200 flex items-center gap-2 border-t border-gray-700/60"
+                  title="将当前消息导出为 .docx Word 文档（支持 Word / WPS 打开编辑）"
+                >
+                  <FileText size={16} strokeWidth={2.5} className="text-amber-400" />
+                  <span>导出为 Word 文档</span>
+                </button>
+              )}
               {(selectedText.trim().length > 0 || (contextTableRows && contextTableRows.length > 0)) && (
                 <>
                   <button

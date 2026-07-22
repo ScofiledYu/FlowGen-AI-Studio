@@ -167,7 +167,22 @@ ok(
   localizeThinkingProcessForDisplay('**Planning the response**\nI need to compare.').includes('规划')
 );
 
-console.log('\n[5] 联网检索过程仅保留有效检索行');
+console.log('\n[5] 联网总结合并：思考关闭时不展示推理区');
+const mergedNoThink = mergeWithWebSearchProcess(
+  composeAssistantMessage({ main: '### 对比结论\n豆包多模态强，DeepSeek 代码强。', webSearch: '', thinking: '' }),
+  composeAssistantMessage({ main: '', webSearch: '检索完成：「豆包 DeepSeek 对比」', thinking: '' }),
+  '正在对比两款模型的优劣。',
+  false,
+  { userQuestion: '对比 deepseek v4 优缺点' }
+);
+const mergedNoThinkSections = parseAssistantMessage(mergedNoThink);
+ok(
+  '思考关闭时总结 pass 不写入思考区',
+  !mergedNoThinkSections.thinking.includes('正在对比') &&
+    mergedNoThinkSections.main.includes('对比结论')
+);
+
+console.log('\n[6] 联网检索过程仅保留有效检索行');
 const { process: searchProcess } = splitWebSearchForDisplay(
   sanitizeWebSearchProcessText(parseAssistantMessage(firstComposed).webSearch, probeQuery)
 );

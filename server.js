@@ -491,50 +491,113 @@ app.get('/task-status', async (req, res) => {
 });
 
 // AiTop LLM 同源中转：避免浏览器直连 CORS/网关差异导致的 Failed to fetch
-app.post('/aitop-llm-see', async (req, res) => {
-  try {
-    const runOnce = () =>
-      axios.post('https://aitop100-api.hytch.com/api/v1/llm/see', req.body, {
+// 关键：用原生 https 模块替代 axios，在 callback 内立即 pipe，确保 SSE 真正流式传输
+// （axios responseType:'stream' 和 async/await 都会导致数据在缓冲区积累后一次性排出）
+app.post('/aitop-llm-see', (req, res) => {
+  const relayStartedAt = Date.now();
+  const relayTraceId = `relay_${relayStartedAt}_${Math.random().toString(36).slice(2, 8)}`;
+  const reqBodyPreview = req.body && typeof req.body === 'object'
+    ? { id: req.body.id, model: req.body.model, messageLen: (req.body.message || '').length, webSearch: req.body.webSearch, thinking: req.body.thinking }
+    : null;
+  console.log(`[AiTop Relay ${relayTraceId}] START body=`, JSON.stringify(reqBodyPreview));
+  let upstreamPipeStarted = false;
+  let relayRetried = false;
+  req.on('close', () => {
+    console.log(`[AiTop Relay ${relayTraceId}] CLIENT CLOSED after ${Date.now() - relayStartedAt}ms (pipeStarted=${upstreamPipeStarted})`);
+  });
+
+  const bodyStr = JSON.stringify(req.body);
+
+  const sendUpstream = () => {
+    const upstreamReq = https.request(
+      {
+        hostname: 'aitop100-api.hytch.com',
+        path: '/api/v1/llm/see',
+        method: 'POST',
         headers: {
           'api-key': req.headers['api-key'] || AITOP_API_KEY,
           'Content-Type': 'application/json',
+          'Content-Length': Buffer.byteLength(bodyStr),
+          'Accept': 'text/event-stream',
         },
-        timeout: 120000,
-        responseType: 'stream',
-        validateStatus: () => true,
-      });
+      },
+      (upstreamRes) => {
+        console.log(`[AiTop Relay ${relayTraceId}] UPSTREAM status=${upstreamRes.statusCode} ct=${upstreamRes.headers['content-type']} at ${Date.now() - relayStartedAt}ms`);
 
-    let upstream = await runOnce();
-    if ((upstream.status === 502 || upstream.status === 504) && req.body && typeof req.body === 'object') {
-      // 网关抖动时快速重试一次，降低前端失败率
-      await new Promise((r) => setTimeout(r, 250));
-      upstream = await runOnce();
-    }
-    res.status(upstream.status || 502);
-    const ct = upstream.headers['content-type'] || 'text/plain; charset=utf-8';
-    res.setHeader('Content-Type', ct);
-    res.setHeader('Cache-Control', 'no-store');
-    res.setHeader('Access-Control-Allow-Origin', '*');
-    res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
-    res.setHeader('Access-Control-Allow-Headers', 'Content-Type, api-key');
-    res.setHeader(
-      'Access-Control-Expose-Headers',
-      'x-request-id, x-trace-id, request-id, trace-id'
+        // 502/504 网关抖动重试
+        if ((upstreamRes.statusCode === 502 || upstreamRes.statusCode === 504) && !relayRetried) {
+          relayRetried = true;
+          upstreamRes.resume(); // 消费并丢弃响应体
+          console.log(`[AiTop Relay ${relayTraceId}] UPSTREAM retry on ${upstreamRes.statusCode}`);
+          setTimeout(sendUpstream, 250);
+          return;
+        }
+
+        // 立即设置响应头
+        res.status(upstreamRes.statusCode || 502);
+        res.setHeader('Content-Type', upstreamRes.headers['content-type'] || 'text/plain; charset=utf-8');
+        res.setHeader('Cache-Control', 'no-store');
+        res.setHeader('Access-Control-Allow-Origin', '*');
+        res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
+        res.setHeader('Access-Control-Allow-Headers', 'Content-Type, api-key');
+        res.setHeader(
+          'Access-Control-Expose-Headers',
+          'x-request-id, x-trace-id, request-id, trace-id, x-relay-retry'
+        );
+        if (upstreamRes.headers['x-request-id']) {
+          res.setHeader('x-request-id', upstreamRes.headers['x-request-id']);
+        }
+        if (upstreamRes.headers['x-trace-id']) {
+          res.setHeader('x-trace-id', upstreamRes.headers['x-trace-id']);
+        }
+        if (relayRetried) {
+          res.setHeader('x-relay-retry', '1');
+        }
+
+        // 立即 flush 响应头并在 callback 内直接 pipe
+        // 关键：不能在 await 之后 pipe，否则数据会在 IncomingMessage 缓冲区积累后一次性排出
+        res.flushHeaders();
+        upstreamPipeStarted = true;
+        console.log(`[AiTop Relay ${relayTraceId}] PIPE START after ${Date.now() - relayStartedAt}ms`);
+
+        // 调试：测量上游 data 事件
+        let upstreamDataEvents = 0;
+        upstreamRes.on('data', (chunk) => {
+          upstreamDataEvents++;
+          if (upstreamDataEvents === 1) {
+            console.log(`[AiTop Relay ${relayTraceId}] UPSTREAM FIRST DATA at ${Date.now() - relayStartedAt}ms size=${chunk.length}B`);
+          }
+        });
+
+        upstreamRes.pipe(res);
+
+        upstreamRes.on('end', () => {
+          console.log(`[AiTop Relay ${relayTraceId}] PIPE END after ${Date.now() - relayStartedAt}ms upstreamDataEvents=${upstreamDataEvents}`);
+        });
+      }
     );
-    if (upstream.headers['x-request-id']) {
-      res.setHeader('x-request-id', upstream.headers['x-request-id']);
-    }
-    if (upstream.headers['x-trace-id']) {
-      res.setHeader('x-trace-id', upstream.headers['x-trace-id']);
-    }
-    upstream.data.pipe(res);
-  } catch (error) {
-    console.error('[AiTop Relay Error]', error instanceof Error ? error.message : String(error));
-    res.status(502).json({
-      error: 'AiTop LLM 中转失败',
-      message: error instanceof Error ? error.message : String(error),
+
+    upstreamReq.on('error', (error) => {
+      console.error(`[AiTop Relay ${relayTraceId}] ERROR after ${Date.now() - relayStartedAt}ms:`, error.message);
+      if (!res.headersSent) {
+        res.status(502).json({
+          error: 'AiTop LLM 中转失败',
+          message: error.message,
+        });
+      } else {
+        res.end();
+      }
     });
-  }
+
+    upstreamReq.setTimeout(120000, () => {
+      upstreamReq.destroy(new Error('upstream timeout 120s'));
+    });
+
+    upstreamReq.write(bodyStr);
+    upstreamReq.end();
+  };
+
+  sendUpstream();
 });
 
 // 图片代理端点：用于绕过CORS限制获取远程图片

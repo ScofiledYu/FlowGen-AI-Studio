@@ -98,7 +98,7 @@
 
 | 套件 | 覆盖 | 命令 |
 |------|------|------|
-| **test:chat-gate** | layout + pipeline + probe fallback + **§5.10 identity-contract** + 模型注册契约 | `npm run test:chat-gate` |
+| **test:chat-gate** | layout + pipeline + **§5.10.4 display-contract** + probe fallback + **§5.10 identity-contract** + 模型注册契约 | `npm run test:chat-gate` |
 | **test:llm-chat-identity-contract** | 身份/问候关联网、probe 不串历史、tip 按需、源码防回退 | 含在 chat-gate |
 | **test:llm-model-contract** | `AI_MODELS` / normalize / fallback / 代理路由存在 | `npm run test:llm-model-contract` |
 | test:layout | assistantMessageLayout 单元 | 含在 chat-gate |
@@ -128,8 +128,17 @@
 - **probe**：非检索句禁止 LLM/历史拼接改写，避免上一轮话题污染。
 - **切模型**：保留历史 + meta 提示；Qwen 关闭联网/思考；AiTop 模型保留开关状态（见 §3）。
 - **门禁**：日常 `test:chat-gate`（含 `test:llm-chat-identity-contract`）；发版加 `test:llm:four-mode`。
-- **冻结详情**：根目录 `skill.md` **§5.10**。
+### 6.2 展示 / 过程区 / 模式开关（2026-07-13 · 已验收 §5.10.4）
+
+- **未开联网/思考**：不得误显 `[联网检索]`/`[思考过程]`；过程区文本须 `flattenAssistantSectionsWhenProcessDisabled` 合并进正文。
+- **思考关闭**：`stripLeakedThinkingFromMainWhenDisabled` 剥离英文 CoT；保留 `Hello + 中文` 双语自我介绍。
+- **嵌套标记**：`parseAssistantMessage` 须保留 `[思考过程]` 后 `[联网检索]` 段正文。
+- **Gemini 流校验**：有足够 `fullContent` 时须 `rawFallback` / `recoverAssistantReplyFromRaw`，勿误判「无有效正文」。
+- **仅开联网总结 pass**：`payload.thinking = thinkingEnabledForTurn`，禁止硬编码 `thinking: true`。
+- **开思考/开联网**：过程区与正文分离（`collectApiReasoning`、`mergeWithWebSearchProcess`）— 由 layout + pipeline 回归。
+- **门禁**：`test:layout` + `test:llm-chat-display-contract` + `test:chat-pipeline`（均已并入 `test:chat-gate`）。
+- **冻结详情**：根目录 `skill.md` **§5.10.4**。
 
 ---
 
-*文档版本：2026-07-09 · 与当前工作区同步*
+*文档版本：2026-07-13 · 与当前工作区同步*

@@ -15,6 +15,9 @@ import {
   ensureAssistantSectionsHaveMain,
   guardAssistantReplyContent,
   assistantReplyHasVisibleMain,
+  flattenAssistantSectionsWhenProcessDisabled,
+  recoverAssistantReplyFromRaw,
+  stripLeakedThinkingFromMainWhenDisabled,
   consolidateWebSearchDumpContent,
   isLikelyMainOnlySearchDump,
   isLikelyTraditionalChineseHeavy,
@@ -220,7 +223,9 @@ const geminiZhThinking =
   'RYa自然语言思考过程:\n1. **分析搜索结果:**\n整理师资与招聘要求。\n2. **组织回答结构:**\n分教学质量与特色介绍。\n\n' +
   '根据搜索结果，深圳龙华区未来小学教学质量较好。\n\n' +
   '[联网检索]\n检索完成：「深圳龙华区未来小学教学质量师资水平教师学历情况」';
-const geminiZhParsed = resolveAssistantDisplaySections(geminiZhThinking);
+const geminiZhParsed = resolveAssistantDisplaySections(geminiZhThinking, {
+  allowLegacyThinkingExtract: true,
+});
 ok(
   'Gemini 中文思考进过程区',
   geminiZhParsed.thinking.includes('分析搜索结果') &&
@@ -265,6 +270,97 @@ ok(
   assistantReplyHasVisibleMain(guardedProcessOnly) &&
     (guardedSections.main.includes('中海锦城') || guardedSections.main.includes('下半年')) &&
     guardedSections.webSearch.includes('检索完成')
+);
+
+const deepseekStyle =
+  'Hello! My areas of expertise are very broad.\n\n' +
+  '我擅长内容创作与剧本策划，可以协助你完成剧本大纲、人物设定与分场。';
+const composedOff = composeAssistantMessage(
+  normalizeAssistantStream({
+    content: deepseekStyle,
+    collectApiReasoning: false,
+    allowWebSearchExtractFromMain: false,
+    allowThinkingExtractFromMain: false,
+  })
+);
+const sectionsOff = parseAssistantMessage(composedOff);
+ok(
+  '未开联网/思考时不拆过程区',
+  !sectionsOff.webSearch.trim() && !sectionsOff.thinking.trim()
+);
+ok(
+  '未开联网/思考时保留英文+中文正文',
+  sectionsOff.main.includes('Hello') && sectionsOff.main.includes('剧本')
+);
+const guardedOff = guardAssistantReplyContent(composedOff, {
+  userQuestion: '你擅长什么领域，我要创作剧本你擅长吗？',
+  webSearchEnabled: false,
+  thinkingEnabled: false,
+});
+ok('未开联网时 guard 不写根据联网检索', !guardedOff.includes('根据联网检索'));
+const displayOff = resolveAssistantDisplaySections(guardedOff);
+ok('展示层未开联网时不误显检索卡', !displayOff.webSearch.trim());
+ok(
+  '展示层未开思考时不误拆英文前缀为思考卡',
+  !resolveAssistantDisplaySections(guardedOff).thinking.trim()
+);
+
+const geminiIdentityMisplaced =
+  '[联网检索]\n我是「Gemini 3.1 Pro」，是由 Google Deepmind 团队开发的大型语言模型。我擅长多模态理解、复杂推理与代码协作。\n\n' +
+  '[思考过程]\n**分析请求**\n用户询问模型身份。';
+const flattenedGeminiIdentity = flattenAssistantSectionsWhenProcessDisabled(
+  parseAssistantMessage(geminiIdentityMisplaced),
+  { webSearchEnabled: false, thinkingEnabled: false }
+);
+const composedGeminiIdentity = composeAssistantMessage(flattenedGeminiIdentity);
+const guardedGeminiIdentity = guardAssistantReplyContent(composedGeminiIdentity, {
+  userQuestion: '你是哪个模型？你擅长的是什么？',
+  webSearchEnabled: false,
+  thinkingEnabled: false,
+  synthesizedRaw: geminiIdentityMisplaced,
+});
+ok(
+  'Gemini 身份问答未开联网/思考时合并过程区进正文',
+  assistantReplyHasVisibleMain(guardedGeminiIdentity) &&
+    !parseAssistantMessage(guardedGeminiIdentity).webSearch.trim() &&
+    !parseAssistantMessage(guardedGeminiIdentity).thinking.trim() &&
+    guardedGeminiIdentity.includes('Gemini 3.1 Pro')
+);
+
+const geminiNestedMarkers =
+  '[思考过程]\n分析用户身份问题\n\n[联网检索]\n我是「Gemini 3.1 Pro」，擅长代码协作与复杂推理。';
+const recoveredNested = recoverAssistantReplyFromRaw(geminiNestedMarkers, {
+  userQuestion: '你是哪个模型，你擅长哪个领域？',
+  webSearchEnabled: false,
+  thinkingEnabled: false,
+});
+ok(
+  '嵌套过程标记不丢正文且可恢复',
+  assistantReplyHasVisibleMain(recoveredNested, { webSearchEnabled: false, thinkingEnabled: false }) &&
+    recoveredNested.includes('Gemini 3.1 Pro') &&
+    !parseAssistantMessage(recoveredNested).webSearch.trim()
+);
+
+const geminiEnglishCoT =
+  '**Assessing the Prompt**\nThe user wants the final numeric result.\n\n' +
+  '**Calculating the Solution**\n4 - 1 + 5 = 8 apples. 8 / 3 = 2 remainder 2.\n\n' +
+  '**Interpreting Ambiguity**\nEqual split gives 2 each.\n\n' +
+  '根据计算，小红一共有 8 个苹果，三人平分，每人最多能吃 2 个。';
+const strippedCoT = stripLeakedThinkingFromMainWhenDisabled(geminiEnglishCoT);
+const guardedCoT = guardAssistantReplyContent(
+  composeAssistantMessage({ main: geminiEnglishCoT, webSearch: '', thinking: '' }),
+  { userQuestion: '计算的结果是什么？', webSearchEnabled: false, thinkingEnabled: false }
+);
+ok(
+  '思考关闭时剥离英文 CoT 前缀',
+  strippedCoT.includes('每人最多能吃 2 个') &&
+    !strippedCoT.includes('Assessing the Prompt') &&
+    guardedCoT.includes('每人最多') &&
+    !guardedCoT.includes('Assessing')
+);
+ok(
+  '思考关闭时仍保留 Hello+中文自我介绍',
+  stripLeakedThinkingFromMainWhenDisabled(deepseekStyle) === deepseekStyle
 );
 
 console.log(`\nSUMMARY PASS ${pass} FAIL ${fail}`);

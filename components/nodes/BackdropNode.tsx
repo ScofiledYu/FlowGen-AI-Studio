@@ -19,8 +19,9 @@ const DEF_BORDER = 'rgba(99, 102, 241, 0.45)';
 /** 背景框始终压在普通节点下方，避免选中时盖住子节点导致无法框选/点击 */
 export const BACKDROP_FLOW_Z_INDEX = -1;
 
+/** 父级 backdrop-node 为 pointer-events-none（透传点击给子节点），手柄必须显式恢复可点 */
 const cornerHandleClass =
-  '!h-3 !w-3 !min-h-[12px] !min-w-[12px] !rounded-sm !border-2 !border-brand-400 !bg-gray-900 nodrag nopan';
+  'pointer-events-auto !z-20 !h-3.5 !w-3.5 !min-h-[14px] !min-w-[14px] !rounded-sm !border-2 !border-brand-400 !bg-gray-900 nodrag nopan';
 
 function estimateTextFlowWidth(text: string, fontSize: number): number {
   let w = 0;

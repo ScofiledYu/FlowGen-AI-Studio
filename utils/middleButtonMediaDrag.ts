@@ -73,6 +73,34 @@ export function isCanvasNodeMediaDragSource(sourceNodeId: string): boolean {
   return sourceNodeId === 'canvas:multi' || !sourceNodeId.includes(':');
 }
 
+/**
+ * 资产库中键松手在画布空白区 → 应创建节点。
+ * 画布节点拖到空白区不新建（避免误触复制）。
+ */
+export function shouldCreateCanvasNodesFromMediaDrop(
+  d: Pick<FlowgenMediaUrlDropDetail, 'dropZone' | 'sourceNodeId' | 'clientX' | 'clientY'>
+): boolean {
+  return (
+    d.dropZone === 'canvas-pane' &&
+    isAssetLibraryMediaDragSource(d.sourceNodeId) &&
+    typeof d.clientX === 'number' &&
+    typeof d.clientY === 'number'
+  );
+}
+
+/** 从中键投放 detail 还原资产库拖入项（多选优先 assets） */
+export function buildAssetItemsFromMediaDrop(d: FlowgenMediaUrlDropDetail): FlowgenAssetDragItem[] {
+  if (d.assets && d.assets.length > 0) return d.assets;
+  return [
+    {
+      assetId: d.assetId || 'asset',
+      assetName: d.assetName || 'asset',
+      url: d.url,
+      mime: d.kind === 'video' || /video/i.test(d.url) ? 'video/mp4' : 'image/png',
+    },
+  ];
+}
+
 const ALLOWED_DROP_ZONES: FlowgenMediaUrlDropZone[] = [
   'node-main',
   'reference',

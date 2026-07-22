@@ -15,9 +15,17 @@ export type MiniMapElementSize = {
   height: number;
 };
 
-const BASE_WIDTH = 200;
+const BASE_WIDTH = 150;
 const MIN_HEIGHT = 150;
-const MAX_HEIGHT = 400;
+const MAX_HEIGHT = 150;
+
+/** MiniMap 隐藏类型：背景框与链折叠夹本身不触发导航地图显示 */
+const MINIMAP_HIDDEN_NODE_TYPES = new Set(['backdropNode', 'chainFolderNode']);
+
+/** 判断当前画布是否应显示 MiniMap：存在至少一个非隐藏类型节点时返回 true */
+export function hasVisibleMiniMapNodes(nodes: Array<{ type?: string }>): boolean {
+  return nodes.some((n) => !MINIMAP_HIDDEN_NODE_TYPES.has(n.type || ''));
+}
 
 /** 纵向分镜工程：按节点 bounds 宽高比抬高 MiniMap，避免节点缩成亚像素 */
 export function computeAdaptiveMiniMapSize(

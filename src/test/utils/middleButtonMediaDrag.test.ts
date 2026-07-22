@@ -1,8 +1,11 @@
 import { describe, expect, it } from 'vitest';
 import {
+  buildAssetItemsFromMediaDrop,
   isAssetLibraryMediaDragSource,
   isCanvasNodeMediaDragSource,
   resolveMediaDropZoneAtPoint,
+  shouldCreateCanvasNodesFromMediaDrop,
+  type FlowgenMediaUrlDropDetail,
 } from '../../../utils/middleButtonMediaDrag';
 
 describe('resolveMediaDropZoneAtPoint', () => {
@@ -12,6 +15,76 @@ describe('resolveMediaDropZoneAtPoint', () => {
     expect(isCanvasNodeMediaDragSource('node_1')).toBe(true);
     expect(isCanvasNodeMediaDragSource('canvas:multi')).toBe(true);
     expect(isCanvasNodeMediaDragSource('asset:abc')).toBe(false);
+  });
+
+  it('asset library middle-drop on canvas-pane should create nodes; canvas source should not', () => {
+    expect(
+      shouldCreateCanvasNodesFromMediaDrop({
+        dropZone: 'canvas-pane',
+        sourceNodeId: 'asset:abc',
+        clientX: 100,
+        clientY: 200,
+      })
+    ).toBe(true);
+    expect(
+      shouldCreateCanvasNodesFromMediaDrop({
+        dropZone: 'canvas-pane',
+        sourceNodeId: 'asset:multi',
+        clientX: 10,
+        clientY: 20,
+      })
+    ).toBe(true);
+    expect(
+      shouldCreateCanvasNodesFromMediaDrop({
+        dropZone: 'canvas-pane',
+        sourceNodeId: 'node_1',
+        clientX: 100,
+        clientY: 200,
+      })
+    ).toBe(false);
+    expect(
+      shouldCreateCanvasNodesFromMediaDrop({
+        dropZone: 'reference',
+        sourceNodeId: 'asset:abc',
+        clientX: 100,
+        clientY: 200,
+      })
+    ).toBe(false);
+    expect(
+      shouldCreateCanvasNodesFromMediaDrop({
+        dropZone: 'canvas-pane',
+        sourceNodeId: 'asset:abc',
+      })
+    ).toBe(false);
+  });
+
+  it('buildAssetItemsFromMediaDrop prefers multi-select assets payload', () => {
+    const multi: FlowgenMediaUrlDropDetail = {
+      url: 'https://a/1.png',
+      kind: 'image',
+      sourceNodeId: 'asset:multi',
+      targetNodeId: '',
+      dropZone: 'canvas-pane',
+      clientX: 1,
+      clientY: 2,
+      assets: [
+        { assetId: 'a1', assetName: 'one', url: 'https://a/1.png', mime: 'image/png' },
+        { assetId: 'a2', assetName: 'two', url: 'https://a/2.png', mime: 'image/png' },
+      ],
+    };
+    expect(buildAssetItemsFromMediaDrop(multi)).toEqual(multi.assets);
+    const single = buildAssetItemsFromMediaDrop({
+      url: 'https://v/x.mp4',
+      kind: 'video',
+      sourceNodeId: 'asset:v1',
+      targetNodeId: '',
+      dropZone: 'canvas-pane',
+      assetId: 'v1',
+      assetName: 'clip',
+    });
+    expect(single).toEqual([
+      { assetId: 'v1', assetName: 'clip', url: 'https://v/x.mp4', mime: 'video/mp4' },
+    ]);
   });
 
   it('prefers reference zone over underlying node-main in hit stack', () => {

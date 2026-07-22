@@ -1,0 +1,33 @@
+{
+  "selectedModel": "Nano Banana 2.0",
+  "prompt": "@图片3参考@图片4风格生成",
+  "imagePreview": "/flowgen-api/projects/14/assets/a4293204-b435-4667-829d-20efa78ea272/file",
+  "imageName": "白泽",
+  "projectAssetId": "a4293204-b435-4667-829d-20efa78ea272",
+  "referenceImages": [
+    "/flowgen-api/projects/14/assets/90bdcd95-b552-42ab-9562-255b8557d92d/file",
+    "/flowgen-api/projects/14/assets/dd2c9a6d-9a4b-4eda-8f23-722d044b2cd5/file",
+    "https://aitop100app-1251510006.cos.ap-shanghai.myqcloud.com/openApi/212508/1d31cea8-416c-4fe6-9fb9-0ab599c79a1c.png",
+    "https://aitop100app-1251510006.cos.ap-shanghai.myqcloud.com/openApi/212508/62f8e755-b9f6-4280-860e-e921bfb23f20.png"
+  ],
+  "referenceImageLabels": [
+    "大牙-有牙",
+    "卷卷",
+    "图片3",
+    "图片4"
+  ],
+  "referenceElementIds": [
+    null,
+    null,
+    "canvas:node_12_1783653707674",
+    "canvas:node_3_1783653707518"
+  ],
+  "gpRefs": [
+    "https://aitop100app-1251510006.cos.ap-shanghai.myqcloud.com/openApi/212508/1d31cea8-416c-4fe6-9fb9-0ab599c79a1c.png",
+    "https://aitop100app-1251510006.cos.ap-shanghai.myqcloud.com/openApi/212508/62f8e755-b9f6-4280-860e-e921bfb23f20.png"
+  ],
+  "gpLabels": [
+    "图片3",
+    "图片4"
+  ]
+}

@@ -3,6 +3,7 @@ import React from 'react';
 import ReactDOM from 'react-dom/client';
 import App from './App';
 import 'reactflow/dist/style.css'; // Import React Flow styles locally
+import '@reactflow/node-resizer/dist/style.css'; // 背景框 NodeResizeControl 角点定位（reactflow/style.css 不含）
 import './index.css'; // Import Tailwind styles locally
 
 // Suppress ResizeObserver loop errors

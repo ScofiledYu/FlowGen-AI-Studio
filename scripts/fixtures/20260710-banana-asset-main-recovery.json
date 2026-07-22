@@ -1,0 +1,107 @@
+{
+  "nodes": [
+    {
+      "id": "node_0_1783664988748",
+      "type": "processorNode",
+      "position": {
+        "x": 15450.144218076064,
+        "y": 24907.373501286937
+      },
+      "data": {
+        "selectedModel": "Nano Banana 2.0",
+        "prompt": "@图片3参考@图片6风格生成",
+        "imagePreview": "/flowgen-api/projects/14/assets/62803dee-e53e-4f51-b0c7-b297829bea54/file",
+        "panelMainImageUrl": "/flowgen-api/projects/14/assets/62803dee-e53e-4f51-b0c7-b297829bea54/file",
+        "projectAssetId": "62803dee-e53e-4f51-b0c7-b297829bea54",
+        "referenceImages": [
+          "/flowgen-api/projects/14/assets/750c6f9f-f893-4995-837c-8fa40b61eb4e/file",
+          "/flowgen-api/projects/14/assets/577c2810-1174-4938-8a02-e2db04a128eb/file",
+          "https://aitop100app-1251510006.cos.ap-shanghai.myqcloud.com/openApi/212508/37f0b06a-a93f-4426-b13f-3f193059de9b.png",
+          "",
+          "",
+          "https://aitop100app-1251510006.cos.ap-shanghai.myqcloud.com/openApi/212508/9b35bb29-7090-4f58-a4d4-02f3120dea37.png",
+          ""
+        ],
+        "referenceImageLabels": [
+          "夏茉",
+          "萧逍",
+          "图片3",
+          "图片4",
+          "图片5",
+          "图片6",
+          "图片7"
+        ],
+        "referenceElementIds": [
+          "",
+          "",
+          "canvas:node_8_1783662683345",
+          "canvas:node_10_1783662683615",
+          "canvas:node_12_1783662683735",
+          "canvas:node_0_1783662786767",
+          "canvas:node_15_1783662683790"
+        ],
+        "taskId": "1553425",
+        "status": "completed",
+        "aspectRatio": "16:9",
+        "generationParams": {
+          "taskId": "1553425",
+          "generatedAt": "2026-07-10T06:32:05.403Z",
+          "model": "Nano Banana 2.0",
+          "prompt": "@图片3参考@图片6风格生成",
+          "aspectRatio": "16:9",
+          "outputUrl": "https://aitop100app-1251510006.cos.ap-shanghai.myqcloud.com/imagesGenerations/7f2d9bf9-527e-449d-be9d-8e30ca62a050.png"
+        },
+        "generatedThumbnails": [
+          {
+            "id": "node_0_1783665125403",
+            "url": "https://aitop100app-1251510006.cos.ap-shanghai.myqcloud.com/imagesGenerations/7f2d9bf9-527e-449d-be9d-8e30ca62a050.png",
+            "type": "image",
+            "nodeId": "node_0_1783665125403",
+            "name": "Generated_78.png",
+            "generationParams": {
+              "taskId": "1553425",
+              "generatedAt": "2026-07-10T06:32:05.403Z",
+              "model": "Nano Banana 2.0",
+              "prompt": "@图片3参考@图片6风格生成",
+              "aspectRatio": "16:9",
+              "outputUrl": "https://aitop100app-1251510006.cos.ap-shanghai.myqcloud.com/imagesGenerations/7f2d9bf9-527e-449d-be9d-8e30ca62a050.png"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "id": "node_0_1783665125403",
+      "type": "outputNode",
+      "position": {
+        "x": 15800.144218076064,
+        "y": 24907.373501286937
+      },
+      "data": {
+        "selectedModel": "可灵 2.5 Turbo",
+        "imagePreview": "https://aitop100app-1251510006.cos.ap-shanghai.myqcloud.com/imagesGenerations/7f2d9bf9-527e-449d-be9d-8e30ca62a050.png",
+        "generationParams": {
+          "taskId": "1553425",
+          "generatedAt": "2026-07-10T06:32:05.403Z",
+          "model": "Nano Banana 2.0",
+          "prompt": "@图片3参考@图片6风格生成",
+          "aspectRatio": "16:9",
+          "outputUrl": "https://aitop100app-1251510006.cos.ap-shanghai.myqcloud.com/imagesGenerations/7f2d9bf9-527e-449d-be9d-8e30ca62a050.png"
+        },
+        "taskId": "1553425"
+      }
+    }
+  ],
+  "edges": [
+    {
+      "id": "enode_0_1783664988748-node_0_1783665125403-recover-1783665125403-0",
+      "source": "node_0_1783664988748",
+      "target": "node_0_1783665125403",
+      "animated": true,
+      "style": {
+        "stroke": "#6366f1",
+        "strokeWidth": 2
+      }
+    }
+  ]
+}

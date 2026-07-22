@@ -43,7 +43,7 @@ describe('nanoBanana model switch main preview', () => {
     expect(resolveCanvasNodePreviewUrl(switched)).toBeUndefined();
   });
 
-  it('after run hide main: canvas still uses main imagePreview when backup exists', () => {
+  it('after run hide main: canvas uses first @ ref not main backup (§5.7 / §10.38)', () => {
     const afterRun = {
       selectedModel: MODEL_NANO_BANANA_2,
       imagePreview: 'https://cos.example/main-kept.png',
@@ -55,7 +55,7 @@ describe('nanoBanana model switch main preview', () => {
         prompt: '@图片1参考',
       },
     };
-    expect(resolveCanvasNodePreviewUrl(afterRun)).toBe('https://cos.example/main-kept.png');
+    expect(resolveCanvasNodePreviewUrl(afterRun)).toBe('https://cos.example/ref1.png');
   });
 
   it('2026070607: empty prompt + stale panelMainImageUrl keeps main thumb not ref1', () => {

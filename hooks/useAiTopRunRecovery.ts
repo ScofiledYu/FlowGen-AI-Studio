@@ -58,7 +58,7 @@ export function useAiTopRunRecovery(params: UseAiTopRunRecoveryParams): void {
   } = params;
 
   const recoveringRef = useRef(new Set<string>());
-  /** 仅工程首次 hydration 后跑一次 prepare，避免 effect 重入时覆盖 live running 态 */
+  /** 仅工程首次 hydration 且节点已加载后跑一次 prepare，避免 effect 重入时覆盖 live running 态 */
   const postLoadPrepDoneRef = useRef(false);
 
   const recoverOneNode = useCallback(
@@ -284,18 +284,20 @@ export function useAiTopRunRecovery(params: UseAiTopRunRecoveryParams): void {
 
     void (async () => {
       if (!postLoadPrepDoneRef.current) {
-        postLoadPrepDoneRef.current = true;
         const graphEdges = getEdges();
         const graphNodes = getNodes();
-        const { nodes: prepared, changed: prepChanged } = prepareNodesAfterWorkspaceLoad(
-          graphNodes,
-          graphEdges
-        );
-        const afterMovHydrate = hydrateMovNodesFromUpstream(prepared, graphEdges);
-        const movHydrateChanged = afterMovHydrate.some((n, i) => n !== prepared[i]);
-        if (!cancelled && (prepChanged || movHydrateChanged)) {
-          setNodes(afterMovHydrate);
-          onPersistRequest?.();
+        if (graphNodes.length > 0) {
+          postLoadPrepDoneRef.current = true;
+          const { nodes: prepared, changed: prepChanged } = prepareNodesAfterWorkspaceLoad(
+            graphNodes,
+            graphEdges
+          );
+          const afterMovHydrate = hydrateMovNodesFromUpstream(prepared, graphEdges);
+          const movHydrateChanged = afterMovHydrate.some((n, i) => n !== prepared[i]);
+          if (!cancelled && (prepChanged || movHydrateChanged)) {
+            setNodes(afterMovHydrate);
+            onPersistRequest?.();
+          }
         }
       }
 

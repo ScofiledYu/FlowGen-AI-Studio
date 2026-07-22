@@ -1,0 +1,73 @@
+{
+  "nodes": [
+    {
+      "id": "node_4_1783662596337",
+      "type": "processorNode",
+      "position": {
+        "x": 13715.912937289075,
+        "y": 25618.773806705045
+      },
+      "data": {
+        "label": "Input Picture Node",
+        "status": "idle",
+        "imageName": "美女",
+        "selectedModel": "Nano Banana 2.0",
+        "projectAssetId": "62803dee-e53e-4f51-b0c7-b297829bea54",
+        "generationParams": {
+          "model": "Nano Banana 2.0",
+          "resolution": "1K",
+          "aspectRatio": "1:1",
+          "numberOfImages": "1张"
+        },
+        "referenceImages": [
+          "/flowgen-api/projects/14/assets/eec77159-9e6c-4b01-afd7-55780135e010/file",
+          "/flowgen-api/projects/14/assets/b8659868-9fd3-433a-8a2c-3083d7a1b999/file",
+          "https://cos.example/banana-src-slot-2.png",
+          "https://cos.example/banana-src-slot-3.png",
+          "https://cos.example/banana-src-slot-4.png",
+          "https://cos.example/banana-src-slot-5.png",
+          "https://cos.example/banana-src-slot-6.png",
+          "https://cos.example/banana-src-slot-7.png",
+          "https://cos.example/banana-src-slot-8.png"
+        ],
+        "referenceImageLabels": [
+          "光头强",
+          "祭司老人",
+          "图片3",
+          "图片4",
+          "图片5",
+          "图片6",
+          "图片7",
+          "图片8",
+          "图片9"
+        ],
+        "referenceElementIds": [
+          null,
+          null,
+          "canvas:node_10_1783662683615",
+          "canvas:node_12_1783662683735",
+          "canvas:node_8_1783662683345",
+          "canvas:node_16_1783662683791",
+          "canvas:node_17_1783662683791",
+          "canvas:node_0_1783662786767",
+          "canvas:node_6_1783662683343"
+        ],
+        "imagePreview": "/flowgen-api/projects/14/assets/62803dee-e53e-4f51-b0c7-b297829bea54/file",
+        "panelMainImageUrl": "/flowgen-api/projects/14/assets/eec77159-9e6c-4b01-afd7-55780135e010/file",
+        "panelMainSlotVisible": true
+      }
+    }
+  ],
+  "projectAssets": [
+    {
+      "slug": "guangtouqiang",
+      "name": "光头强",
+      "url": "/flowgen-api/projects/14/assets/eec77159-9e6c-4b01-afd7-55780135e010/file"
+    },
+    {
+      "slug": "62803dee",
+      "name": "美女",
+      "url": "/flowgen-api/projects/14/assets/62803dee-e53e-4f51-b0c7-b297829bea54/file"
+    }
+  ]
+}

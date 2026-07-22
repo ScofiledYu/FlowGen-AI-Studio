@@ -2,13 +2,14 @@
  * Chat/LLM 日常门禁（纯离线，不调 API）
  * npm run test:chat-gate
  *
- * 含 §5.10 已验收：身份/问候关联网、probe 不串历史、身份 tip 按需、模型注册契约
+ * 含 §5.10 已验收：身份/问候关联网、probe 不串历史、身份 tip 按需、展示/模式开关（§5.10.4）、模型注册契约
  */
 import { spawnSync } from 'node:child_process';
 
 const steps = [
   { label: 'layout', cmd: 'npm', args: ['run', 'test:layout'] },
   { label: 'chat-pipeline', cmd: 'npm', args: ['run', 'test:chat-pipeline'] },
+  { label: 'llm-chat-display-contract', cmd: 'npm', args: ['run', 'test:llm-chat-display-contract'] },
   { label: 'web-search-probe-unit', cmd: 'npm', args: ['run', 'test:llm:probe'], env: { CHAT_GATE_OFFLINE: '1' } },
   { label: 'llm-chat-identity-contract', cmd: 'npm', args: ['run', 'test:llm-chat-identity-contract'] },
   { label: 'llm-model-contract', cmd: 'npm', args: ['run', 'test:llm-model-contract'] },

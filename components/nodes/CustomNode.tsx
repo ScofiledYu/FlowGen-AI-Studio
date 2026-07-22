@@ -1367,35 +1367,23 @@ const CustomNode = ({ id, data, type, selected }: NodeProps) => {
               if (enableCapture) captureSlotsLeft -= 1;
               const handleThumbnailClick = (e: React.MouseEvent) => {
                 e.stopPropagation();
-                // Find the output node or create a preview node
-                const outputNode = getNodes().find(n => n.id === thumb.nodeId);
-                if (outputNode) {
-                  // Trigger preview via custom event (will be handled by FlowEditor)
-                  window.dispatchEvent(new CustomEvent('flowgen:preview-node', { detail: outputNode }));
-                } else {
-                  // Create temporary preview node
-                  const tempNode = {
-                    id: thumb.id,
-                    type: thumb.type === 'video' ? NodeType.MOV : NodeType.OUTPUT,
-                    position: { x: 0, y: 0 },
-                    data: {
-                      label: thumb.type === 'video' ? 'Output Mov Node' : 'Output Picture Node',
-                      imagePreview: thumb.url,
-                      selectedModel:
-                        (thumb.generationParams as { model?: string } | undefined)?.model ||
-                        undefined,
-                      generationParams: thumb.generationParams,
-                      firstFrameImage: thumb.generationParams?.firstFrameImage,
-                      lastFrameImage: thumb.generationParams?.lastFrameImage,
-                      firstFrameImageUrl: thumb.generationParams?.firstFrameImageUrl,
-                      lastFrameImageUrl: thumb.generationParams?.lastFrameImageUrl,
-                      jimengImages: (thumb.generationParams as any)?.jimengImages,
-                      imageName: thumb.type === 'video' ? 'Video.mov' : 'Generated.png',
-                      status: 'completed' as const
-                    }
-                  };
-                  window.dispatchEvent(new CustomEvent('flowgen:preview-node', { detail: tempNode }));
-                }
+                // 始终带上该条历史快照，由 FlowEditor 重建整份 Node Details（非仅换预览）
+                window.dispatchEvent(
+                  new CustomEvent('flowgen:preview-node', {
+                    detail: {
+                      sourceNodeId: id,
+                      thumb: {
+                        id: thumb.id,
+                        url: thumb.url,
+                        type: thumb.type,
+                        nodeId: thumb.nodeId,
+                        name: thumb.name,
+                        generationParams: thumb.generationParams,
+                        posterDataUrl: thumb.posterDataUrl,
+                      },
+                    },
+                  })
+                );
               };
 
               const thumbDisplayName =

@@ -146,8 +146,15 @@ console.log('\n=== 4. 运行后改创意描述：legacy 隐藏标记仍保留主
     shouldShowPanelMainImageSlot({ ...afterRun, prompt: `${promptPicOnly}，加强细节` }) === true
   );
   ok(
-    '编辑时清除 legacy 隐藏标记',
-    buildPanelMainImagePreservePatchOnEdit(afterRun)?.panelMainSlotVisible === undefined
+    '运行后 imagePreview 已是参考槽时 preserve 不得清 false（banana-丢图）',
+    buildPanelMainImagePreservePatchOnEdit(afterRun) === undefined
+  );
+  ok(
+    'legacy：imagePreview 仍是主图备份时可清 false',
+    buildPanelMainImagePreservePatchOnEdit({
+      ...afterRun,
+      imagePreview: main,
+    })?.panelMainSlotVisible === undefined
   );
 }
 

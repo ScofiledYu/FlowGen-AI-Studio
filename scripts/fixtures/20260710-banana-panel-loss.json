@@ -1,0 +1,1086 @@
+{
+  "nodes": [
+    {
+      "id": "node_9_1783653707623",
+      "type": "processorNode",
+      "position": {
+        "x": 13920.23334008978,
+        "y": 26042.7995085202
+      },
+      "data": {
+        "label": "Input Picture Node",
+        "prompt": "@图片1参考@图片4的风格生成",
+        "imageName": "yakupipek-leaf-9091894_1920.jpg",
+        "aspectRatio": "16:9",
+        "klingOmniTab": "frames",
+        "modelConfigs": {
+          "image2": {
+            "prompt": "",
+            "negativePrompt": "",
+            "numberOfImages": "1张",
+            "referenceImages": [
+              "blob:http://localhost:3001/156323a6-554f-47a7-ab19-0d374f8a2c65",
+              "blob:http://localhost:3001/d9de957c-d05f-4137-949a-24bc9da02714",
+              "blob:http://localhost:3001/b63439b4-1dc9-49ae-9b5b-7159fda138e3"
+            ],
+            "referenceImageLabels": [
+              "图片1",
+              "图片2",
+              "图片3"
+            ],
+            "referenceImageLocalRefs": [
+              "flowgen-local:a69d57e4-7ac9-4e78-8757-e5996cab184e_14:node_9_1783653707623:ref:image_2:0",
+              "flowgen-local:a69d57e4-7ac9-4e78-8757-e5996cab184e_14:node_9_1783653707623:ref:image_2:1",
+              "flowgen-local:a69d57e4-7ac9-4e78-8757-e5996cab184e_14:node_9_1783653707623:ref:image_2:2"
+            ],
+            "imagePreview": "blob:http://localhost:3001/2d3755fd-2a94-4443-a8df-682fe6e1434a",
+            "imageName": "yakupipek-leaf-9091894_1920.jpg",
+            "imageLocalRef": "flowgen-local:a69d57e4-7ac9-4e78-8757-e5996cab184e_14:node_9_1783653707623:main",
+            "image2Style": "vivid",
+            "image2AspectRatio": "1:1",
+            "image2ImageSize": "1024x1024",
+            "image2Quality": "1K",
+            "image2QualityLevel": "medium"
+          },
+          "即梦3.0 Pro": {
+            "prompt": "",
+            "negativePrompt": "",
+            "jimengGenerationMode": "text",
+            "jimengProfessionalMode": false,
+            "jimengResolution": "1080p",
+            "jimengVideoRatio": "自动匹配",
+            "duration": "5s",
+            "numberOfImages": "1条",
+            "firstFrameImage": "blob:http://localhost:3001/63cd48e5-42a7-4085-ba34-1fdd4b6e0c75",
+            "firstFrameLocalRef": "flowgen-local:a69d57e4-7ac9-4e78-8757-e5996cab184e_14:node_9_1783653707623:main",
+            "jimengImages": []
+          },
+          "可灵3.0 Omni": {
+            "prompt": "",
+            "negativePrompt": "",
+            "firstFrameImage": "blob:http://localhost:3001/da0cc6e1-4a33-4b8e-95d1-d6147f119939",
+            "firstFrameLocalRef": "flowgen-local:a69d57e4-7ac9-4e78-8757-e5996cab184e_14:node_9_1783653707623:main",
+            "quality": "高质量",
+            "duration": "5s",
+            "numberOfImages": "1条",
+            "aspectRatio": "16:9",
+            "klingAudioSync": false,
+            "referenceImages": [],
+            "klingOmniMultiReferenceImages": [
+              "blob:http://localhost:3001/f8a036a5-9188-4363-947f-4e71d30391d0",
+              "blob:http://localhost:3001/90bc96d4-eafa-4921-83d8-22ad86a38033",
+              "blob:http://localhost:3001/49a35d07-ce60-4992-952c-881fccf20076",
+              "blob:http://localhost:3001/3efc44b0-260b-435f-bc68-71d29affd99f"
+            ],
+            "klingOmniInstructionReferenceImages": [],
+            "klingOmniVideoReferenceImages": [],
+            "klingOmniMultiReferenceElementIds": [
+              "canvas:node_3_1783653707518",
+              "canvas:node_4_1783653707519",
+              "canvas:node_5_1783653707521",
+              "canvas:node_6_1783653707572"
+            ],
+            "klingOmniMultiPrompt": "",
+            "klingOmniMultiNegativePrompt": "",
+            "klingOmniInstructionPrompt": "",
+            "klingOmniInstructionNegativePrompt": "",
+            "klingOmniVideoPrompt": "",
+            "klingOmniVideoNegativePrompt": "",
+            "klingOmniFramesPrompt": "",
+            "klingOmniFramesNegativePrompt": "",
+            "klingOmniTab": "frames",
+            "klingOmniTabConfigs": {
+              "instruction": {},
+              "video": {},
+              "frames": {
+                "firstFrameImage": "blob:http://localhost:3001/da0cc6e1-4a33-4b8e-95d1-d6147f119939",
+                "firstFrameLocalRef": "flowgen-local:a69d57e4-7ac9-4e78-8757-e5996cab184e_14:node_9_1783653707623:main"
+              }
+            },
+            "klingOmniMultiReferenceLocalRefs": [
+              "flowgen-local:a69d57e4-7ac9-4e78-8757-e5996cab184e_14:node_9_1783653707623:ref:可灵30_Omni_multi:0",
+              "flowgen-local:a69d57e4-7ac9-4e78-8757-e5996cab184e_14:node_9_1783653707623:ref:可灵30_Omni_multi:1",
+              "flowgen-local:a69d57e4-7ac9-4e78-8757-e5996cab184e_14:node_9_1783653707623:ref:可灵30_Omni_multi:2",
+              "flowgen-local:a69d57e4-7ac9-4e78-8757-e5996cab184e_14:node_9_1783653707623:ref:可灵30_Omni_multi:3"
+            ]
+          },
+          "Nano Banana 2.0": {
+            "prompt": "@图片1参考@图片4的风格生成",
+            "negativePrompt": "",
+            "aspectRatio": "16:9",
+            "numberOfImages": "2张",
+            "referenceImages": [
+              "https://aitop100app-1251510006.cos.ap-shanghai.myqcloud.com/openApi/212508/d4a68f53-a72e-4cd1-8172-023803563374.png",
+              "blob:http://localhost:3001/b4797e48-6371-442f-a83a-d4f78d7b5143",
+              "blob:http://localhost:3001/059cf15c-b48d-42d1-a299-1d212bf241da",
+              "https://aitop100app-1251510006.cos.ap-shanghai.myqcloud.com/openApi/212508/b4bb3a29-7757-42a7-8c99-4a9613c8feb9.png"
+            ],
+            "referenceImageLabels": [
+              "图片1",
+              "图片2",
+              "图片3",
+              "图片4"
+            ],
+            "referenceImageLocalRefs": [
+              "flowgen-local:a69d57e4-7ac9-4e78-8757-e5996cab184e_14:node_9_1783653707623:ref:Nano_Banana_20:0",
+              "flowgen-local:a69d57e4-7ac9-4e78-8757-e5996cab184e_14:node_9_1783653707623:ref:Nano_Banana_20:1",
+              "flowgen-local:a69d57e4-7ac9-4e78-8757-e5996cab184e_14:node_9_1783653707623:ref:Nano_Banana_20:2",
+              "flowgen-local:a69d57e4-7ac9-4e78-8757-e5996cab184e_14:node_9_1783653707623:ref:Nano_Banana_20:3"
+            ],
+            "imagePreview": "https://aitop100app-1251510006.cos.ap-shanghai.myqcloud.com/openApi/212508/d4a68f53-a72e-4cd1-8172-023803563374.png",
+            "imageName": "yakupipek-leaf-9091894_1920.jpg",
+            "imageLocalRef": "flowgen-local:a69d57e4-7ac9-4e78-8757-e5996cab184e_14:node_9_1783653707623:main",
+            "panelMainImageUrl": "blob:http://localhost:3001/6d7c4a2e-e0a2-4a9c-a2be-db303e1dec69",
+            "panelMainSlotVisible": false
+          },
+          "seedance2.0 (急速版)": {
+            "prompt": "",
+            "negativePrompt": "",
+            "numberOfImages": "1条",
+            "seedanceResolution": "720p",
+            "seedanceAspectRatio": "16:9",
+            "seedanceDuration": "5s",
+            "seedanceGenerateAudio": false,
+            "seedanceFixedCamera": false,
+            "seedanceGenerationMode": "reference",
+            "seedanceReferenceRatioMode": "force",
+            "seedanceReferenceWebSearch": false,
+            "seedanceTabConfigs": {
+              "reference": {
+                "prompt": "",
+                "negativePrompt": "",
+                "referenceImages": [
+                  "blob:http://localhost:3001/91d2b1f8-5ea3-4789-b336-e307ed2a80cb",
+                  "blob:http://localhost:3001/2bebcaa2-8175-44f5-83d9-be8294febc05",
+                  "blob:http://localhost:3001/fda34a4d-9a34-4111-9d4f-e26df2d533a3",
+                  "blob:http://localhost:3001/2dde22d1-56b5-4ee2-8250-20b4654637da"
+                ],
+                "referenceImageLabels": [
+                  "图片1",
+                  "图片2",
+                  "图片3",
+                  "图片4"
+                ],
+                "referenceElementIds": [
+                  "canvas:node_0_1783653677221",
+                  "canvas:node_1_1783653687626",
+                  "canvas:node_2_1783653695379",
+                  "canvas:node_10_1783653707624"
+                ],
+                "referenceMovs": [],
+                "referenceAudios": []
+              }
+            },
+            "referenceImages": [
+              "blob:http://localhost:3001/91d2b1f8-5ea3-4789-b336-e307ed2a80cb",
+              "blob:http://localhost:3001/2bebcaa2-8175-44f5-83d9-be8294febc05",
+              "blob:http://localhost:3001/fda34a4d-9a34-4111-9d4f-e26df2d533a3",
+              "blob:http://localhost:3001/2dde22d1-56b5-4ee2-8250-20b4654637da"
+            ],
+            "referenceImageLabels": [
+              "图片1",
+              "图片2",
+              "图片3",
+              "图片4"
+            ],
+            "referenceElementIds": [
+              "canvas:node_0_1783653677221",
+              "canvas:node_1_1783653687626",
+              "canvas:node_2_1783653695379",
+              "canvas:node_10_1783653707624"
+            ],
+            "referenceImageLocalRefs": [
+              "flowgen-local:a69d57e4-7ac9-4e78-8757-e5996cab184e_14:node_9_1783653707623:ref:0",
+              "flowgen-local:a69d57e4-7ac9-4e78-8757-e5996cab184e_14:node_9_1783653707623:ref:1",
+              "flowgen-local:a69d57e4-7ac9-4e78-8757-e5996cab184e_14:node_9_1783653707623:ref:2",
+              "flowgen-local:a69d57e4-7ac9-4e78-8757-e5996cab184e_14:node_9_1783653707623:ref:3"
+            ]
+          },
+          "seedance2.0 (高质量版)": {
+            "prompt": "",
+            "negativePrompt": "",
+            "numberOfImages": "1条",
+            "seedanceResolution": "720p",
+            "seedanceAspectRatio": "16:9",
+            "seedanceDuration": "5s",
+            "seedanceGenerateAudio": false,
+            "seedanceFixedCamera": false,
+            "seedanceGenerationMode": "reference",
+            "seedanceReferenceRatioMode": "force",
+            "seedanceReferenceWebSearch": false,
+            "seedanceTabConfigs": {
+              "reference": {
+                "prompt": "",
+                "negativePrompt": "",
+                "referenceImages": [
+                  "blob:http://localhost:3001/1818c317-03c2-4041-a49e-a9798900b40b",
+                  "blob:http://localhost:3001/eca8547e-123c-4e26-b497-b8faa4e04ce8",
+                  "blob:http://localhost:3001/870950b6-976a-4d87-ac91-eaa1c7763f5a",
+                  "blob:http://localhost:3001/855bcb0a-b751-4cdf-8f38-4ce819a51a61"
+                ],
+                "referenceImageLabels": [
+                  "图片1",
+                  "图片2",
+                  "图片3",
+                  "图片4"
+                ],
+                "referenceElementIds": [
+                  "canvas:node_0_1783653677221",
+                  "canvas:node_1_1783653687626",
+                  "canvas:node_2_1783653695379",
+                  "canvas:node_10_1783653707624"
+                ],
+                "referenceMovs": [],
+                "referenceAudios": []
+              }
+            },
+            "referenceImages": [
+              "blob:http://localhost:3001/1818c317-03c2-4041-a49e-a9798900b40b",
+              "blob:http://localhost:3001/eca8547e-123c-4e26-b497-b8faa4e04ce8",
+              "blob:http://localhost:3001/870950b6-976a-4d87-ac91-eaa1c7763f5a",
+              "blob:http://localhost:3001/855bcb0a-b751-4cdf-8f38-4ce819a51a61"
+            ],
+            "referenceImageLabels": [
+              "图片1",
+              "图片2",
+              "图片3",
+              "图片4"
+            ],
+            "referenceElementIds": [
+              "canvas:node_0_1783653677221",
+              "canvas:node_1_1783653687626",
+              "canvas:node_2_1783653695379",
+              "canvas:node_10_1783653707624"
+            ],
+            "referenceImageLocalRefs": [
+              "flowgen-local:a69d57e4-7ac9-4e78-8757-e5996cab184e_14:node_9_1783653707623:ref:0",
+              "flowgen-local:a69d57e4-7ac9-4e78-8757-e5996cab184e_14:node_9_1783653707623:ref:1",
+              "flowgen-local:a69d57e4-7ac9-4e78-8757-e5996cab184e_14:node_9_1783653707623:ref:2",
+              "flowgen-local:a69d57e4-7ac9-4e78-8757-e5996cab184e_14:node_9_1783653707623:ref:3"
+            ]
+          }
+        },
+        "imageLocalRef": "flowgen-local:a69d57e4-7ac9-4e78-8757-e5996cab184e_14:node_9_1783653707623:main",
+        "referenceMovs": [],
+        "selectedModel": "Nano Banana 2.0",
+        "negativePrompt": "",
+        "numberOfImages": "2张",
+        "referenceAudios": [],
+        "referenceImages": [
+          "https://aitop100app-1251510006.cos.ap-shanghai.myqcloud.com/openApi/212508/d4a68f53-a72e-4cd1-8172-023803563374.png",
+          "blob:http://localhost:3001/b4797e48-6371-442f-a83a-d4f78d7b5143",
+          "blob:http://localhost:3001/059cf15c-b48d-42d1-a299-1d212bf241da",
+          "https://aitop100app-1251510006.cos.ap-shanghai.myqcloud.com/openApi/212508/b4bb3a29-7757-42a7-8c99-4a9613c8feb9.png"
+        ],
+        "jimengResolution": "1080p",
+        "jimengVideoRatio": "自动匹配",
+        "seedanceDuration": "5s",
+        "seedanceResolution": "720p",
+        "seedanceTabConfigs": {
+          "reference": {
+            "prompt": "",
+            "negativePrompt": "",
+            "referenceImages": [
+              "blob:http://localhost:3001/1818c317-03c2-4041-a49e-a9798900b40b",
+              "blob:http://localhost:3001/eca8547e-123c-4e26-b497-b8faa4e04ce8",
+              "blob:http://localhost:3001/870950b6-976a-4d87-ac91-eaa1c7763f5a",
+              "blob:http://localhost:3001/855bcb0a-b751-4cdf-8f38-4ce819a51a61"
+            ],
+            "referenceImageLabels": [
+              "图片1",
+              "图片2",
+              "图片3",
+              "图片4"
+            ],
+            "referenceElementIds": [
+              "canvas:node_0_1783653677221",
+              "canvas:node_1_1783653687626",
+              "canvas:node_2_1783653695379",
+              "canvas:node_10_1783653707624"
+            ],
+            "referenceMovs": [],
+            "referenceAudios": []
+          }
+        },
+        "klingOmniTabConfigs": {
+          "instruction": {},
+          "video": {}
+        },
+        "referenceElementIds": [
+          "canvas:node_0_1783653677221",
+          "canvas:node_1_1783653687626",
+          "canvas:node_2_1783653695379",
+          "canvas:node_10_1783653707624"
+        ],
+        "seedanceAspectRatio": "16:9",
+        "seedanceFixedCamera": false,
+        "jimengGenerationMode": "text",
+        "klingOmniMultiPrompt": "",
+        "klingOmniVideoPrompt": "",
+        "referenceImageLabels": [
+          "图片1",
+          "图片2",
+          "图片3",
+          "图片4"
+        ],
+        "klingOmniFramesPrompt": "",
+        "seedanceGenerateAudio": false,
+        "jimengProfessionalMode": false,
+        "seedanceGenerationMode": "reference",
+        "referenceImageLocalRefs": [
+          "flowgen-local:a69d57e4-7ac9-4e78-8757-e5996cab184e_14:node_9_1783653707623:ref:Nano_Banana_20:0",
+          "flowgen-local:a69d57e4-7ac9-4e78-8757-e5996cab184e_14:node_9_1783653707623:ref:Nano_Banana_20:1",
+          "flowgen-local:a69d57e4-7ac9-4e78-8757-e5996cab184e_14:node_9_1783653707623:ref:Nano_Banana_20:2",
+          "flowgen-local:a69d57e4-7ac9-4e78-8757-e5996cab184e_14:node_9_1783653707623:ref:Nano_Banana_20:3"
+        ],
+        "klingOmniInstructionPrompt": "",
+        "seedanceReferenceRatioMode": "force",
+        "seedanceReferenceWebSearch": false,
+        "klingOmniMultiNegativePrompt": "",
+        "klingOmniVideoNegativePrompt": "",
+        "klingOmniFramesNegativePrompt": "",
+        "klingOmniMultiReferenceImages": [
+          "blob:http://localhost:3001/f8a036a5-9188-4363-947f-4e71d30391d0",
+          "blob:http://localhost:3001/90bc96d4-eafa-4921-83d8-22ad86a38033",
+          "blob:http://localhost:3001/49a35d07-ce60-4992-952c-881fccf20076",
+          "blob:http://localhost:3001/3efc44b0-260b-435f-bc68-71d29affd99f"
+        ],
+        "klingOmniVideoReferenceImages": [],
+        "klingOmniMultiReferenceLocalRefs": [
+          "flowgen-local:a69d57e4-7ac9-4e78-8757-e5996cab184e_14:node_9_1783653707623:ref:可灵30_Omni_multi:0",
+          "flowgen-local:a69d57e4-7ac9-4e78-8757-e5996cab184e_14:node_9_1783653707623:ref:可灵30_Omni_multi:1",
+          "flowgen-local:a69d57e4-7ac9-4e78-8757-e5996cab184e_14:node_9_1783653707623:ref:可灵30_Omni_multi:2",
+          "flowgen-local:a69d57e4-7ac9-4e78-8757-e5996cab184e_14:node_9_1783653707623:ref:可灵30_Omni_multi:3"
+        ],
+        "klingOmniVideoReferenceLocalRefs": [],
+        "klingOmniMultiReferenceElementIds": [
+          "canvas:node_3_1783653707518",
+          "canvas:node_4_1783653707519",
+          "canvas:node_5_1783653707521",
+          "canvas:node_6_1783653707572"
+        ],
+        "klingOmniInstructionNegativePrompt": "",
+        "klingOmniInstructionReferenceImages": [],
+        "klingOmniInstructionReferenceLocalRefs": [],
+        "imagePreview": "https://aitop100app-1251510006.cos.ap-shanghai.myqcloud.com/openApi/212508/d4a68f53-a72e-4cd1-8172-023803563374.png",
+        "panelMainImageUrl": "blob:http://localhost:3001/6d7c4a2e-e0a2-4a9c-a2be-db303e1dec69",
+        "status": "completed",
+        "progress": 100,
+        "taskId": "1551511, 1551512",
+        "generationParams": {
+          "taskId": "1551511, 1551512",
+          "generatedAt": "2026-07-10T03:26:05.267Z",
+          "prompt": "@图片1参考@图片4的风格生成",
+          "negativePrompt": "",
+          "numberOfImages": "2张",
+          "referenceImages": [
+            "https://aitop100app-1251510006.cos.ap-shanghai.myqcloud.com/openApi/212508/d4a68f53-a72e-4cd1-8172-023803563374.png",
+            "https://aitop100app-1251510006.cos.ap-shanghai.myqcloud.com/openApi/212508/b4bb3a29-7757-42a7-8c99-4a9613c8feb9.png"
+          ],
+          "model": "Nano Banana 2.0",
+          "referenceImageLabels": [
+            "图片1",
+            "图片4"
+          ],
+          "aspectRatio": "16:9",
+          "resolution": "1K",
+          "outputUrl": "https://aitop100app-1251510006.cos.ap-shanghai.myqcloud.com/imagesGenerations/03526196-28c3-4678-8a64-7e8c45587595.png",
+          "outputUrls": [
+            "https://aitop100app-1251510006.cos.ap-shanghai.myqcloud.com/imagesGenerations/03526196-28c3-4678-8a64-7e8c45587595.png",
+            "https://aitop100app-1251510006.cos.ap-shanghai.myqcloud.com/imagesGenerations/e04ae93b-cba1-4a87-a487-83a2b5cd4bfe.png"
+          ]
+        },
+        "generatedAt": "2026-07-10T03:26:05.267Z",
+        "generatedThumbnails": [
+          {
+            "id": "node_0_1783653965273",
+            "url": "https://aitop100app-1251510006.cos.ap-shanghai.myqcloud.com/imagesGenerations/03526196-28c3-4678-8a64-7e8c45587595.png",
+            "type": "image",
+            "nodeId": "node_0_1783653965273",
+            "name": "Generated_997.png",
+            "generationParams": {
+              "generatedAt": "2026-07-10T03:26:05.267Z",
+              "taskId": "1551511, 1551512",
+              "prompt": "@图片1参考@图片4的风格生成",
+              "negativePrompt": "",
+              "numberOfImages": "2张",
+              "referenceImages": [
+                "https://aitop100app-1251510006.cos.ap-shanghai.myqcloud.com/openApi/212508/d4a68f53-a72e-4cd1-8172-023803563374.png",
+                "https://aitop100app-1251510006.cos.ap-shanghai.myqcloud.com/openApi/212508/b4bb3a29-7757-42a7-8c99-4a9613c8feb9.png"
+              ],
+              "model": "Nano Banana 2.0",
+              "referenceImageLabels": [
+                "图片1",
+                "图片4"
+              ],
+              "aspectRatio": "16:9",
+              "resolution": "1K",
+              "outputUrl": "https://aitop100app-1251510006.cos.ap-shanghai.myqcloud.com/imagesGenerations/03526196-28c3-4678-8a64-7e8c45587595.png",
+              "outputUrls": [
+                "https://aitop100app-1251510006.cos.ap-shanghai.myqcloud.com/imagesGenerations/03526196-28c3-4678-8a64-7e8c45587595.png",
+                "https://aitop100app-1251510006.cos.ap-shanghai.myqcloud.com/imagesGenerations/e04ae93b-cba1-4a87-a487-83a2b5cd4bfe.png"
+              ]
+            }
+          },
+          {
+            "id": "node_1_1783653965274",
+            "url": "https://aitop100app-1251510006.cos.ap-shanghai.myqcloud.com/imagesGenerations/e04ae93b-cba1-4a87-a487-83a2b5cd4bfe.png",
+            "type": "image",
+            "nodeId": "node_1_1783653965274",
+            "name": "Generated_535.png",
+            "generationParams": {
+              "generatedAt": "2026-07-10T03:26:05.267Z",
+              "taskId": "1551511, 1551512",
+              "prompt": "@图片1参考@图片4的风格生成",
+              "negativePrompt": "",
+              "numberOfImages": "2张",
+              "referenceImages": [
+                "https://aitop100app-1251510006.cos.ap-shanghai.myqcloud.com/openApi/212508/d4a68f53-a72e-4cd1-8172-023803563374.png",
+                "https://aitop100app-1251510006.cos.ap-shanghai.myqcloud.com/openApi/212508/b4bb3a29-7757-42a7-8c99-4a9613c8feb9.png"
+              ],
+              "model": "Nano Banana 2.0",
+              "referenceImageLabels": [
+                "图片1",
+                "图片4"
+              ],
+              "aspectRatio": "16:9",
+              "resolution": "1K",
+              "outputUrl": "https://aitop100app-1251510006.cos.ap-shanghai.myqcloud.com/imagesGenerations/03526196-28c3-4678-8a64-7e8c45587595.png",
+              "outputUrls": [
+                "https://aitop100app-1251510006.cos.ap-shanghai.myqcloud.com/imagesGenerations/03526196-28c3-4678-8a64-7e8c45587595.png",
+                "https://aitop100app-1251510006.cos.ap-shanghai.myqcloud.com/imagesGenerations/e04ae93b-cba1-4a87-a487-83a2b5cd4bfe.png"
+              ]
+            }
+          }
+        ]
+      }
+    },
+    {
+      "id": "node_0_1783653965273",
+      "type": "outputNode",
+      "position": {
+        "x": 14227.725790217706,
+        "y": 25786.155078069572
+      },
+      "data": {
+        "aspectRatio": "16:9",
+        "numberOfImages": "2张",
+        "jimengGenerationMode": "text",
+        "jimengProfessionalMode": false,
+        "jimengResolution": "1080p",
+        "jimengVideoRatio": "自动匹配",
+        "seedanceResolution": "720p",
+        "seedanceAspectRatio": "16:9",
+        "seedanceDuration": "5s",
+        "seedanceGenerateAudio": false,
+        "seedanceFixedCamera": false,
+        "seedanceGenerationMode": "reference",
+        "seedanceReferenceRatioMode": "force",
+        "seedanceReferenceWebSearch": false,
+        "status": "idle",
+        "progress": 0,
+        "generationParams": {
+          "generatedAt": "2026-07-10T03:26:05.267Z",
+          "taskId": "1551511, 1551512",
+          "prompt": "@图片1参考@图片4的风格生成",
+          "negativePrompt": "",
+          "numberOfImages": "2张",
+          "referenceImages": [
+            "https://aitop100app-1251510006.cos.ap-shanghai.myqcloud.com/openApi/212508/d4a68f53-a72e-4cd1-8172-023803563374.png",
+            "https://aitop100app-1251510006.cos.ap-shanghai.myqcloud.com/openApi/212508/b4bb3a29-7757-42a7-8c99-4a9613c8feb9.png"
+          ],
+          "model": "Nano Banana 2.0",
+          "referenceImageLabels": [
+            "图片1",
+            "图片4"
+          ],
+          "aspectRatio": "16:9",
+          "resolution": "1K",
+          "outputUrl": "https://aitop100app-1251510006.cos.ap-shanghai.myqcloud.com/imagesGenerations/03526196-28c3-4678-8a64-7e8c45587595.png",
+          "outputUrls": [
+            "https://aitop100app-1251510006.cos.ap-shanghai.myqcloud.com/imagesGenerations/03526196-28c3-4678-8a64-7e8c45587595.png",
+            "https://aitop100app-1251510006.cos.ap-shanghai.myqcloud.com/imagesGenerations/e04ae93b-cba1-4a87-a487-83a2b5cd4bfe.png"
+          ]
+        },
+        "modelConfigs": {
+          "image2": {
+            "prompt": "",
+            "negativePrompt": "",
+            "numberOfImages": "1张",
+            "referenceImages": [
+              "blob:http://localhost:3001/156323a6-554f-47a7-ab19-0d374f8a2c65",
+              "blob:http://localhost:3001/d9de957c-d05f-4137-949a-24bc9da02714",
+              "blob:http://localhost:3001/b63439b4-1dc9-49ae-9b5b-7159fda138e3"
+            ],
+            "referenceImageLabels": [
+              "图片1",
+              "图片2",
+              "图片3"
+            ],
+            "referenceImageLocalRefs": [
+              "flowgen-local:a69d57e4-7ac9-4e78-8757-e5996cab184e_14:node_9_1783653707623:ref:image_2:0",
+              "flowgen-local:a69d57e4-7ac9-4e78-8757-e5996cab184e_14:node_9_1783653707623:ref:image_2:1",
+              "flowgen-local:a69d57e4-7ac9-4e78-8757-e5996cab184e_14:node_9_1783653707623:ref:image_2:2"
+            ],
+            "imagePreview": "blob:http://localhost:3001/2d3755fd-2a94-4443-a8df-682fe6e1434a",
+            "imageName": "yakupipek-leaf-9091894_1920.jpg",
+            "imageLocalRef": "flowgen-local:a69d57e4-7ac9-4e78-8757-e5996cab184e_14:node_9_1783653707623:main",
+            "image2Style": "vivid",
+            "image2AspectRatio": "1:1",
+            "image2ImageSize": "1024x1024",
+            "image2Quality": "1K",
+            "image2QualityLevel": "medium"
+          },
+          "即梦3.0 Pro": {
+            "prompt": "",
+            "negativePrompt": "",
+            "jimengGenerationMode": "text",
+            "jimengProfessionalMode": false,
+            "jimengResolution": "1080p",
+            "jimengVideoRatio": "自动匹配",
+            "duration": "5s",
+            "numberOfImages": "1条",
+            "firstFrameImage": "blob:http://localhost:3001/63cd48e5-42a7-4085-ba34-1fdd4b6e0c75",
+            "firstFrameLocalRef": "flowgen-local:a69d57e4-7ac9-4e78-8757-e5996cab184e_14:node_9_1783653707623:main",
+            "jimengImages": []
+          },
+          "可灵3.0 Omni": {
+            "prompt": "",
+            "negativePrompt": "",
+            "firstFrameImage": "blob:http://localhost:3001/da0cc6e1-4a33-4b8e-95d1-d6147f119939",
+            "firstFrameLocalRef": "flowgen-local:a69d57e4-7ac9-4e78-8757-e5996cab184e_14:node_9_1783653707623:main",
+            "quality": "高质量",
+            "duration": "5s",
+            "numberOfImages": "1条",
+            "aspectRatio": "16:9",
+            "klingAudioSync": false,
+            "referenceImages": [],
+            "klingOmniMultiReferenceImages": [
+              "blob:http://localhost:3001/f8a036a5-9188-4363-947f-4e71d30391d0",
+              "blob:http://localhost:3001/90bc96d4-eafa-4921-83d8-22ad86a38033",
+              "blob:http://localhost:3001/49a35d07-ce60-4992-952c-881fccf20076",
+              "blob:http://localhost:3001/3efc44b0-260b-435f-bc68-71d29affd99f"
+            ],
+            "klingOmniInstructionReferenceImages": [],
+            "klingOmniVideoReferenceImages": [],
+            "klingOmniMultiReferenceElementIds": [
+              "canvas:node_3_1783653707518",
+              "canvas:node_4_1783653707519",
+              "canvas:node_5_1783653707521",
+              "canvas:node_6_1783653707572"
+            ],
+            "klingOmniMultiPrompt": "",
+            "klingOmniMultiNegativePrompt": "",
+            "klingOmniInstructionPrompt": "",
+            "klingOmniInstructionNegativePrompt": "",
+            "klingOmniVideoPrompt": "",
+            "klingOmniVideoNegativePrompt": "",
+            "klingOmniFramesPrompt": "",
+            "klingOmniFramesNegativePrompt": "",
+            "klingOmniTab": "frames",
+            "klingOmniTabConfigs": {
+              "instruction": {},
+              "video": {},
+              "frames": {
+                "firstFrameImage": "blob:http://localhost:3001/da0cc6e1-4a33-4b8e-95d1-d6147f119939",
+                "firstFrameLocalRef": "flowgen-local:a69d57e4-7ac9-4e78-8757-e5996cab184e_14:node_9_1783653707623:main"
+              }
+            },
+            "klingOmniMultiReferenceLocalRefs": [
+              "flowgen-local:a69d57e4-7ac9-4e78-8757-e5996cab184e_14:node_9_1783653707623:ref:可灵30_Omni_multi:0",
+              "flowgen-local:a69d57e4-7ac9-4e78-8757-e5996cab184e_14:node_9_1783653707623:ref:可灵30_Omni_multi:1",
+              "flowgen-local:a69d57e4-7ac9-4e78-8757-e5996cab184e_14:node_9_1783653707623:ref:可灵30_Omni_multi:2",
+              "flowgen-local:a69d57e4-7ac9-4e78-8757-e5996cab184e_14:node_9_1783653707623:ref:可灵30_Omni_multi:3"
+            ]
+          },
+          "Nano Banana 2.0": {
+            "prompt": "",
+            "negativePrompt": "",
+            "aspectRatio": "1:1",
+            "numberOfImages": "1张",
+            "referenceImages": [
+              "blob:http://localhost:3001/aed16a1e-e579-479f-bccb-bf9faca8c248",
+              "blob:http://localhost:3001/89d26c14-d85e-4e6e-a859-6ed80ce39a2a",
+              "blob:http://localhost:3001/53bc1728-2cf9-4966-b03a-9970f4142b54",
+              "blob:http://localhost:3001/eaf342b1-86f2-4852-9851-882f1a09a513"
+            ],
+            "referenceImageLabels": [
+              "图片1",
+              "图片2",
+              "图片3",
+              "图片4"
+            ],
+            "referenceImageLocalRefs": [
+              "flowgen-local:a69d57e4-7ac9-4e78-8757-e5996cab184e_14:node_9_1783653707623:ref:Nano_Banana_20:0",
+              "flowgen-local:a69d57e4-7ac9-4e78-8757-e5996cab184e_14:node_9_1783653707623:ref:Nano_Banana_20:1",
+              "flowgen-local:a69d57e4-7ac9-4e78-8757-e5996cab184e_14:node_9_1783653707623:ref:Nano_Banana_20:2",
+              "flowgen-local:a69d57e4-7ac9-4e78-8757-e5996cab184e_14:node_9_1783653707623:ref:Nano_Banana_20:3"
+            ],
+            "imagePreview": "blob:http://localhost:3001/84a25819-cfee-4e59-83a0-6040d653e990",
+            "imageName": "yakupipek-leaf-9091894_1920.jpg",
+            "imageLocalRef": "flowgen-local:a69d57e4-7ac9-4e78-8757-e5996cab184e_14:node_9_1783653707623:main"
+          },
+          "seedance2.0 (急速版)": {
+            "prompt": "",
+            "negativePrompt": "",
+            "numberOfImages": "1条",
+            "seedanceResolution": "720p",
+            "seedanceAspectRatio": "16:9",
+            "seedanceDuration": "5s",
+            "seedanceGenerateAudio": false,
+            "seedanceFixedCamera": false,
+            "seedanceGenerationMode": "reference",
+            "seedanceReferenceRatioMode": "force",
+            "seedanceReferenceWebSearch": false,
+            "seedanceTabConfigs": {
+              "reference": {
+                "prompt": "",
+                "negativePrompt": "",
+                "referenceImages": [
+                  "blob:http://localhost:3001/91d2b1f8-5ea3-4789-b336-e307ed2a80cb",
+                  "blob:http://localhost:3001/2bebcaa2-8175-44f5-83d9-be8294febc05",
+                  "blob:http://localhost:3001/fda34a4d-9a34-4111-9d4f-e26df2d533a3",
+                  "blob:http://localhost:3001/2dde22d1-56b5-4ee2-8250-20b4654637da"
+                ],
+                "referenceImageLabels": [
+                  "图片1",
+                  "图片2",
+                  "图片3",
+                  "图片4"
+                ],
+                "referenceElementIds": [
+                  "canvas:node_0_1783653677221",
+                  "canvas:node_1_1783653687626",
+                  "canvas:node_2_1783653695379",
+                  "canvas:node_10_1783653707624"
+                ],
+                "referenceMovs": [],
+                "referenceAudios": []
+              }
+            },
+            "referenceImages": [
+              "blob:http://localhost:3001/91d2b1f8-5ea3-4789-b336-e307ed2a80cb",
+              "blob:http://localhost:3001/2bebcaa2-8175-44f5-83d9-be8294febc05",
+              "blob:http://localhost:3001/fda34a4d-9a34-4111-9d4f-e26df2d533a3",
+              "blob:http://localhost:3001/2dde22d1-56b5-4ee2-8250-20b4654637da"
+            ],
+            "referenceImageLabels": [
+              "图片1",
+              "图片2",
+              "图片3",
+              "图片4"
+            ],
+            "referenceElementIds": [
+              "canvas:node_0_1783653677221",
+              "canvas:node_1_1783653687626",
+              "canvas:node_2_1783653695379",
+              "canvas:node_10_1783653707624"
+            ],
+            "referenceImageLocalRefs": [
+              "flowgen-local:a69d57e4-7ac9-4e78-8757-e5996cab184e_14:node_9_1783653707623:ref:0",
+              "flowgen-local:a69d57e4-7ac9-4e78-8757-e5996cab184e_14:node_9_1783653707623:ref:1",
+              "flowgen-local:a69d57e4-7ac9-4e78-8757-e5996cab184e_14:node_9_1783653707623:ref:2",
+              "flowgen-local:a69d57e4-7ac9-4e78-8757-e5996cab184e_14:node_9_1783653707623:ref:3"
+            ]
+          },
+          "seedance2.0 (高质量版)": {
+            "prompt": "",
+            "negativePrompt": "",
+            "numberOfImages": "1条",
+            "seedanceResolution": "720p",
+            "seedanceAspectRatio": "16:9",
+            "seedanceDuration": "5s",
+            "seedanceGenerateAudio": false,
+            "seedanceFixedCamera": false,
+            "seedanceGenerationMode": "reference",
+            "seedanceReferenceRatioMode": "force",
+            "seedanceReferenceWebSearch": false,
+            "seedanceTabConfigs": {
+              "reference": {
+                "prompt": "",
+                "negativePrompt": "",
+                "referenceImages": [
+                  "blob:http://localhost:3001/1818c317-03c2-4041-a49e-a9798900b40b",
+                  "blob:http://localhost:3001/eca8547e-123c-4e26-b497-b8faa4e04ce8",
+                  "blob:http://localhost:3001/870950b6-976a-4d87-ac91-eaa1c7763f5a",
+                  "blob:http://localhost:3001/855bcb0a-b751-4cdf-8f38-4ce819a51a61"
+                ],
+                "referenceImageLabels": [
+                  "图片1",
+                  "图片2",
+                  "图片3",
+                  "图片4"
+                ],
+                "referenceElementIds": [
+                  "canvas:node_0_1783653677221",
+                  "canvas:node_1_1783653687626",
+                  "canvas:node_2_1783653695379",
+                  "canvas:node_10_1783653707624"
+                ],
+                "referenceMovs": [],
+                "referenceAudios": []
+              }
+            },
+            "referenceImages": [
+              "blob:http://localhost:3001/1818c317-03c2-4041-a49e-a9798900b40b",
+              "blob:http://localhost:3001/eca8547e-123c-4e26-b497-b8faa4e04ce8",
+              "blob:http://localhost:3001/870950b6-976a-4d87-ac91-eaa1c7763f5a",
+              "blob:http://localhost:3001/855bcb0a-b751-4cdf-8f38-4ce819a51a61"
+            ],
+            "referenceImageLabels": [
+              "图片1",
+              "图片2",
+              "图片3",
+              "图片4"
+            ],
+            "referenceElementIds": [
+              "canvas:node_0_1783653677221",
+              "canvas:node_1_1783653687626",
+              "canvas:node_2_1783653695379",
+              "canvas:node_10_1783653707624"
+            ],
+            "referenceImageLocalRefs": [
+              "flowgen-local:a69d57e4-7ac9-4e78-8757-e5996cab184e_14:node_9_1783653707623:ref:0",
+              "flowgen-local:a69d57e4-7ac9-4e78-8757-e5996cab184e_14:node_9_1783653707623:ref:1",
+              "flowgen-local:a69d57e4-7ac9-4e78-8757-e5996cab184e_14:node_9_1783653707623:ref:2",
+              "flowgen-local:a69d57e4-7ac9-4e78-8757-e5996cab184e_14:node_9_1783653707623:ref:3"
+            ]
+          }
+        },
+        "label": "Output Picture Node",
+        "imagePreview": "https://aitop100app-1251510006.cos.ap-shanghai.myqcloud.com/imagesGenerations/03526196-28c3-4678-8a64-7e8c45587595.png",
+        "selectedModel": "Nano Banana 2.0",
+        "generatedAt": "2026-07-10T03:26:05.267Z",
+        "imageName": "Generated_997.png",
+        "taskId": "1551511, 1551512",
+        "resolution": "1K"
+      }
+    },
+    {
+      "id": "node_1_1783653965274",
+      "type": "outputNode",
+      "position": {
+        "x": 14243.482267034584,
+        "y": 25977.068290006286
+      },
+      "data": {
+        "aspectRatio": "16:9",
+        "numberOfImages": "2张",
+        "jimengGenerationMode": "text",
+        "jimengProfessionalMode": false,
+        "jimengResolution": "1080p",
+        "jimengVideoRatio": "自动匹配",
+        "seedanceResolution": "720p",
+        "seedanceAspectRatio": "16:9",
+        "seedanceDuration": "5s",
+        "seedanceGenerateAudio": false,
+        "seedanceFixedCamera": false,
+        "seedanceGenerationMode": "reference",
+        "seedanceReferenceRatioMode": "force",
+        "seedanceReferenceWebSearch": false,
+        "status": "idle",
+        "progress": 0,
+        "generationParams": {
+          "generatedAt": "2026-07-10T03:26:05.267Z",
+          "taskId": "1551511, 1551512",
+          "prompt": "@图片1参考@图片4的风格生成",
+          "negativePrompt": "",
+          "numberOfImages": "2张",
+          "referenceImages": [
+            "https://aitop100app-1251510006.cos.ap-shanghai.myqcloud.com/openApi/212508/d4a68f53-a72e-4cd1-8172-023803563374.png",
+            "https://aitop100app-1251510006.cos.ap-shanghai.myqcloud.com/openApi/212508/b4bb3a29-7757-42a7-8c99-4a9613c8feb9.png"
+          ],
+          "model": "Nano Banana 2.0",
+          "referenceImageLabels": [
+            "图片1",
+            "图片4"
+          ],
+          "aspectRatio": "16:9",
+          "resolution": "1K",
+          "outputUrl": "https://aitop100app-1251510006.cos.ap-shanghai.myqcloud.com/imagesGenerations/03526196-28c3-4678-8a64-7e8c45587595.png",
+          "outputUrls": [
+            "https://aitop100app-1251510006.cos.ap-shanghai.myqcloud.com/imagesGenerations/03526196-28c3-4678-8a64-7e8c45587595.png",
+            "https://aitop100app-1251510006.cos.ap-shanghai.myqcloud.com/imagesGenerations/e04ae93b-cba1-4a87-a487-83a2b5cd4bfe.png"
+          ]
+        },
+        "modelConfigs": {
+          "image2": {
+            "prompt": "",
+            "negativePrompt": "",
+            "numberOfImages": "1张",
+            "referenceImages": [
+              "blob:http://localhost:3001/156323a6-554f-47a7-ab19-0d374f8a2c65",
+              "blob:http://localhost:3001/d9de957c-d05f-4137-949a-24bc9da02714",
+              "blob:http://localhost:3001/b63439b4-1dc9-49ae-9b5b-7159fda138e3"
+            ],
+            "referenceImageLabels": [
+              "图片1",
+              "图片2",
+              "图片3"
+            ],
+            "referenceImageLocalRefs": [
+              "flowgen-local:a69d57e4-7ac9-4e78-8757-e5996cab184e_14:node_9_1783653707623:ref:image_2:0",
+              "flowgen-local:a69d57e4-7ac9-4e78-8757-e5996cab184e_14:node_9_1783653707623:ref:image_2:1",
+              "flowgen-local:a69d57e4-7ac9-4e78-8757-e5996cab184e_14:node_9_1783653707623:ref:image_2:2"
+            ],
+            "imagePreview": "blob:http://localhost:3001/2d3755fd-2a94-4443-a8df-682fe6e1434a",
+            "imageName": "yakupipek-leaf-9091894_1920.jpg",
+            "imageLocalRef": "flowgen-local:a69d57e4-7ac9-4e78-8757-e5996cab184e_14:node_9_1783653707623:main",
+            "image2Style": "vivid",
+            "image2AspectRatio": "1:1",
+            "image2ImageSize": "1024x1024",
+            "image2Quality": "1K",
+            "image2QualityLevel": "medium"
+          },
+          "即梦3.0 Pro": {
+            "prompt": "",
+            "negativePrompt": "",
+            "jimengGenerationMode": "text",
+            "jimengProfessionalMode": false,
+            "jimengResolution": "1080p",
+            "jimengVideoRatio": "自动匹配",
+            "duration": "5s",
+            "numberOfImages": "1条",
+            "firstFrameImage": "blob:http://localhost:3001/63cd48e5-42a7-4085-ba34-1fdd4b6e0c75",
+            "firstFrameLocalRef": "flowgen-local:a69d57e4-7ac9-4e78-8757-e5996cab184e_14:node_9_1783653707623:main",
+            "jimengImages": []
+          },
+          "可灵3.0 Omni": {
+            "prompt": "",
+            "negativePrompt": "",
+            "firstFrameImage": "blob:http://localhost:3001/da0cc6e1-4a33-4b8e-95d1-d6147f119939",
+            "firstFrameLocalRef": "flowgen-local:a69d57e4-7ac9-4e78-8757-e5996cab184e_14:node_9_1783653707623:main",
+            "quality": "高质量",
+            "duration": "5s",
+            "numberOfImages": "1条",
+            "aspectRatio": "16:9",
+            "klingAudioSync": false,
+            "referenceImages": [],
+            "klingOmniMultiReferenceImages": [
+              "blob:http://localhost:3001/f8a036a5-9188-4363-947f-4e71d30391d0",
+              "blob:http://localhost:3001/90bc96d4-eafa-4921-83d8-22ad86a38033",
+              "blob:http://localhost:3001/49a35d07-ce60-4992-952c-881fccf20076",
+              "blob:http://localhost:3001/3efc44b0-260b-435f-bc68-71d29affd99f"
+            ],
+            "klingOmniInstructionReferenceImages": [],
+            "klingOmniVideoReferenceImages": [],
+            "klingOmniMultiReferenceElementIds": [
+              "canvas:node_3_1783653707518",
+              "canvas:node_4_1783653707519",
+              "canvas:node_5_1783653707521",
+              "canvas:node_6_1783653707572"
+            ],
+            "klingOmniMultiPrompt": "",
+            "klingOmniMultiNegativePrompt": "",
+            "klingOmniInstructionPrompt": "",
+            "klingOmniInstructionNegativePrompt": "",
+            "klingOmniVideoPrompt": "",
+            "klingOmniVideoNegativePrompt": "",
+            "klingOmniFramesPrompt": "",
+            "klingOmniFramesNegativePrompt": "",
+            "klingOmniTab": "frames",
+            "klingOmniTabConfigs": {
+              "instruction": {},
+              "video": {},
+              "frames": {
+                "firstFrameImage": "blob:http://localhost:3001/da0cc6e1-4a33-4b8e-95d1-d6147f119939",
+                "firstFrameLocalRef": "flowgen-local:a69d57e4-7ac9-4e78-8757-e5996cab184e_14:node_9_1783653707623:main"
+              }
+            },
+            "klingOmniMultiReferenceLocalRefs": [
+              "flowgen-local:a69d57e4-7ac9-4e78-8757-e5996cab184e_14:node_9_1783653707623:ref:可灵30_Omni_multi:0",
+              "flowgen-local:a69d57e4-7ac9-4e78-8757-e5996cab184e_14:node_9_1783653707623:ref:可灵30_Omni_multi:1",
+              "flowgen-local:a69d57e4-7ac9-4e78-8757-e5996cab184e_14:node_9_1783653707623:ref:可灵30_Omni_multi:2",
+              "flowgen-local:a69d57e4-7ac9-4e78-8757-e5996cab184e_14:node_9_1783653707623:ref:可灵30_Omni_multi:3"
+            ]
+          },
+          "Nano Banana 2.0": {
+            "prompt": "",
+            "negativePrompt": "",
+            "aspectRatio": "1:1",
+            "numberOfImages": "1张",
+            "referenceImages": [
+              "blob:http://localhost:3001/aed16a1e-e579-479f-bccb-bf9faca8c248",
+              "blob:http://localhost:3001/89d26c14-d85e-4e6e-a859-6ed80ce39a2a",
+              "blob:http://localhost:3001/53bc1728-2cf9-4966-b03a-9970f4142b54",
+              "blob:http://localhost:3001/eaf342b1-86f2-4852-9851-882f1a09a513"
+            ],
+            "referenceImageLabels": [
+              "图片1",
+              "图片2",
+              "图片3",
+              "图片4"
+            ],
+            "referenceImageLocalRefs": [
+              "flowgen-local:a69d57e4-7ac9-4e78-8757-e5996cab184e_14:node_9_1783653707623:ref:Nano_Banana_20:0",
+              "flowgen-local:a69d57e4-7ac9-4e78-8757-e5996cab184e_14:node_9_1783653707623:ref:Nano_Banana_20:1",
+              "flowgen-local:a69d57e4-7ac9-4e78-8757-e5996cab184e_14:node_9_1783653707623:ref:Nano_Banana_20:2",
+              "flowgen-local:a69d57e4-7ac9-4e78-8757-e5996cab184e_14:node_9_1783653707623:ref:Nano_Banana_20:3"
+            ],
+            "imagePreview": "blob:http://localhost:3001/84a25819-cfee-4e59-83a0-6040d653e990",
+            "imageName": "yakupipek-leaf-9091894_1920.jpg",
+            "imageLocalRef": "flowgen-local:a69d57e4-7ac9-4e78-8757-e5996cab184e_14:node_9_1783653707623:main"
+          },
+          "seedance2.0 (急速版)": {
+            "prompt": "",
+            "negativePrompt": "",
+            "numberOfImages": "1条",
+            "seedanceResolution": "720p",
+            "seedanceAspectRatio": "16:9",
+            "seedanceDuration": "5s",
+            "seedanceGenerateAudio": false,
+            "seedanceFixedCamera": false,
+            "seedanceGenerationMode": "reference",
+            "seedanceReferenceRatioMode": "force",
+            "seedanceReferenceWebSearch": false,
+            "seedanceTabConfigs": {
+              "reference": {
+                "prompt": "",
+                "negativePrompt": "",
+                "referenceImages": [
+                  "blob:http://localhost:3001/91d2b1f8-5ea3-4789-b336-e307ed2a80cb",
+                  "blob:http://localhost:3001/2bebcaa2-8175-44f5-83d9-be8294febc05",
+                  "blob:http://localhost:3001/fda34a4d-9a34-4111-9d4f-e26df2d533a3",
+                  "blob:http://localhost:3001/2dde22d1-56b5-4ee2-8250-20b4654637da"
+                ],
+                "referenceImageLabels": [
+                  "图片1",
+                  "图片2",
+                  "图片3",
+                  "图片4"
+                ],
+                "referenceElementIds": [
+                  "canvas:node_0_1783653677221",
+                  "canvas:node_1_1783653687626",
+                  "canvas:node_2_1783653695379",
+                  "canvas:node_10_1783653707624"
+                ],
+                "referenceMovs": [],
+                "referenceAudios": []
+              }
+            },
+            "referenceImages": [
+              "blob:http://localhost:3001/91d2b1f8-5ea3-4789-b336-e307ed2a80cb",
+              "blob:http://localhost:3001/2bebcaa2-8175-44f5-83d9-be8294febc05",
+              "blob:http://localhost:3001/fda34a4d-9a34-4111-9d4f-e26df2d533a3",
+              "blob:http://localhost:3001/2dde22d1-56b5-4ee2-8250-20b4654637da"
+            ],
+            "referenceImageLabels": [
+              "图片1",
+              "图片2",
+              "图片3",
+              "图片4"
+            ],
+            "referenceElementIds": [
+              "canvas:node_0_1783653677221",
+              "canvas:node_1_1783653687626",
+              "canvas:node_2_1783653695379",
+              "canvas:node_10_1783653707624"
+            ],
+            "referenceImageLocalRefs": [
+              "flowgen-local:a69d57e4-7ac9-4e78-8757-e5996cab184e_14:node_9_1783653707623:ref:0",
+              "flowgen-local:a69d57e4-7ac9-4e78-8757-e5996cab184e_14:node_9_1783653707623:ref:1",
+              "flowgen-local:a69d57e4-7ac9-4e78-8757-e5996cab184e_14:node_9_1783653707623:ref:2",
+              "flowgen-local:a69d57e4-7ac9-4e78-8757-e5996cab184e_14:node_9_1783653707623:ref:3"
+            ]
+          },
+          "seedance2.0 (高质量版)": {
+            "prompt": "",
+            "negativePrompt": "",
+            "numberOfImages": "1条",
+            "seedanceResolution": "720p",
+            "seedanceAspectRatio": "16:9",
+            "seedanceDuration": "5s",
+            "seedanceGenerateAudio": false,
+            "seedanceFixedCamera": false,
+            "seedanceGenerationMode": "reference",
+            "seedanceReferenceRatioMode": "force",
+            "seedanceReferenceWebSearch": false,
+            "seedanceTabConfigs": {
+              "reference": {
+                "prompt": "",
+                "negativePrompt": "",
+                "referenceImages": [
+                  "blob:http://localhost:3001/1818c317-03c2-4041-a49e-a9798900b40b",
+                  "blob:http://localhost:3001/eca8547e-123c-4e26-b497-b8faa4e04ce8",
+                  "blob:http://localhost:3001/870950b6-976a-4d87-ac91-eaa1c7763f5a",
+                  "blob:http://localhost:3001/855bcb0a-b751-4cdf-8f38-4ce819a51a61"
+                ],
+                "referenceImageLabels": [
+                  "图片1",
+                  "图片2",
+                  "图片3",
+                  "图片4"
+                ],
+                "referenceElementIds": [
+                  "canvas:node_0_1783653677221",
+                  "canvas:node_1_1783653687626",
+                  "canvas:node_2_1783653695379",
+                  "canvas:node_10_1783653707624"
+                ],
+                "referenceMovs": [],
+                "referenceAudios": []
+              }
+            },
+            "referenceImages": [
+              "blob:http://localhost:3001/1818c317-03c2-4041-a49e-a9798900b40b",
+              "blob:http://localhost:3001/eca8547e-123c-4e26-b497-b8faa4e04ce8",
+              "blob:http://localhost:3001/870950b6-976a-4d87-ac91-eaa1c7763f5a",
+              "blob:http://localhost:3001/855bcb0a-b751-4cdf-8f38-4ce819a51a61"
+            ],
+            "referenceImageLabels": [
+              "图片1",
+              "图片2",
+              "图片3",
+              "图片4"
+            ],
+            "referenceElementIds": [
+              "canvas:node_0_1783653677221",
+              "canvas:node_1_1783653687626",
+              "canvas:node_2_1783653695379",
+              "canvas:node_10_1783653707624"
+            ],
+            "referenceImageLocalRefs": [
+              "flowgen-local:a69d57e4-7ac9-4e78-8757-e5996cab184e_14:node_9_1783653707623:ref:0",
+              "flowgen-local:a69d57e4-7ac9-4e78-8757-e5996cab184e_14:node_9_1783653707623:ref:1",
+              "flowgen-local:a69d57e4-7ac9-4e78-8757-e5996cab184e_14:node_9_1783653707623:ref:2",
+              "flowgen-local:a69d57e4-7ac9-4e78-8757-e5996cab184e_14:node_9_1783653707623:ref:3"
+            ]
+          }
+        },
+        "label": "Output Picture Node",
+        "imagePreview": "https://aitop100app-1251510006.cos.ap-shanghai.myqcloud.com/imagesGenerations/e04ae93b-cba1-4a87-a487-83a2b5cd4bfe.png",
+        "selectedModel": "Nano Banana 2.0",
+        "generatedAt": "2026-07-10T03:26:05.267Z",
+        "imageName": "Generated_535.png",
+        "taskId": "1551511, 1551512",
+        "resolution": "1K"
+      }
+    }
+  ],
+  "edges": [
+    {
+      "id": "enode_9_1783653707623-node_0_1783653965273-1783653965274-0",
+      "source": "node_9_1783653707623",
+      "target": "node_0_1783653965273",
+      "animated": true,
+      "style": {
+        "stroke": "#6366f1",
+        "strokeWidth": 2
+      }
+    },
+    {
+      "id": "enode_9_1783653707623-node_1_1783653965274-1783653965274-1",
+      "source": "node_9_1783653707623",
+      "target": "node_1_1783653965274",
+      "animated": true,
+      "style": {
+        "stroke": "#6366f1",
+        "strokeWidth": 2
+      }
+    }
+  ],
+  "exportedAt": "2026-07-10T03:26:12.636Z",
+  "nodeCount": 3,
+  "edgeCount": 2
+}
