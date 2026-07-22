@@ -1,6 +1,6 @@
 import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
-import { pickMediaResourceUrlFromTaskStatus } from './utils/taskStatusImageUrl'
+import { pickVideoResourceUrlFromTaskStatus } from './utils/taskStatusVideoUrl'
 import os from 'os'
 import https from 'https'
 import http from 'http'
@@ -111,23 +111,18 @@ export default defineConfig({
             const host = req.headers.host || 'localhost:3000'
             const parsed = new URL(req.url || '', `http://${host}`)
             const taskId = parsed.searchParams.get('taskId') || ''
-            const domainAccount = (parsed.searchParams.get('domainAccount') || '').trim()
             if (!taskId) {
               res.statusCode = 400
               res.setHeader('Content-Type', 'application/json; charset=utf-8')
               res.end(JSON.stringify({ error: 'missing taskId param' }))
               return
             }
-            const statusHeaders: Record<string, string> = { 'api-key': AITOP_API_KEY }
-            if (domainAccount) statusHeaders['domain-account'] = domainAccount
             const statusResp = await fetch(`${AITOP_API_BASE}/api/v1/task/${encodeURIComponent(taskId)}`, {
               method: 'GET',
-              headers: statusHeaders
+              headers: { 'api-key': AITOP_API_KEY }
             })
             const statusJson: any = await statusResp.json().catch(() => ({}))
-            const resourceUrl =
-              pickMediaResourceUrlFromTaskStatus(statusJson?.data) ||
-              pickMediaResourceUrlFromTaskStatus(statusJson)
+            const resourceUrl = pickVideoResourceUrlFromTaskStatus(statusJson?.data)
             if (!resourceUrl || typeof resourceUrl !== 'string') {
               res.statusCode = 404
               res.setHeader('Content-Type', 'application/json; charset=utf-8')
@@ -168,7 +163,6 @@ export default defineConfig({
             const host = req.headers.host || 'localhost:3000'
             const parsed = new URL(req.url || '', `http://${host}`)
             const taskId = parsed.searchParams.get('taskId') || ''
-            const domainAccount = (parsed.searchParams.get('domainAccount') || '').trim()
             if (!taskId) {
               res.statusCode = 400
               res.setHeader('Content-Type', 'application/json; charset=utf-8')
@@ -176,11 +170,9 @@ export default defineConfig({
               return
             }
 
-            const statusHeaders: Record<string, string> = { 'api-key': AITOP_API_KEY }
-            if (domainAccount) statusHeaders['domain-account'] = domainAccount
             const statusResp = await fetch(`${AITOP_API_BASE}/api/v1/task/${encodeURIComponent(taskId)}`, {
               method: 'GET',
-              headers: statusHeaders
+              headers: { 'api-key': AITOP_API_KEY }
             })
             const statusText = await statusResp.text()
 
@@ -226,24 +218,6 @@ export default defineConfig({
         },
       },
       '/aitop-llm-see': {
-        target: 'http://127.0.0.1:3001',
-        changeOrigin: true,
-        configure(proxy) {
-          proxy.on('error', (_err, _req, res) => {
-            const r = res as { headersSent?: boolean; writeHead?: (...a: unknown[]) => void; end?: (s?: string) => void }
-            if (r && typeof r.writeHead === 'function' && !r.headersSent) {
-              r.writeHead(503, { 'Content-Type': 'application/json; charset=utf-8' })
-              r.end(
-                JSON.stringify({
-                  error: '无法连接 AiTop LLM 中转（本机 3001）',
-                  detail: '请先在本机运行 npm run dev:api，或使用 npm run dev:full 同时启动 Vite 与 API。',
-                })
-              )
-            }
-          })
-        },
-      },
-      '/proxy-image': {
         target: 'http://127.0.0.1:3001',
         changeOrigin: true,
       }
