@@ -1,3 +1,4 @@
+import type { GenerationParams, NodeData } from '../types';
 
 export enum NodeType {
   INPUT = 'inputNode',

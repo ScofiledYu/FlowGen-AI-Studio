@@ -1161,7 +1161,7 @@ function refSlotMentionDisplayLabel(
 }
 
 function ordinalFromMediaInsertText(insertText: string, prefix: string): string {
-  const m = insertText.match(new RegExp(`^@${prefix}(\\d+)$`));
+  const m = insertText.match(new RegExp(`^@${prefix}(\d+)$`));
   return m ? m[1] : '?';
 }
 
@@ -2216,7 +2216,7 @@ export const PROMPT_ASSET_TOKEN_SUFFIX = String.raw`[^\s@，。；：、,.!?／/
 
 /** 创意描述中可扫描的 @ 媒体标记（各生图/生视频模型共用） */
 export const PROMPT_MEDIA_TOKEN_RE = new RegExp(
-  `@资产:\\s*${PROMPT_ASSET_TOKEN_SUFFIX}|@图片\\d+|@图片(?!\\d)|@主图|@主视频|@主体|@首帧图|@尾帧图|@视频\\d+|@视频(?!\\d)|@音频\\d+|@音频(?!\\d)`,
+  `@资产:\s*${PROMPT_ASSET_TOKEN_SUFFIX}|@图片\d+|@图片(?!\d)|@主图|@主视频|@主体|@首帧图|@尾帧图|@视频\d+|@视频(?!\d)|@音频\d+|@音频(?!\d)`,
   'g'
 );
 

@@ -3917,6 +3917,91 @@ function NodeInspector({
     }
   };
 
+  const omniReferenceLocalRefField = (): PanelReferenceLocalRefField => {
+    if (klingOmniTab === 'instruction') return 'klingOmniInstructionReferenceLocalRefs';
+    if (klingOmniTab === 'video') return 'klingOmniVideoReferenceLocalRefs';
+    return 'klingOmniMultiReferenceLocalRefs';
+  };
+
+  type ReferenceAppendRegistration = {
+    localRefField: PanelReferenceLocalRefField;
+    localRefs?: string[];
+  };
+
+  const withReferenceLocalRefsInPatch = (
+    patch: Partial<NodeData>,
+    registered?: ReferenceAppendRegistration
+  ): Partial<NodeData> => {
+    if (!registered?.localRefs?.length) return patch;
+    return { ...patch, [registered.localRefField]: registered.localRefs };
+  };
+
+  const dispatchReferenceAppendFiles = async (
+    files: File[],
+    startIndex: number,
+    localRefField: PanelReferenceLocalRefField = 'referenceImageLocalRefs'
+  ): Promise<ReferenceAppendRegistration> => {
+    // 生成一个唯一的 ack ID 用于确认 IndexedDB 写入完成
+    const ackId = `${nodeId}_${Date.now()}_${Math.random().toString(36).slice(2)}`;
+    
+    // 创建一个 Promise 来等待 IndexedDB 写入完成
+    const waitForRegistration = new Promise<ReferenceAppendRegistration>((resolve) => {
+      const handler = (e: Event) => {
+        const d = (e as CustomEvent<{ ackId: string; localRefField?: PanelReferenceLocalRefField; localRefs?: string[] }>).detail;
+        if (d?.ackId === ackId) {
+          window.removeEventListener('flowgen:reference-files-registered', handler);
+          resolve({
+            localRefField: d.localRefField || localRefField,
+            localRefs: d.localRefs,
+          });
+        }
+      };
+      // 5 秒超时，防止无限等待
+      setTimeout(() => {
+        window.removeEventListener('flowgen:reference-files-registered', handler);
+        resolve({ localRefField });
+      }, 5000);
+      window.addEventListener('flowgen:reference-files-registered', handler);
+    });
+
+    window.dispatchEvent(
+      new CustomEvent('flowgen:register-original-image', {
+        detail: {
+          nodeId,
+          referenceAppend: files,
+          referenceAppendStartIndex: startIndex,
+          referenceLocalRefField: localRefField,
+          referenceAppendAckId: ackId,
+        },
+      })
+    );
+
+    // 等待 IndexedDB 写入完成
+    return waitForRegistration;
+  };
+
+  /** 画布/资产库 URL 拖入参考槽：blob/data 须备份到 IndexedDB，刷新后靠 referenceImageLocalRefs 恢复 */
+  const registerEphemeralPanelRefToLocalStore = async (
+    sourceUrl: string,
+    slotIndex: number,
+    localRefField: PanelReferenceLocalRefField = 'referenceImageLocalRefs'
+  ): Promise<ReferenceAppendRegistration | undefined> => {
+    const u = String(sourceUrl || '').trim();
+    if (!u || isPersistableMediaUrl(u)) return undefined;
+    try {
+      const res = await fetch(u);
+      const blob = await res.blob();
+      const ext = blob.type?.includes('png') ? 'png' : 'jpg';
+      const file = new File([blob], `panel-ref-${slotIndex}.${ext}`, {
+        type: blob.type || 'image/jpeg',
+      });
+      return dispatchReferenceAppendFiles([file], slotIndex, localRefField);
+    } catch (e) {
+      console.warn('[flowgen] panel reference IDB backup failed', e);
+      return undefined;
+    }
+  };
+
   const ingestInspectorReferenceLocalFiles = async (files: File[]) =>
     enqueueInspectorReferenceDrop(() => ingestInspectorReferenceLocalFilesImpl(files));
 

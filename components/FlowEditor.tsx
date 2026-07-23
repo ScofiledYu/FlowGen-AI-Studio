@@ -5387,6 +5387,35 @@ const FlowEditor = ({
     });
   }, []);
 
+  const onSelectionEnd = useCallback(() => {
+    window.setTimeout(() => {
+      preserveInspectorAnchorRef.current = false;
+      suppressInspectorClearRef.current = false;
+    }, 80);
+  }, []);
+
+  const onSelectionChange = useCallback(({ nodes }: OnSelectionChangeParams) => {
+    const preserveAnchor =
+      preserveInspectorAnchorRef.current ||
+      (shiftHeldRef.current && Boolean(inspectorAnchorIdRef.current));
+    setSelectedNodeId((prev) => {
+      const result = resolveInspectorNodeIdOnSelectionChange({
+        selectedNodeIds: nodes.map((n) => n.id),
+        anchorId: inspectorAnchorIdRef.current,
+        prevId: prev,
+        suppressClear: suppressInspectorClearRef.current,
+        preserveAnchor,
+        shouldOpenInspector: (id) => {
+          const n = nodes.find((x) => x.id === id);
+          return n ? shouldOpenInspectorForNode(n) : false;
+        },
+      });
+      inspectorAnchorIdRef.current = result.nextAnchor;
+      setFlowgenInspectorAnchorId(result.nextAnchor);
+      return result.nextId;
+    });
+  }, []);
+
   const updateNodeDataById = useCallback((nodeId: string, newData: Partial<NodeData>) => {
     if (!nodeId) return;
     setNodes((nds) => {

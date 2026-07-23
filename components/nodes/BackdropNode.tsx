@@ -31,6 +31,14 @@ function estimateTextFlowWidth(text: string, fontSize: number): number {
   return w;
 }
 
+function estimateTextFlowWidth(text: string, fontSize: number): number {
+  let w = 0;
+  for (const ch of text) {
+    w += /[\u4e00-\u9fff\u3400-\u4dbf\uf900-\ufaff]/.test(ch) ? fontSize : fontSize * 0.55;
+  }
+  return w;
+}
+
 function BackdropNode(props: NodeProps<NodeData>) {
   const { id, data, selected } = props;
   const { setNodes } = useReactFlow();

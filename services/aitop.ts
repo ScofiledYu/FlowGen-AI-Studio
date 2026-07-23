@@ -46,7 +46,7 @@ function withScoreProjectId(payload: object): object {
 export function isPreloadDebugEnabled(): boolean {
   if (typeof window === 'undefined') return false;
   const w = window as Window & { __FLOWGEN_DEBUG_PRELOAD__?: boolean };
-  return w.__FLOWGEN_DEBUG_PRELOAD__ !== false;
+  return w.__FLOWGEN_DEBUG_PRELOAD__ === true;
 }
 
 /** 控制台打印 JSON preload（每次发往 AITOP 只打一条，含 domainAccount / scoreProjectId） */
