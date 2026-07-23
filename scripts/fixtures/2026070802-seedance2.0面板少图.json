@@ -1,0 +1,344 @@
+{
+  "nodes": [
+    {
+      "id": "node_5_1783472899264",
+      "type": "processorNode",
+      "position": {
+        "x": 17219.04647068952,
+        "y": 10583.980690825369
+      },
+      "data": {
+        "label": "Input Picture Node",
+        "imageName": "alessandra1barbieri-cabin-8579310_1920.jpg",
+        "imageLocalRef": "flowgen-local:a69d57e4-7ac9-4e78-8757-e5996cab184e_14:node_5_1783472899264:main",
+        "selectedModel": "seedance2.0 (急速版)",
+        "referenceImages": [
+          "https://aitop100app-1251510006.cos.ap-shanghai.myqcloud.com/openApi/212508/d46611d7-5d25-4175-a092-5859d5aa8baa.png",
+          "https://aitop100app-1251510006.cos.ap-shanghai.myqcloud.com/imagesGenerations/38fa157a-f96c-4da9-81b1-ea7d78698b79.png",
+          "blob:http://localhost:3001/2453096a-11eb-49f2-8b51-d99bbc1d9116",
+          "https://aitop100app-1251510006.cos.ap-shanghai.myqcloud.com/openApi/212508/9d40e364-f80f-4c87-b78f-49d5411804ff.png"
+        ],
+        "referenceImageLabels": [
+          "图片1",
+          "图片2",
+          "图片3",
+          "图片4"
+        ],
+        "referenceImageLocalRefs": [
+          "flowgen-local:a69d57e4-7ac9-4e78-8757-e5996cab184e_14:node_5_1783472899264:ref:0",
+          "",
+          "flowgen-local:a69d57e4-7ac9-4e78-8757-e5996cab184e_14:node_5_1783472899264:ref:2",
+          "flowgen-local:a69d57e4-7ac9-4e78-8757-e5996cab184e_14:node_5_1783472899264:ref:3"
+        ],
+        "imagePreview": "https://aitop100app-1251510006.cos.ap-shanghai.myqcloud.com/openApi/212508/d46611d7-5d25-4175-a092-5859d5aa8baa.png",
+        "panelMainImageUrl": "blob:http://localhost:3001/c64fa17a-23b4-4325-b5d5-33ffa1c8d94b",
+        "panelMainSlotVisible": false,
+        "modelConfigs": {
+          "Nano Banana 2.0": {
+            "referenceImages": [
+              "blob:http://localhost:3001/6049aeea-32f6-48e7-824d-9a13cb4c06ae",
+              "blob:http://localhost:3001/ee92e5c4-1e08-499c-ab7c-6cc51613a8ba",
+              "blob:http://localhost:3001/4c27e73f-59a4-4c7c-96ab-36d9368ea6cb",
+              "blob:http://localhost:3001/909112af-4ca3-4e14-b6a4-1d0ce18420c9",
+              "blob:http://localhost:3001/a5189f7e-cef7-4276-830c-bfdb7e8bec98",
+              "blob:http://localhost:3001/cbdd34d1-a1d7-4ba1-9abe-b6f95f6fe806",
+              "blob:http://localhost:3001/2da6eba2-fe61-4474-a17b-4da41b2814cb",
+              "blob:http://localhost:3001/a1564b2f-354f-418f-a2d5-3a78e2122f86",
+              "blob:http://localhost:3001/26132e56-d10f-47dc-bf00-deec973ad757",
+              "blob:http://localhost:3001/21a45253-95a8-45f4-bcdb-477dc67abfcf",
+              "blob:http://localhost:3001/fe3bd040-0a75-4c93-965f-6f3f74c8c2c9"
+            ],
+            "referenceImageLabels": [
+              "图片1",
+              "图片2",
+              "图片3",
+              "图片4",
+              "图片5",
+              "图片6",
+              "图片7",
+              "图片8",
+              "图片9",
+              "图片10",
+              "图片11"
+            ],
+            "referenceImageLocalRefs": [
+              "flowgen-local:a69d57e4-7ac9-4e78-8757-e5996cab184e_14:node_5_1783472899264:ref:Nano_Banana_20:0",
+              "flowgen-local:a69d57e4-7ac9-4e78-8757-e5996cab184e_14:node_5_1783472899264:ref:Nano_Banana_20:1",
+              "flowgen-local:a69d57e4-7ac9-4e78-8757-e5996cab184e_14:node_5_1783472899264:ref:Nano_Banana_20:2",
+              "flowgen-local:a69d57e4-7ac9-4e78-8757-e5996cab184e_14:node_5_1783472899264:ref:Nano_Banana_20:3",
+              "flowgen-local:a69d57e4-7ac9-4e78-8757-e5996cab184e_14:node_5_1783472899264:ref:Nano_Banana_20:4",
+              "flowgen-local:a69d57e4-7ac9-4e78-8757-e5996cab184e_14:node_5_1783472899264:ref:Nano_Banana_20:5",
+              "flowgen-local:a69d57e4-7ac9-4e78-8757-e5996cab184e_14:node_5_1783472899264:ref:Nano_Banana_20:6",
+              "flowgen-local:a69d57e4-7ac9-4e78-8757-e5996cab184e_14:node_5_1783472899264:ref:Nano_Banana_20:7",
+              "flowgen-local:a69d57e4-7ac9-4e78-8757-e5996cab184e_14:node_5_1783472899264:ref:Nano_Banana_20:8",
+              "flowgen-local:a69d57e4-7ac9-4e78-8757-e5996cab184e_14:node_5_1783472899264:ref:Nano_Banana_20:9",
+              "flowgen-local:a69d57e4-7ac9-4e78-8757-e5996cab184e_14:node_5_1783472899264:ref:Nano_Banana_20:10"
+            ],
+            "imagePreview": "blob:http://localhost:3001/c64fa17a-23b4-4325-b5d5-33ffa1c8d94b",
+            "imageName": "alessandra1barbieri-cabin-8579310_1920.jpg",
+            "imageLocalRef": "flowgen-local:a69d57e4-7ac9-4e78-8757-e5996cab184e_14:node_5_1783472899264:main"
+          },
+          "seedance2.0 (急速版)": {
+            "prompt": "@图片1和@图片1的角色镜头融合",
+            "negativePrompt": "",
+            "numberOfImages": "1条",
+            "seedanceResolution": "480p",
+            "seedanceAspectRatio": "16:9",
+            "seedanceDuration": "5s",
+            "seedanceGenerateAudio": false,
+            "seedanceFixedCamera": false,
+            "seedanceGenerationMode": "reference",
+            "seedanceReferenceRatioMode": "force",
+            "seedanceReferenceWebSearch": false,
+            "seedanceTabConfigs": {
+              "reference": {
+                "prompt": "@图片1和@图片1的角色镜头融合",
+                "negativePrompt": "",
+                "referenceImages": [
+                  "https://aitop100app-1251510006.cos.ap-shanghai.myqcloud.com/openApi/212508/d46611d7-5d25-4175-a092-5859d5aa8baa.png",
+                  "https://aitop100app-1251510006.cos.ap-shanghai.myqcloud.com/imagesGenerations/38fa157a-f96c-4da9-81b1-ea7d78698b79.png",
+                  "blob:http://localhost:3001/2453096a-11eb-49f2-8b51-d99bbc1d9116",
+                  "https://aitop100app-1251510006.cos.ap-shanghai.myqcloud.com/openApi/212508/9d40e364-f80f-4c87-b78f-49d5411804ff.png"
+                ],
+                "referenceImageLabels": [
+                  "图片1",
+                  "图片2",
+                  "图片3",
+                  "图片4"
+                ],
+                "referenceMovs": [],
+                "referenceAudios": []
+              }
+            },
+            "referenceImages": [
+              "https://aitop100app-1251510006.cos.ap-shanghai.myqcloud.com/openApi/212508/d46611d7-5d25-4175-a092-5859d5aa8baa.png",
+              "https://aitop100app-1251510006.cos.ap-shanghai.myqcloud.com/imagesGenerations/38fa157a-f96c-4da9-81b1-ea7d78698b79.png",
+              "blob:http://localhost:3001/2453096a-11eb-49f2-8b51-d99bbc1d9116",
+              "https://aitop100app-1251510006.cos.ap-shanghai.myqcloud.com/openApi/212508/9d40e364-f80f-4c87-b78f-49d5411804ff.png"
+            ],
+            "referenceMovs": [],
+            "referenceAudios": []
+          },
+          "seedance2.0 (高质量版)": {
+            "prompt": "@图片1和@图片4的角色镜头融合",
+            "negativePrompt": "",
+            "numberOfImages": "1条",
+            "seedanceResolution": "720p",
+            "seedanceAspectRatio": "16:9",
+            "seedanceDuration": "5s",
+            "seedanceGenerateAudio": false,
+            "seedanceFixedCamera": false,
+            "seedanceGenerationMode": "reference",
+            "seedanceReferenceRatioMode": "force",
+            "seedanceReferenceWebSearch": false,
+            "seedanceTabConfigs": {
+              "reference": {
+                "prompt": "@图片1和@图片4的角色镜头融合",
+                "negativePrompt": "",
+                "referenceImages": [
+                  "blob:http://localhost:3001/0692b946-4c13-4c34-81e4-601137bf039f",
+                  "https://aitop100app-1251510006.cos.ap-shanghai.myqcloud.com/imagesGenerations/38fa157a-f96c-4da9-81b1-ea7d78698b79.png",
+                  "blob:http://localhost:3001/9afe59b7-a801-40e4-9f96-608e2b411ec3",
+                  "blob:http://localhost:3001/8ece1300-4b46-496f-85ca-f11977f38925"
+                ],
+                "referenceImageLabels": [
+                  "图片1",
+                  "图片2",
+                  "图片3",
+                  "图片4"
+                ],
+                "referenceMovs": [],
+                "referenceAudios": []
+              }
+            },
+            "referenceImages": [
+              "blob:http://localhost:3001/0692b946-4c13-4c34-81e4-601137bf039f",
+              "https://aitop100app-1251510006.cos.ap-shanghai.myqcloud.com/imagesGenerations/38fa157a-f96c-4da9-81b1-ea7d78698b79.png",
+              "blob:http://localhost:3001/9afe59b7-a801-40e4-9f96-608e2b411ec3",
+              "blob:http://localhost:3001/8ece1300-4b46-496f-85ca-f11977f38925"
+            ],
+            "referenceImageLabels": [
+              "图片1",
+              "图片2",
+              "图片3",
+              "图片4"
+            ],
+            "referenceImageLocalRefs": [
+              "flowgen-local:a69d57e4-7ac9-4e78-8757-e5996cab184e_14:node_5_1783472899264:ref:0",
+              "",
+              "flowgen-local:a69d57e4-7ac9-4e78-8757-e5996cab184e_14:node_5_1783472899264:ref:2",
+              "flowgen-local:a69d57e4-7ac9-4e78-8757-e5996cab184e_14:node_5_1783472899264:ref:3"
+            ]
+          }
+        },
+        "prompt": "@图片1和@图片4的角色镜头融合",
+        "negativePrompt": "",
+        "numberOfImages": "1条",
+        "seedanceResolution": "480p",
+        "seedanceAspectRatio": "16:9",
+        "seedanceDuration": "5s",
+        "seedanceGenerateAudio": false,
+        "seedanceFixedCamera": false,
+        "seedanceReferenceRatioMode": "force",
+        "seedanceReferenceWebSearch": false,
+        "seedanceGenerationMode": "reference",
+        "seedanceTabConfigs": {
+          "reference": {
+            "prompt": "@图片1和@图片1的角色镜头融合",
+            "negativePrompt": "",
+            "referenceImages": [
+              "https://aitop100app-1251510006.cos.ap-shanghai.myqcloud.com/openApi/212508/d46611d7-5d25-4175-a092-5859d5aa8baa.png",
+              "https://aitop100app-1251510006.cos.ap-shanghai.myqcloud.com/imagesGenerations/38fa157a-f96c-4da9-81b1-ea7d78698b79.png",
+              "blob:http://localhost:3001/2453096a-11eb-49f2-8b51-d99bbc1d9116",
+              "https://aitop100app-1251510006.cos.ap-shanghai.myqcloud.com/openApi/212508/9d40e364-f80f-4c87-b78f-49d5411804ff.png"
+            ],
+            "referenceImageLabels": [
+              "图片1",
+              "图片2",
+              "图片3",
+              "图片4"
+            ],
+            "referenceMovs": [],
+            "referenceAudios": []
+          }
+        },
+        "referenceMovs": [],
+        "referenceAudios": [],
+        "status": "completed",
+        "progress": 100,
+        "taskId": "1523580",
+        "generationParams": {
+          "taskId": "1523580",
+          "generatedAt": "2026-07-08T02:03:54.265Z",
+          "prompt": "@图片1和@图片4的角色镜头融合",
+          "negativePrompt": "",
+          "numberOfImages": "1条",
+          "referenceImages": [
+            "https://aitop100app-1251510006.cos.ap-shanghai.myqcloud.com/openApi/212508/d46611d7-5d25-4175-a092-5859d5aa8baa.png",
+            "https://aitop100app-1251510006.cos.ap-shanghai.myqcloud.com/openApi/212508/9d40e364-f80f-4c87-b78f-49d5411804ff.png"
+          ],
+          "model": "seedance2.0 (急速版)",
+          "referenceImageLabels": [
+            "图片1",
+            "图片4"
+          ],
+          "seedanceResolution": "480p",
+          "seedanceAspectRatio": "16:9",
+          "seedanceDuration": "5s",
+          "seedanceGenerateAudio": false,
+          "seedanceGenerationMode": "reference",
+          "seedanceReferenceRatioMode": "force",
+          "seedanceReferenceWebSearch": false,
+          "outputUrl": "https://aitop100app-1251510006.cos.ap-shanghai.myqcloud.com/videosGenerations/videosGenerations/b09a4f24-e40b-4b23-b670-b5a2d8b2ce16.mp4"
+        },
+        "generatedAt": "2026-07-08T02:03:54.265Z",
+        "generatedThumbnails": [
+          {
+            "id": "node_1_1783476234269",
+            "url": "https://aitop100app-1251510006.cos.ap-shanghai.myqcloud.com/videosGenerations/videosGenerations/b09a4f24-e40b-4b23-b670-b5a2d8b2ce16.mp4",
+            "type": "video",
+            "nodeId": "node_1_1783476234269",
+            "name": "Video_658.mov",
+            "generationParams": {
+              "generatedAt": "2026-07-08T02:03:54.265Z",
+              "taskId": "1523580",
+              "prompt": "@图片1和@图片4的角色镜头融合",
+              "negativePrompt": "",
+              "numberOfImages": "1条",
+              "referenceImages": [
+                "https://aitop100app-1251510006.cos.ap-shanghai.myqcloud.com/openApi/212508/d46611d7-5d25-4175-a092-5859d5aa8baa.png",
+                "https://aitop100app-1251510006.cos.ap-shanghai.myqcloud.com/openApi/212508/9d40e364-f80f-4c87-b78f-49d5411804ff.png"
+              ],
+              "model": "seedance2.0 (急速版)",
+              "referenceImageLabels": [
+                "图片1",
+                "图片4"
+              ],
+              "seedanceResolution": "480p",
+              "seedanceAspectRatio": "16:9",
+              "seedanceDuration": "5s",
+              "seedanceGenerateAudio": false,
+              "seedanceGenerationMode": "reference",
+              "seedanceReferenceRatioMode": "force",
+              "seedanceReferenceWebSearch": false,
+              "outputUrl": "https://aitop100app-1251510006.cos.ap-shanghai.myqcloud.com/videosGenerations/videosGenerations/b09a4f24-e40b-4b23-b670-b5a2d8b2ce16.mp4"
+            },
+            "posterDataUrl": "/flowgen-api/projects/14/node-media/2efdd106-3085-44d0-8bb3-7451775882ad.jpg/file"
+          }
+        ]
+      }
+    },
+    {
+      "id": "node_1_1783476234269",
+      "type": "movNode",
+      "position": {
+        "x": 17525.76312490823,
+        "y": 10632.356194933873
+      },
+      "data": {
+        "numberOfImages": "1条",
+        "seedanceResolution": "480p",
+        "seedanceAspectRatio": "16:9",
+        "seedanceDuration": "5s",
+        "seedanceGenerateAudio": false,
+        "seedanceFixedCamera": false,
+        "seedanceGenerationMode": "reference",
+        "seedanceReferenceRatioMode": "force",
+        "seedanceReferenceWebSearch": false,
+        "status": "idle",
+        "progress": 0,
+        "generationParams": {
+          "generatedAt": "2026-07-08T02:03:54.265Z",
+          "taskId": "1523580",
+          "prompt": "@图片1和@图片4的角色镜头融合",
+          "negativePrompt": "",
+          "numberOfImages": "1条",
+          "referenceImages": [
+            "https://aitop100app-1251510006.cos.ap-shanghai.myqcloud.com/openApi/212508/d46611d7-5d25-4175-a092-5859d5aa8baa.png",
+            "https://aitop100app-1251510006.cos.ap-shanghai.myqcloud.com/openApi/212508/9d40e364-f80f-4c87-b78f-49d5411804ff.png"
+          ],
+          "model": "seedance2.0 (急速版)",
+          "referenceImageLabels": [
+            "图片1",
+            "图片4"
+          ],
+          "seedanceResolution": "480p",
+          "seedanceAspectRatio": "16:9",
+          "seedanceDuration": "5s",
+          "seedanceGenerateAudio": false,
+          "seedanceGenerationMode": "reference",
+          "seedanceReferenceRatioMode": "force",
+          "seedanceReferenceWebSearch": false,
+          "outputUrl": "https://aitop100app-1251510006.cos.ap-shanghai.myqcloud.com/videosGenerations/videosGenerations/b09a4f24-e40b-4b23-b670-b5a2d8b2ce16.mp4"
+        },
+        "label": "Output Mov Node",
+        "imagePreview": "https://aitop100app-1251510006.cos.ap-shanghai.myqcloud.com/videosGenerations/videosGenerations/b09a4f24-e40b-4b23-b670-b5a2d8b2ce16.mp4",
+        "selectedModel": "seedance2.0 (急速版)",
+        "generatedAt": "2026-07-08T02:03:54.265Z",
+        "imageName": "Video_658.mov",
+        "taskId": "1523580",
+        "referenceMovs": [
+          {
+            "url": "https://aitop100app-1251510006.cos.ap-shanghai.myqcloud.com/videosGenerations/videosGenerations/b09a4f24-e40b-4b23-b670-b5a2d8b2ce16.mp4"
+          }
+        ],
+        "videoPosterDataUrl": "/flowgen-api/projects/14/node-media/2efdd106-3085-44d0-8bb3-7451775882ad.jpg/file"
+      }
+    }
+  ],
+  "edges": [
+    {
+      "id": "enode_5_1783472899264-node_1_1783476234269-1783476234269-0",
+      "source": "node_5_1783472899264",
+      "target": "node_1_1783476234269",
+      "animated": true,
+      "style": {
+        "stroke": "#6366f1",
+        "strokeWidth": 2
+      }
+    }
+  ],
+  "exportedAt": "2026-07-08T02:05:13.448Z",
+  "nodeCount": 2,
+  "edgeCount": 1
+}

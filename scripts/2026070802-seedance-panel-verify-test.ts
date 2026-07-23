@@ -8,6 +8,7 @@
  */
 import fs from 'fs';
 import type { NodeData } from '../types.ts';
+import { resolveFixtureFile } from './fixturePath.ts';
 import {
   buildPanelReferenceDisplayEntries,
   filterPanelReferenceDisplayEntriesExcludingMainPreview,
@@ -111,7 +112,8 @@ function panelDisplayCount(data: NodeData): number {
   return entries.length;
 }
 
-const jsonPath = process.argv[2] || 'd:/json/2026070802-seedance2.0面板少图.json';
+const jsonPath =
+  process.argv[2] || resolveFixtureFile('2026070802-seedance2.0面板少图.json', 'd:/json/2026070802-seedance2.0面板少图.json');
 const raw = JSON.parse(fs.readFileSync(jsonPath, 'utf8'));
 const exported = raw.nodes[0].data as NodeData;
 const mov = raw.nodes[1].data as NodeData;
