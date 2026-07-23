@@ -1,0 +1,259 @@
+{
+  "nodes": [
+    {
+      "id": "node_8_1784079520805",
+      "type": "processorNode",
+      "position": {
+        "x": -386.4118397083587,
+        "y": 30714.887518602376
+      },
+      "data": {
+        "label": "Input Picture Node",
+        "imagePreview": "https://aitop100app-1251510006.cos.ap-shanghai.myqcloud.com/openApi/212508/9e7876c0-4798-4e73-8a0a-4f3be790432b.png",
+        "imageLocalRef": "flowgen-local:a69d57e4-7ac9-4e78-8757-e5996cab184e_14:node_8_1784079520805:main",
+        "selectedModel": "seedance2.0 (急速版)",
+        "imageName": "005 (3).png",
+        "referenceImages": [
+          "https://aitop100app-1251510006.cos.ap-shanghai.myqcloud.com/imagesGenerations/64599bf8-fe2c-446f-bc20-a7add130225a.png",
+          "/flowgen-api/projects/14/assets/b8659868-9fd3-433a-8a2c-3083d7a1b999/file",
+          "https://aitop100app-1251510006.cos.ap-shanghai.myqcloud.com/openApi/212508/476e7ec5-721a-4e94-9c46-f4f19704248d.png",
+          "blob:http://localhost:3001/0151bf8f-46c6-4737-a243-c969bfa69989"
+        ],
+        "referenceImageLabels": [
+          "图片1",
+          "祭司老人",
+          "图片3",
+          "图片4"
+        ],
+        "referenceElementIds": [
+          "canvas:node_0_1784077793363",
+          null,
+          null,
+          "canvas:node_8_1784076932617"
+        ],
+        "referenceImageLocalRefs": [
+          "",
+          "",
+          "flowgen-local:a69d57e4-7ac9-4e78-8757-e5996cab184e_14:node_8_1784079520805:ref:2",
+          "flowgen-local:a69d57e4-7ac9-4e78-8757-e5996cab184e_14:node_8_1784079520805:ref:3"
+        ],
+        "modelConfigs": {
+          "Nano Banana 2.0": {
+            "referenceImages": [],
+            "imagePreview": "blob:http://localhost:3001/28412e4f-607a-4353-8b3b-a673f7f4f1a1",
+            "imageName": "005 (3).png",
+            "imageLocalRef": "flowgen-local:a69d57e4-7ac9-4e78-8757-e5996cab184e_14:node_8_1784079520805:main"
+          },
+          "seedance2.0 (急速版)": {
+            "prompt": "@主图准备攻击@图片3，@图片3中的羊很怕，准备逃跑",
+            "negativePrompt": "",
+            "numberOfImages": "1条",
+            "seedanceResolution": "720p",
+            "seedanceAspectRatio": "16:9",
+            "seedanceDuration": "5s",
+            "seedanceGenerateAudio": false,
+            "seedanceFixedCamera": false,
+            "seedanceGenerationMode": "reference",
+            "seedanceReferenceRatioMode": "force",
+            "seedanceReferenceWebSearch": false,
+            "seedanceTabConfigs": {
+              "reference": {
+                "referenceImages": [
+                  "https://aitop100app-1251510006.cos.ap-shanghai.myqcloud.com/imagesGenerations/64599bf8-fe2c-446f-bc20-a7add130225a.png",
+                  "/flowgen-api/projects/14/assets/b8659868-9fd3-433a-8a2c-3083d7a1b999/file",
+                  "https://aitop100app-1251510006.cos.ap-shanghai.myqcloud.com/openApi/212508/476e7ec5-721a-4e94-9c46-f4f19704248d.png",
+                  "blob:http://localhost:3001/0151bf8f-46c6-4737-a243-c969bfa69989"
+                ],
+                "referenceImageLabels": [
+                  "图片1",
+                  "祭司老人",
+                  "图片3",
+                  "图片4"
+                ],
+                "prompt": "@主图准备攻击@图片3，@图片3中的羊很怕，准备逃跑",
+                "referenceMovs": [],
+                "referenceAudios": []
+              }
+            },
+            "referenceImages": [
+              "https://aitop100app-1251510006.cos.ap-shanghai.myqcloud.com/imagesGenerations/64599bf8-fe2c-446f-bc20-a7add130225a.png",
+              "/flowgen-api/projects/14/assets/b8659868-9fd3-433a-8a2c-3083d7a1b999/file",
+              "https://aitop100app-1251510006.cos.ap-shanghai.myqcloud.com/openApi/212508/476e7ec5-721a-4e94-9c46-f4f19704248d.png",
+              "blob:http://localhost:3001/0151bf8f-46c6-4737-a243-c969bfa69989"
+            ],
+            "referenceMovs": [],
+            "referenceAudios": []
+          }
+        },
+        "prompt": "@主图准备攻击@图片3，@图片3中的羊很怕，准备逃跑",
+        "negativePrompt": "",
+        "numberOfImages": "1条",
+        "seedanceResolution": "720p",
+        "seedanceAspectRatio": "16:9",
+        "seedanceDuration": "5s",
+        "seedanceGenerateAudio": false,
+        "seedanceFixedCamera": false,
+        "seedanceReferenceRatioMode": "force",
+        "seedanceReferenceWebSearch": false,
+        "seedanceGenerationMode": "reference",
+        "seedanceTabConfigs": {
+          "reference": {
+            "referenceImages": [
+              "https://aitop100app-1251510006.cos.ap-shanghai.myqcloud.com/imagesGenerations/64599bf8-fe2c-446f-bc20-a7add130225a.png",
+              "/flowgen-api/projects/14/assets/b8659868-9fd3-433a-8a2c-3083d7a1b999/file",
+              "https://aitop100app-1251510006.cos.ap-shanghai.myqcloud.com/openApi/212508/476e7ec5-721a-4e94-9c46-f4f19704248d.png",
+              "blob:http://localhost:3001/0151bf8f-46c6-4737-a243-c969bfa69989"
+            ],
+            "referenceImageLabels": [
+              "图片1",
+              "祭司老人",
+              "图片3",
+              "图片4"
+            ],
+            "prompt": "@主图准备攻击@图片3，@图片3中的羊很怕，准备逃跑",
+            "referenceMovs": [],
+            "referenceAudios": []
+          }
+        },
+        "referenceMovs": [],
+        "referenceAudios": [],
+        "status": "completed",
+        "progress": 100,
+        "taskId": "1591351",
+        "generationParams": {
+          "taskId": "1591351",
+          "generatedAt": "2026-07-15T01:45:31.304Z",
+          "prompt": "@主图准备攻击@图片3，@图片3中的羊很怕，准备逃跑",
+          "negativePrompt": "",
+          "numberOfImages": "1条",
+          "referenceImages": [
+            "https://aitop100app-1251510006.cos.ap-shanghai.myqcloud.com/openApi/212508/9e7876c0-4798-4e73-8a0a-4f3be790432b.png",
+            "https://aitop100app-1251510006.cos.ap-shanghai.myqcloud.com/openApi/212508/476e7ec5-721a-4e94-9c46-f4f19704248d.png"
+          ],
+          "model": "seedance2.0 (急速版)",
+          "referenceImageLabels": [
+            "主图",
+            "图片3"
+          ],
+          "seedanceResolution": "720p",
+          "seedanceAspectRatio": "16:9",
+          "seedanceDuration": "5s",
+          "seedanceGenerateAudio": false,
+          "seedanceGenerationMode": "reference",
+          "seedanceReferenceRatioMode": "force",
+          "seedanceReferenceWebSearch": false,
+          "outputUrl": "https://aitop100app-1251510006.cos.ap-shanghai.myqcloud.com/videosGenerations/videosGenerations/478388e1-c789-467d-a9d8-d01fedd31c2c.mp4"
+        },
+        "panelMainSlotVisible": false,
+        "panelMainImageUrl": "blob:http://localhost:3001/ee908094-b64b-4b37-b9b4-5714340b22fc",
+        "generatedAt": "2026-07-15T01:45:31.304Z",
+        "generatedThumbnails": [
+          {
+            "id": "node_9_1784079931308",
+            "url": "https://aitop100app-1251510006.cos.ap-shanghai.myqcloud.com/videosGenerations/videosGenerations/478388e1-c789-467d-a9d8-d01fedd31c2c.mp4",
+            "type": "video",
+            "nodeId": "node_9_1784079931308",
+            "name": "Video_74.mov",
+            "generationParams": {
+              "generatedAt": "2026-07-15T01:45:31.304Z",
+              "taskId": "1591351",
+              "prompt": "@主图准备攻击@图片3，@图片3中的羊很怕，准备逃跑",
+              "negativePrompt": "",
+              "numberOfImages": "1条",
+              "referenceImages": [
+                "https://aitop100app-1251510006.cos.ap-shanghai.myqcloud.com/openApi/212508/9e7876c0-4798-4e73-8a0a-4f3be790432b.png",
+                "https://aitop100app-1251510006.cos.ap-shanghai.myqcloud.com/openApi/212508/476e7ec5-721a-4e94-9c46-f4f19704248d.png"
+              ],
+              "model": "seedance2.0 (急速版)",
+              "referenceImageLabels": [
+                "主图",
+                "图片3"
+              ],
+              "seedanceResolution": "720p",
+              "seedanceAspectRatio": "16:9",
+              "seedanceDuration": "5s",
+              "seedanceGenerateAudio": false,
+              "seedanceGenerationMode": "reference",
+              "seedanceReferenceRatioMode": "force",
+              "seedanceReferenceWebSearch": false,
+              "outputUrl": "https://aitop100app-1251510006.cos.ap-shanghai.myqcloud.com/videosGenerations/videosGenerations/478388e1-c789-467d-a9d8-d01fedd31c2c.mp4"
+            },
+            "posterDataUrl": "/flowgen-api/projects/14/node-media/cd290d95-aae2-4803-b63e-bad779a3a0f8.jpg/file"
+          }
+        ]
+      }
+    },
+    {
+      "id": "node_9_1784079931308",
+      "type": "movNode",
+      "position": {
+        "x": 22.728320287921292,
+        "y": 30818.297605095202
+      },
+      "data": {
+        "numberOfImages": "1条",
+        "seedanceResolution": "720p",
+        "seedanceAspectRatio": "16:9",
+        "seedanceDuration": "5s",
+        "seedanceGenerateAudio": false,
+        "seedanceFixedCamera": false,
+        "seedanceGenerationMode": "reference",
+        "seedanceReferenceRatioMode": "force",
+        "seedanceReferenceWebSearch": false,
+        "status": "idle",
+        "progress": 0,
+        "generationParams": {
+          "generatedAt": "2026-07-15T01:45:31.304Z",
+          "taskId": "1591351",
+          "prompt": "@主图准备攻击@图片3，@图片3中的羊很怕，准备逃跑",
+          "negativePrompt": "",
+          "numberOfImages": "1条",
+          "referenceImages": [
+            "https://aitop100app-1251510006.cos.ap-shanghai.myqcloud.com/openApi/212508/9e7876c0-4798-4e73-8a0a-4f3be790432b.png",
+            "https://aitop100app-1251510006.cos.ap-shanghai.myqcloud.com/openApi/212508/476e7ec5-721a-4e94-9c46-f4f19704248d.png"
+          ],
+          "model": "seedance2.0 (急速版)",
+          "referenceImageLabels": [
+            "主图",
+            "图片3"
+          ],
+          "seedanceResolution": "720p",
+          "seedanceAspectRatio": "16:9",
+          "seedanceDuration": "5s",
+          "seedanceGenerateAudio": false,
+          "seedanceGenerationMode": "reference",
+          "seedanceReferenceRatioMode": "force",
+          "seedanceReferenceWebSearch": false,
+          "outputUrl": "https://aitop100app-1251510006.cos.ap-shanghai.myqcloud.com/videosGenerations/videosGenerations/478388e1-c789-467d-a9d8-d01fedd31c2c.mp4"
+        },
+        "label": "Output Mov Node",
+        "imagePreview": "https://aitop100app-1251510006.cos.ap-shanghai.myqcloud.com/videosGenerations/videosGenerations/478388e1-c789-467d-a9d8-d01fedd31c2c.mp4",
+        "selectedModel": "seedance2.0 (急速版)",
+        "generatedAt": "2026-07-15T01:45:31.304Z",
+        "imageName": "Video_74.mov",
+        "taskId": "1591351",
+        "referenceMovs": [
+          {
+            "url": "https://aitop100app-1251510006.cos.ap-shanghai.myqcloud.com/videosGenerations/videosGenerations/478388e1-c789-467d-a9d8-d01fedd31c2c.mp4"
+          }
+        ],
+        "videoPosterDataUrl": "/flowgen-api/projects/14/node-media/cd290d95-aae2-4803-b63e-bad779a3a0f8.jpg/file"
+      }
+    }
+  ],
+  "edges": [
+    {
+      "id": "enode_8_1784079520805-node_9_1784079931308-1784079931308-0",
+      "source": "node_8_1784079520805",
+      "target": "node_9_1784079931308",
+      "animated": true,
+      "style": {
+        "stroke": "#6366f1",
+        "strokeWidth": 2
+      }
+    }
+  ],
+  "exportedAt": "2026-07-15T01:49:50.531Z",
+  "nodeCount": 2,
+  "edgeCount": 1
+}

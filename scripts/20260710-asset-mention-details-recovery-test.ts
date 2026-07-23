@@ -12,6 +12,7 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 import type { NodeData } from '../types.ts';
 import { MODEL_IMAGE_2, MODEL_NANO_BANANA_2 } from '../types.ts';
+import { resolveFixtureFile } from './fixturePath.ts';
 import {
   buildPromptMediaRefContextFromNode,
   collectReferencedMediaFromPrompt,
@@ -376,8 +377,8 @@ console.log('\n=== §6 fixture banana-问题4 × 全模型 ===\n');
 }
 
 console.log('\n=== §7 用户 JSON（若存在）× 全模型 ===\n');
-tryUserJsonScenario('d:/json/banana-源.json', 'd:/json/banana-源.json');
-tryUserJsonScenario('d:/json/banana-问题4.json', 'd:/json/banana-问题4.json');
+tryUserJsonScenario(resolveFixtureFile('banana-源.json', 'd:/json/banana-源.json'), 'banana-源.json');
+tryUserJsonScenario(resolveFixtureFile('banana-问题4.json', 'd:/json/banana-问题4.json'), 'banana-问题4.json');
 
 console.log(`\n=== 汇总: ${pass} 通过, ${fail} 失败 ===\n`);
 process.exit(fail ? 1 : 0);

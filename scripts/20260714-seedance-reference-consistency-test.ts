@@ -6,6 +6,7 @@
  */
 import fs from 'fs';
 import type { NodeData, GenerationParams } from '../types.ts';
+import { resolveFixtureFile } from './fixturePath.ts';
 import { buildSeedanceReferenceDetailsFromSnapshot } from '../utils/nodeDetailsPreview.ts';
 import {
   buildPromptMediaRefLabels,
@@ -25,7 +26,7 @@ function ok(name: string, cond: boolean, detail?: string) {
 // === 测试1：seedance3.json processor vs movNode 参考图一致性 ===
 console.log('\n=== §1 seedance3.json：processor 与 movNode Node Details 参考图一致 ===');
 
-const json3 = JSON.parse(fs.readFileSync('E:/问题/seedance3.json', 'utf8'));
+const json3 = JSON.parse(fs.readFileSync(resolveFixtureFile('seedance3.json', 'E:/问题/seedance3.json'), 'utf8'));
 const proc3 = json3.nodes.find((n: { type: string }) => n.type === 'processorNode');
 const mov3 = json3.nodes.find((n: { type: string }) => n.type === 'movNode');
 
@@ -72,7 +73,7 @@ if (!proc3 || !mov3) {
 // === 测试2：seedance4.json processor @主图 不变 @主视频 ===
 console.log('\n=== §2 seedance4.json：processor @主图 不应变为 @主视频 ===');
 
-const json4 = JSON.parse(fs.readFileSync('E:/问题/seedance4.json', 'utf8'));
+const json4 = JSON.parse(fs.readFileSync(resolveFixtureFile('seedance4.json', 'E:/问题/seedance4.json'), 'utf8'));
 const proc4 = json4.nodes.find((n: { type: string }) => n.type === 'processorNode');
 
 if (!proc4) {

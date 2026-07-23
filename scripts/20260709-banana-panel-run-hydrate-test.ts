@@ -4,6 +4,7 @@
  */
 import fs from 'fs';
 import type { NodeData } from '../types.ts';
+import { resolveFixtureFile } from './fixturePath.ts';
 import {
   panelNeedsPostRunBlobHydrateRecheck,
   panelHasBlobBackedLocalRefSlots,
@@ -27,7 +28,7 @@ function ok(name: string, cond: boolean, detail?: string) {
   else fail++;
 }
 
-const json = JSON.parse(fs.readFileSync('d:/json/20260709-bannana.json', 'utf8'));
+const json = JSON.parse(fs.readFileSync(resolveFixtureFile('20260709-bannana.json', 'd:/json/20260709-bannana.json'), 'utf8'));
 const node = json.nodes.find(
   (n: { data: { selectedModel?: string } }) => n.data.selectedModel === 'Nano Banana 2.0'
 );

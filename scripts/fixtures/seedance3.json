@@ -1,0 +1,258 @@
+{
+  "nodes": [
+    {
+      "id": "node_0_1783992949706",
+      "type": "processorNode",
+      "position": {
+        "x": 12940.244492006801,
+        "y": 26470.345767137733
+      },
+      "data": {
+        "label": "Input Picture Node",
+        "imageName": "005 (1).png",
+        "imageLocalRef": "flowgen-local:a69d57e4-7ac9-4e78-8757-e5996cab184e_14:node_2_1783992860817:main",
+        "selectedModel": "seedance2.0 (急速版)",
+        "imagePreview": "https://aitop100app-1251510006.cos.ap-shanghai.myqcloud.com/openApi/212508/e9f142f9-d9a9-46eb-837e-332ab3775f17.png",
+        "modelConfigs": {
+          "Nano Banana 2.0": {
+            "imagePreview": "blob:http://localhost:3001/43dd14e6-2029-488f-8dde-ad31ee4332f3",
+            "imageName": "005 (1).png",
+            "imageLocalRef": "flowgen-local:a69d57e4-7ac9-4e78-8757-e5996cab184e_14:node_2_1783992860817:main"
+          },
+          "seedance2.0 (急速版)": {
+            "prompt": "@主图准备攻击@图片4中的羊，羊感受到了威胁",
+            "negativePrompt": "",
+            "numberOfImages": "1条",
+            "seedanceResolution": "480p",
+            "seedanceAspectRatio": "16:9",
+            "seedanceDuration": "5s",
+            "seedanceGenerateAudio": false,
+            "seedanceFixedCamera": false,
+            "seedanceGenerationMode": "reference",
+            "seedanceReferenceRatioMode": "force",
+            "seedanceReferenceWebSearch": false,
+            "seedanceTabConfigs": {
+              "reference": {
+                "prompt": "@主图准备攻击@图片4中的羊，羊感受到了威胁",
+                "referenceImages": [
+                  "https://aitop100app-1251510006.cos.ap-shanghai.myqcloud.com/imagesGenerations/5c38c6a8-301a-4ea3-8f10-4838353e71ed.png",
+                  "blob:http://localhost:3001/efad3787-395d-44ff-92c3-8582a909999c",
+                  "blob:http://localhost:3001/4c10f8f2-b54e-45a5-b0aa-a065f23a4cb3",
+                  "https://aitop100app-1251510006.cos.ap-shanghai.myqcloud.com/openApi/212508/2c588acc-f0b3-45cc-a3a5-e974e1bbeeda.png"
+                ],
+                "referenceImageLabels": [
+                  "图片2",
+                  "图片3",
+                  "图片3",
+                  "图片4"
+                ],
+                "referenceMovs": [],
+                "referenceAudios": []
+              }
+            },
+            "referenceImages": [
+              "https://aitop100app-1251510006.cos.ap-shanghai.myqcloud.com/imagesGenerations/5c38c6a8-301a-4ea3-8f10-4838353e71ed.png",
+              "blob:http://localhost:3001/efad3787-395d-44ff-92c3-8582a909999c",
+              "blob:http://localhost:3001/4c10f8f2-b54e-45a5-b0aa-a065f23a4cb3",
+              "https://aitop100app-1251510006.cos.ap-shanghai.myqcloud.com/openApi/212508/2c588acc-f0b3-45cc-a3a5-e974e1bbeeda.png"
+            ],
+            "referenceMovs": [],
+            "referenceAudios": []
+          }
+        },
+        "prompt": "@主图准备攻击@图片4中的羊，羊感受到了威胁",
+        "negativePrompt": "",
+        "numberOfImages": "1条",
+        "seedanceResolution": "480p",
+        "seedanceAspectRatio": "16:9",
+        "seedanceDuration": "5s",
+        "seedanceGenerateAudio": false,
+        "seedanceFixedCamera": false,
+        "seedanceReferenceRatioMode": "force",
+        "seedanceReferenceWebSearch": false,
+        "seedanceGenerationMode": "reference",
+        "seedanceTabConfigs": {
+          "reference": {
+            "prompt": "@主图准备攻击@图片4中的羊，羊感受到了威胁",
+            "referenceImages": [
+              "https://aitop100app-1251510006.cos.ap-shanghai.myqcloud.com/imagesGenerations/5c38c6a8-301a-4ea3-8f10-4838353e71ed.png",
+              "blob:http://localhost:3001/efad3787-395d-44ff-92c3-8582a909999c",
+              "blob:http://localhost:3001/4c10f8f2-b54e-45a5-b0aa-a065f23a4cb3",
+              "https://aitop100app-1251510006.cos.ap-shanghai.myqcloud.com/openApi/212508/2c588acc-f0b3-45cc-a3a5-e974e1bbeeda.png"
+            ],
+            "referenceImageLabels": [
+              "图片2",
+              "图片3",
+              "图片3",
+              "图片4"
+            ],
+            "referenceMovs": [],
+            "referenceAudios": []
+          }
+        },
+        "referenceImages": [
+          "https://aitop100app-1251510006.cos.ap-shanghai.myqcloud.com/imagesGenerations/5c38c6a8-301a-4ea3-8f10-4838353e71ed.png",
+          "blob:http://localhost:3001/efad3787-395d-44ff-92c3-8582a909999c",
+          "blob:http://localhost:3001/4c10f8f2-b54e-45a5-b0aa-a065f23a4cb3",
+          "https://aitop100app-1251510006.cos.ap-shanghai.myqcloud.com/openApi/212508/2c588acc-f0b3-45cc-a3a5-e974e1bbeeda.png"
+        ],
+        "referenceMovs": [],
+        "referenceAudios": [],
+        "referenceImageLabels": [
+          "图片2",
+          "图片3",
+          "图片3",
+          "图片4"
+        ],
+        "referenceElementIds": [
+          "canvas:node_2_1784001016663",
+          "canvas:node_8_1783672612999",
+          "canvas:node_6_1783672612998",
+          "canvas:node_3_1783672612947"
+        ],
+        "referenceImageLocalRefs": [
+          "",
+          "flowgen-local:a69d57e4-7ac9-4e78-8757-e5996cab184e_14:node_0_1783992949706:ref:2",
+          "flowgen-local:a69d57e4-7ac9-4e78-8757-e5996cab184e_14:node_0_1783992949706:ref:3",
+          "flowgen-local:a69d57e4-7ac9-4e78-8757-e5996cab184e_14:node_0_1783992949706:ref:3"
+        ],
+        "status": "completed",
+        "progress": 100,
+        "taskId": "1587157",
+        "generationParams": {
+          "taskId": "1587157",
+          "generatedAt": "2026-07-14T09:32:10.550Z",
+          "prompt": "@主图准备攻击@图片4中的羊，羊感受到了威胁",
+          "negativePrompt": "",
+          "numberOfImages": "1条",
+          "referenceImages": [
+            "https://aitop100app-1251510006.cos.ap-shanghai.myqcloud.com/openApi/212508/e9f142f9-d9a9-46eb-837e-332ab3775f17.png",
+            "https://aitop100app-1251510006.cos.ap-shanghai.myqcloud.com/openApi/212508/2c588acc-f0b3-45cc-a3a5-e974e1bbeeda.png"
+          ],
+          "model": "seedance2.0 (急速版)",
+          "referenceImageLabels": [
+            "主图",
+            "图片4"
+          ],
+          "seedanceResolution": "480p",
+          "seedanceAspectRatio": "16:9",
+          "seedanceDuration": "5s",
+          "seedanceGenerateAudio": false,
+          "seedanceGenerationMode": "reference",
+          "seedanceReferenceRatioMode": "force",
+          "seedanceReferenceWebSearch": false,
+          "outputUrl": "https://aitop100app-1251510006.cos.ap-shanghai.myqcloud.com/videosGenerations/videosGenerations/c628538e-d793-4bcb-8b01-b5269d9359e2.mp4"
+        },
+        "panelMainSlotVisible": false,
+        "panelMainImageUrl": "blob:http://localhost:3001/2ef71137-d576-4108-8eff-c9f389036111",
+        "generatedAt": "2026-07-14T09:32:10.550Z",
+        "generatedThumbnails": [
+          {
+            "id": "node_7_1784021530556",
+            "url": "https://aitop100app-1251510006.cos.ap-shanghai.myqcloud.com/videosGenerations/videosGenerations/c628538e-d793-4bcb-8b01-b5269d9359e2.mp4",
+            "type": "video",
+            "nodeId": "node_7_1784021530556",
+            "name": "Video_107.mov",
+            "generationParams": {
+              "generatedAt": "2026-07-14T09:32:10.550Z",
+              "taskId": "1587157",
+              "prompt": "@主图准备攻击@图片4中的羊，羊感受到了威胁",
+              "negativePrompt": "",
+              "numberOfImages": "1条",
+              "referenceImages": [
+                "https://aitop100app-1251510006.cos.ap-shanghai.myqcloud.com/openApi/212508/e9f142f9-d9a9-46eb-837e-332ab3775f17.png",
+                "https://aitop100app-1251510006.cos.ap-shanghai.myqcloud.com/openApi/212508/2c588acc-f0b3-45cc-a3a5-e974e1bbeeda.png"
+              ],
+              "model": "seedance2.0 (急速版)",
+              "referenceImageLabels": [
+                "主图",
+                "图片4"
+              ],
+              "seedanceResolution": "480p",
+              "seedanceAspectRatio": "16:9",
+              "seedanceDuration": "5s",
+              "seedanceGenerateAudio": false,
+              "seedanceGenerationMode": "reference",
+              "seedanceReferenceRatioMode": "force",
+              "seedanceReferenceWebSearch": false,
+              "outputUrl": "https://aitop100app-1251510006.cos.ap-shanghai.myqcloud.com/videosGenerations/videosGenerations/c628538e-d793-4bcb-8b01-b5269d9359e2.mp4"
+            },
+            "posterDataUrl": "/flowgen-api/projects/14/node-media/7ea23fda-32e8-4883-a05c-db131d1122eb.jpg/file"
+          }
+        ]
+      }
+    },
+    {
+      "id": "node_7_1784021530556",
+      "type": "movNode",
+      "position": {
+        "x": 13329.531342182116,
+        "y": 26522.96317025182
+      },
+      "data": {
+        "numberOfImages": "1条",
+        "seedanceResolution": "480p",
+        "seedanceAspectRatio": "16:9",
+        "seedanceDuration": "5s",
+        "seedanceGenerateAudio": false,
+        "seedanceFixedCamera": false,
+        "seedanceGenerationMode": "reference",
+        "seedanceReferenceRatioMode": "force",
+        "seedanceReferenceWebSearch": false,
+        "status": "idle",
+        "progress": 0,
+        "generationParams": {
+          "generatedAt": "2026-07-14T09:32:10.550Z",
+          "taskId": "1587157",
+          "prompt": "@主图准备攻击@图片4中的羊，羊感受到了威胁",
+          "negativePrompt": "",
+          "numberOfImages": "1条",
+          "referenceImages": [
+            "https://aitop100app-1251510006.cos.ap-shanghai.myqcloud.com/openApi/212508/e9f142f9-d9a9-46eb-837e-332ab3775f17.png",
+            "https://aitop100app-1251510006.cos.ap-shanghai.myqcloud.com/openApi/212508/2c588acc-f0b3-45cc-a3a5-e974e1bbeeda.png"
+          ],
+          "model": "seedance2.0 (急速版)",
+          "referenceImageLabels": [
+            "主图",
+            "图片4"
+          ],
+          "seedanceResolution": "480p",
+          "seedanceAspectRatio": "16:9",
+          "seedanceDuration": "5s",
+          "seedanceGenerateAudio": false,
+          "seedanceGenerationMode": "reference",
+          "seedanceReferenceRatioMode": "force",
+          "seedanceReferenceWebSearch": false,
+          "outputUrl": "https://aitop100app-1251510006.cos.ap-shanghai.myqcloud.com/videosGenerations/videosGenerations/c628538e-d793-4bcb-8b01-b5269d9359e2.mp4"
+        },
+        "label": "Output Mov Node",
+        "imagePreview": "https://aitop100app-1251510006.cos.ap-shanghai.myqcloud.com/videosGenerations/videosGenerations/c628538e-d793-4bcb-8b01-b5269d9359e2.mp4",
+        "selectedModel": "seedance2.0 (急速版)",
+        "generatedAt": "2026-07-14T09:32:10.550Z",
+        "imageName": "Video_107.mov",
+        "taskId": "1587157",
+        "referenceMovs": [
+          {
+            "url": "https://aitop100app-1251510006.cos.ap-shanghai.myqcloud.com/videosGenerations/videosGenerations/c628538e-d793-4bcb-8b01-b5269d9359e2.mp4"
+          }
+        ],
+        "videoPosterDataUrl": "/flowgen-api/projects/14/node-media/7ea23fda-32e8-4883-a05c-db131d1122eb.jpg/file"
+      }
+    }
+  ],
+  "edges": [
+    {
+      "id": "enode_0_1783992949706-node_7_1784021530556-1784021530556-0",
+      "source": "node_0_1783992949706",
+      "target": "node_7_1784021530556",
+      "animated": true,
+      "style": {
+        "stroke": "#6366f1",
+        "strokeWidth": 2
+      }
+    }
+  ],
+  "exportedAt": "2026-07-14T09:40:27.746Z",
+  "nodeCount": 2,
+  "edgeCount": 1
+}
