@@ -14,6 +14,7 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 import type { NodeData } from '../types.ts';
 import { MODEL_NANO_BANANA_2 } from '../types.ts';
+import { resolveFixtureFile } from './fixturePath.ts';
 import {
   collectReferencedMediaFromPrompt,
   buildPromptMediaRefContextFromNode,
@@ -83,7 +84,7 @@ function simulateAfterRun(preRun: NodeData, uploaded: Map<string, string>) {
 }
 
 // --- fixture from banana-丢图2 ---
-const src = JSON.parse(fs.readFileSync('d:/json/banana-丢图2.json', 'utf8'));
+const src = JSON.parse(fs.readFileSync(resolveFixtureFile('banana-丢图2.json', 'd:/json/banana-丢图2.json'), 'utf8'));
 const badNode = src.nodes[0].data as NodeData;
 fs.mkdirSync(path.dirname(badPath), { recursive: true });
 fs.writeFileSync(

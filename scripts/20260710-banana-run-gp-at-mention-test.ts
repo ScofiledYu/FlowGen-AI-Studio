@@ -11,6 +11,7 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 import type { Node as RFNode } from 'reactflow';
 import { NodeType } from '../types.ts';
+import { resolveFixtureFile } from './fixturePath.ts';
 import {
   mergeRecoveryGenerationParamsFromRunNode,
   buildRecoveryGraphUpdates,
@@ -168,7 +169,7 @@ ok('recovery OUTPUT=Nano', recOut?.data.selectedModel === 'Nano Banana 2.0');
 
 console.log('\n=== §5 用户 JSON banana-问题 坏态指纹 ===\n');
 try {
-  const userBad = JSON.parse(fs.readFileSync('d:/json/banana-问题.json', 'utf8'));
+  const userBad = JSON.parse(fs.readFileSync(resolveFixtureFile('banana-问题.json', 'd:/json/banana-问题.json'), 'utf8'));
   const proc = userBad.nodes.find((n: RFNode) => n.type === 'processorNode');
   if (proc) {
     ok('banana-问题 gp 误写 9 张（坏态）', (proc.data.generationParams?.referenceImages?.length || 0) === 9);

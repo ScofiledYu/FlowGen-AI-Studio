@@ -1,0 +1,279 @@
+{
+  "nodes": [
+    {
+      "id": "node_12_1783472899370",
+      "type": "processorNode",
+      "position": {
+        "x": 13731.961524081324,
+        "y": 13450.13523412626
+      },
+      "data": {
+        "label": "Input Picture Node",
+        "prompt": "@图片2@图片4@图片3 三个角色打了起来，参考武侠动作",
+        "imageName": "hekovs-animals-9533774_1920.jpg",
+        "imageLocalRef": "flowgen-local:a69d57e4-7ac9-4e78-8757-e5996cab184e_14:node_12_1783472899370:main",
+        "selectedModel": "可灵3.0 Omni",
+        "referenceImages": [],
+        "referenceImageLabels": [
+          "图片1",
+          "图片2",
+          "图片3",
+          "图片4",
+          "大牙-有牙"
+        ],
+        "referenceImageLocalRefs": [],
+        "imagePreview": "https://aitop100app-1251510006.cos.ap-shanghai.myqcloud.com/openApi/212508/6284419a-0837-4450-82d6-1775879bda29.png",
+        "panelMainImageUrl": "blob:http://localhost:3001/fb74d3b4-9328-42eb-8535-bc015ecb03f2",
+        "modelConfigs": {
+          "Nano Banana 2.0": {
+            "prompt": "@",
+            "referenceImages": [
+              "blob:http://localhost:3001/2cc4760a-8d92-4c86-bf49-bd577f2bad6c",
+              "",
+              "",
+              "blob:http://localhost:3001/2affe9f1-1736-46f7-afb0-cd8ac2fa73b8",
+              "blob:http://localhost:3001/cca111af-2c50-4c68-96d2-96be6f32a0d1",
+              "blob:http://localhost:3001/4561337c-c2fc-4eff-b44e-70b4f33428a2"
+            ],
+            "referenceImageLabels": [
+              "图片2",
+              "图片3",
+              "图片5",
+              "图片4",
+              "图片5",
+              "图片6"
+            ],
+            "referenceImageLocalRefs": [
+              "flowgen-local:a69d57e4-7ac9-4e78-8757-e5996cab184e_14:node_12_1783472899370:ref:Nano_Banana_20:1",
+              "flowgen-local:a69d57e4-7ac9-4e78-8757-e5996cab184e_14:node_12_1783472899370:ref:Nano_Banana_20:3",
+              "flowgen-local:a69d57e4-7ac9-4e78-8757-e5996cab184e_14:node_12_1783472899370:ref:Nano_Banana_20:4",
+              "flowgen-local:a69d57e4-7ac9-4e78-8757-e5996cab184e_14:node_12_1783472899370:ref:Nano_Banana_20:5",
+              "flowgen-local:a69d57e4-7ac9-4e78-8757-e5996cab184e_14:node_12_1783472899370:ref:Nano_Banana_20:6",
+              "flowgen-local:a69d57e4-7ac9-4e78-8757-e5996cab184e_14:node_12_1783472899370:ref:Nano_Banana_20:5"
+            ],
+            "imagePreview": "blob:http://localhost:3001/fb74d3b4-9328-42eb-8535-bc015ecb03f2",
+            "imageName": "hekovs-animals-9533774_1920.jpg",
+            "imageLocalRef": "flowgen-local:a69d57e4-7ac9-4e78-8757-e5996cab184e_14:node_12_1783472899370:main"
+          },
+          "可灵3.0 Omni": {
+            "prompt": "@图片2@图片4@图片3 三个角色打了起来，参考武侠动作",
+            "negativePrompt": "",
+            "firstFrameImage": "https://aitop100app-1251510006.cos.ap-shanghai.myqcloud.com/openApi/212508/c60c5769-177e-45cc-abdd-8820e9713e99.png",
+            "firstFrameImageUrl": "https://aitop100app-1251510006.cos.ap-shanghai.myqcloud.com/openApi/212508/c60c5769-177e-45cc-abdd-8820e9713e99.png",
+            "quality": "标准",
+            "duration": "10s",
+            "numberOfImages": "1条",
+            "aspectRatio": "16:9",
+            "klingAudioSync": false,
+            "referenceImages": [],
+            "klingOmniMultiReferenceImages": [
+              "blob:http://localhost:3001/9c0da759-0b88-487b-aa56-8487883bca67",
+              "https://aitop100app-1251510006.cos.ap-shanghai.myqcloud.com/openApi/212508/6284419a-0837-4450-82d6-1775879bda29.png",
+              "https://aitop100app-1251510006.cos.ap-shanghai.myqcloud.com/openApi/212508/56ee06de-7361-4383-b4f1-987c310177bd.png",
+              "https://aitop100app-1251510006.cos.ap-shanghai.myqcloud.com/openApi/212508/49ff44af-470a-4e89-967b-c6b20f62a554.png",
+              "/flowgen-api/projects/14/assets/90bdcd95-b552-42ab-9562-255b8557d92d/file"
+            ],
+            "klingOmniInstructionReferenceImages": [],
+            "klingOmniVideoReferenceImages": [],
+            "klingOmniMultiReferenceElementIds": [
+              null,
+              null,
+              null,
+              null,
+              null
+            ],
+            "klingOmniMultiPrompt": "@图片2@图片4@图片3 三个角色打了起来，参考武侠动作",
+            "klingOmniMultiNegativePrompt": "",
+            "klingOmniInstructionPrompt": "",
+            "klingOmniInstructionNegativePrompt": "",
+            "klingOmniVideoPrompt": "",
+            "klingOmniVideoNegativePrompt": "",
+            "klingOmniFramesPrompt": "",
+            "klingOmniFramesNegativePrompt": "",
+            "klingOmniTab": "multi",
+            "klingOmniTabConfigs": {}
+          }
+        },
+        "negativePrompt": "",
+        "firstFrameImage": "https://aitop100app-1251510006.cos.ap-shanghai.myqcloud.com/openApi/212508/c60c5769-177e-45cc-abdd-8820e9713e99.png",
+        "firstFrameImageUrl": "https://aitop100app-1251510006.cos.ap-shanghai.myqcloud.com/openApi/212508/c60c5769-177e-45cc-abdd-8820e9713e99.png",
+        "quality": "标准",
+        "duration": "10s",
+        "numberOfImages": "1条",
+        "aspectRatio": "16:9",
+        "klingAudioSync": false,
+        "klingOmniTab": "multi",
+        "klingOmniMultiPrompt": "@图片2@图片4@图片3 三个角色打了起来，参考武侠动作",
+        "klingOmniMultiNegativePrompt": "",
+        "klingOmniInstructionPrompt": "",
+        "klingOmniInstructionNegativePrompt": "",
+        "klingOmniVideoPrompt": "",
+        "klingOmniVideoNegativePrompt": "",
+        "klingOmniFramesPrompt": "",
+        "klingOmniFramesNegativePrompt": "",
+        "klingOmniMultiReferenceImages": [
+          "blob:http://localhost:3001/9c0da759-0b88-487b-aa56-8487883bca67",
+          "https://aitop100app-1251510006.cos.ap-shanghai.myqcloud.com/openApi/212508/6284419a-0837-4450-82d6-1775879bda29.png",
+          "https://aitop100app-1251510006.cos.ap-shanghai.myqcloud.com/openApi/212508/56ee06de-7361-4383-b4f1-987c310177bd.png",
+          "https://aitop100app-1251510006.cos.ap-shanghai.myqcloud.com/openApi/212508/49ff44af-470a-4e89-967b-c6b20f62a554.png",
+          "/flowgen-api/projects/14/assets/90bdcd95-b552-42ab-9562-255b8557d92d/file"
+        ],
+        "klingOmniInstructionReferenceImages": [],
+        "klingOmniVideoReferenceImages": [],
+        "klingOmniMultiReferenceElementIds": [
+          null,
+          null,
+          null,
+          null,
+          null
+        ],
+        "klingOmniMultiReferenceLocalRefs": [
+          "flowgen-local:a69d57e4-7ac9-4e78-8757-e5996cab184e_14:node_12_1783472899370:ref:可灵30_Omni_multi:0",
+          "flowgen-local:a69d57e4-7ac9-4e78-8757-e5996cab184e_14:node_12_1783472899370:ref:可灵30_Omni_multi:1",
+          "flowgen-local:a69d57e4-7ac9-4e78-8757-e5996cab184e_14:node_12_1783472899370:ref:可灵30_Omni_multi:2"
+        ],
+        "klingOmniInstructionReferenceLocalRefs": [],
+        "klingOmniVideoReferenceLocalRefs": [],
+        "klingOmniTabConfigs": {},
+        "status": "completed",
+        "progress": 100,
+        "taskId": "1525620",
+        "generationParams": {
+          "taskId": "1525620",
+          "generatedAt": "2026-07-08T03:28:56.272Z",
+          "prompt": "@图片2@图片4@图片3 三个角色打了起来，参考武侠动作",
+          "negativePrompt": "",
+          "numberOfImages": "1条",
+          "referenceImages": [
+            "https://aitop100app-1251510006.cos.ap-shanghai.myqcloud.com/openApi/212508/c60c5769-177e-45cc-abdd-8820e9713e99.png",
+            "https://aitop100app-1251510006.cos.ap-shanghai.myqcloud.com/openApi/212508/6284419a-0837-4450-82d6-1775879bda29.png",
+            "https://aitop100app-1251510006.cos.ap-shanghai.myqcloud.com/openApi/212508/49ff44af-470a-4e89-967b-c6b20f62a554.png",
+            "https://aitop100app-1251510006.cos.ap-shanghai.myqcloud.com/openApi/212508/56ee06de-7361-4383-b4f1-987c310177bd.png"
+          ],
+          "model": "可灵3.0 Omni",
+          "referenceImageLabels": [
+            "图片2",
+            "图片2",
+            "图片4",
+            "图片3"
+          ],
+          "quality": "标准",
+          "duration": "10s",
+          "aspectRatio": "16:9",
+          "klingAudioSync": false,
+          "firstFrameImage": "https://aitop100app-1251510006.cos.ap-shanghai.myqcloud.com/openApi/212508/c60c5769-177e-45cc-abdd-8820e9713e99.png",
+          "firstFrameImageUrl": "https://aitop100app-1251510006.cos.ap-shanghai.myqcloud.com/openApi/212508/c60c5769-177e-45cc-abdd-8820e9713e99.png",
+          "klingOmniTab": "multi",
+          "outputUrl": "https://aitop100app-1251510006.cos.ap-shanghai.myqcloud.com/videosGenerations/videosGenerations/dc066181-f9b6-4678-9f84-aa9ac8fd72d2.mp4"
+        },
+        "generatedAt": "2026-07-08T03:28:56.272Z",
+        "generatedThumbnails": [
+          {
+            "id": "node_0_1783481336277",
+            "url": "https://aitop100app-1251510006.cos.ap-shanghai.myqcloud.com/videosGenerations/videosGenerations/dc066181-f9b6-4678-9f84-aa9ac8fd72d2.mp4",
+            "type": "video",
+            "nodeId": "node_0_1783481336277",
+            "name": "Video_323.mov",
+            "generationParams": {
+              "generatedAt": "2026-07-08T03:28:56.272Z",
+              "taskId": "1525620",
+              "prompt": "@图片2@图片4@图片3 三个角色打了起来，参考武侠动作",
+              "negativePrompt": "",
+              "numberOfImages": "1条",
+              "referenceImages": [
+                "https://aitop100app-1251510006.cos.ap-shanghai.myqcloud.com/openApi/212508/c60c5769-177e-45cc-abdd-8820e9713e99.png",
+                "https://aitop100app-1251510006.cos.ap-shanghai.myqcloud.com/openApi/212508/6284419a-0837-4450-82d6-1775879bda29.png",
+                "https://aitop100app-1251510006.cos.ap-shanghai.myqcloud.com/openApi/212508/49ff44af-470a-4e89-967b-c6b20f62a554.png",
+                "https://aitop100app-1251510006.cos.ap-shanghai.myqcloud.com/openApi/212508/56ee06de-7361-4383-b4f1-987c310177bd.png"
+              ],
+              "model": "可灵3.0 Omni",
+              "referenceImageLabels": [
+                "图片2",
+                "图片2",
+                "图片4",
+                "图片3"
+              ],
+              "quality": "标准",
+              "duration": "10s",
+              "aspectRatio": "16:9",
+              "klingAudioSync": false,
+              "firstFrameImage": "https://aitop100app-1251510006.cos.ap-shanghai.myqcloud.com/openApi/212508/c60c5769-177e-45cc-abdd-8820e9713e99.png",
+              "firstFrameImageUrl": "https://aitop100app-1251510006.cos.ap-shanghai.myqcloud.com/openApi/212508/c60c5769-177e-45cc-abdd-8820e9713e99.png",
+              "klingOmniTab": "multi",
+              "outputUrl": "https://aitop100app-1251510006.cos.ap-shanghai.myqcloud.com/videosGenerations/videosGenerations/dc066181-f9b6-4678-9f84-aa9ac8fd72d2.mp4"
+            },
+            "posterDataUrl": "/flowgen-api/projects/14/node-media/55b3e31f-261a-4594-9d07-6d23e246fdc9.jpg/file"
+          }
+        ]
+      }
+    },
+    {
+      "id": "node_0_1783481336277",
+      "type": "movNode",
+      "position": {
+        "x": 14037.5332699645,
+        "y": 13500.465668564622
+      },
+      "data": {
+        "aspectRatio": "16:9",
+        "numberOfImages": "1条",
+        "quality": "标准",
+        "duration": "10s",
+        "klingAudioSync": false,
+        "klingOmniTab": "multi",
+        "status": "idle",
+        "progress": 0,
+        "generationParams": {
+          "generatedAt": "2026-07-08T03:28:56.272Z",
+          "taskId": "1525620",
+          "prompt": "@图片2@图片4@图片3 三个角色打了起来，参考武侠动作",
+          "negativePrompt": "",
+          "numberOfImages": "1条",
+          "referenceImages": [
+            "https://aitop100app-1251510006.cos.ap-shanghai.myqcloud.com/openApi/212508/c60c5769-177e-45cc-abdd-8820e9713e99.png",
+            "https://aitop100app-1251510006.cos.ap-shanghai.myqcloud.com/openApi/212508/6284419a-0837-4450-82d6-1775879bda29.png",
+            "https://aitop100app-1251510006.cos.ap-shanghai.myqcloud.com/openApi/212508/49ff44af-470a-4e89-967b-c6b20f62a554.png",
+            "https://aitop100app-1251510006.cos.ap-shanghai.myqcloud.com/openApi/212508/56ee06de-7361-4383-b4f1-987c310177bd.png"
+          ],
+          "model": "可灵3.0 Omni",
+          "referenceImageLabels": [
+            "图片2",
+            "图片2",
+            "图片4",
+            "图片3"
+          ],
+          "quality": "标准",
+          "duration": "10s",
+          "aspectRatio": "16:9",
+          "klingAudioSync": false,
+          "firstFrameImage": "https://aitop100app-1251510006.cos.ap-shanghai.myqcloud.com/openApi/212508/c60c5769-177e-45cc-abdd-8820e9713e99.png",
+          "firstFrameImageUrl": "https://aitop100app-1251510006.cos.ap-shanghai.myqcloud.com/openApi/212508/c60c5769-177e-45cc-abdd-8820e9713e99.png",
+          "klingOmniTab": "multi",
+          "outputUrl": "https://aitop100app-1251510006.cos.ap-shanghai.myqcloud.com/videosGenerations/videosGenerations/dc066181-f9b6-4678-9f84-aa9ac8fd72d2.mp4"
+        },
+        "label": "Output Mov Node",
+        "imagePreview": "https://aitop100app-1251510006.cos.ap-shanghai.myqcloud.com/videosGenerations/videosGenerations/dc066181-f9b6-4678-9f84-aa9ac8fd72d2.mp4",
+        "selectedModel": "可灵3.0 Omni",
+        "generatedAt": "2026-07-08T03:28:56.272Z",
+        "imageName": "Video_323.mov",
+        "taskId": "1525620",
+        "videoPosterDataUrl": "/flowgen-api/projects/14/node-media/55b3e31f-261a-4594-9d07-6d23e246fdc9.jpg/file"
+      }
+    }
+  ],
+  "edges": [
+    {
+      "id": "enode_12_1783472899370-node_0_1783481336277-1783481336278-0",
+      "source": "node_12_1783472899370",
+      "target": "node_0_1783481336277",
+      "animated": true,
+      "style": {
+        "stroke": "#6366f1",
+        "strokeWidth": 2
+      }
+    }
+  ],
+  "exportedAt": "2026-07-08T03:29:11.969Z",
+  "nodeCount": 2,
+  "edgeCount": 1
+}

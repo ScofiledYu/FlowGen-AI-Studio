@@ -1,0 +1,244 @@
+{
+  "nodes": [
+    {
+      "id": "node_1_1783479017650",
+      "type": "processorNode",
+      "position": {
+        "x": 14505.94388921816,
+        "y": 11621.123750310731
+      },
+      "data": {
+        "label": "Input Picture Node",
+        "imagePreview": "https://aitop100app-1251510006.cos.ap-shanghai.myqcloud.com/openApi/212508/c99fa3f0-fe6a-4993-9b63-31ef1fb526fb.png",
+        "imageLocalRef": "flowgen-local:a69d57e4-7ac9-4e78-8757-e5996cab184e_14:node_1_1783479017650:main",
+        "selectedModel": "可灵3.0 Omni",
+        "imageName": "ahmetyuksek-curved-road-10072702_1920.jpg",
+        "panelMainSlotVisible": false,
+        "modelConfigs": {
+          "Nano Banana 2.0": {
+            "imagePreview": "blob:http://localhost:3001/6141337e-4706-4a57-af5a-befe9efc47a3",
+            "imageName": "ahmetyuksek-curved-road-10072702_1920.jpg",
+            "imageLocalRef": "flowgen-local:a69d57e4-7ac9-4e78-8757-e5996cab184e_14:node_1_1783479017650:main"
+          },
+          "可灵3.0 Omni": {
+            "prompt": "@图片1运行完成后来到@图片4的场景欣赏@图片4的女孩弹琴",
+            "negativePrompt": "",
+            "firstFrameImage": "https://aitop100app-1251510006.cos.ap-shanghai.myqcloud.com/openApi/212508/4357a077-d0c8-42c2-b4c4-6b00a8085603.png",
+            "firstFrameImageUrl": "https://aitop100app-1251510006.cos.ap-shanghai.myqcloud.com/openApi/212508/4357a077-d0c8-42c2-b4c4-6b00a8085603.png",
+            "quality": "标准",
+            "duration": "5s",
+            "numberOfImages": "1条",
+            "aspectRatio": "16:9",
+            "klingAudioSync": false,
+            "referenceImages": [],
+            "klingOmniMultiReferenceImages": [
+              "https://aitop100app-1251510006.cos.ap-shanghai.myqcloud.com/openApi/212508/c99fa3f0-fe6a-4993-9b63-31ef1fb526fb.png",
+              "blob:http://localhost:3001/bac8d71e-1c3b-415b-a35c-061e45f0e111",
+              "/flowgen-api/projects/14/assets/90bdcd95-b552-42ab-9562-255b8557d92d/file",
+              "https://aitop100app-1251510006.cos.ap-shanghai.myqcloud.com/openApi/212508/20e0605b-709d-497a-9428-c509f559214d.png"
+            ],
+            "klingOmniInstructionReferenceImages": [],
+            "klingOmniVideoReferenceImages": [],
+            "klingOmniMultiReferenceElementIds": [
+              null,
+              null,
+              null,
+              null
+            ],
+            "klingOmniMultiPrompt": "@图片1运行完成后来到@图片4的场景欣赏@图片4的女孩弹琴",
+            "klingOmniMultiNegativePrompt": "",
+            "klingOmniInstructionPrompt": "",
+            "klingOmniInstructionNegativePrompt": "",
+            "klingOmniVideoPrompt": "",
+            "klingOmniVideoNegativePrompt": "",
+            "klingOmniFramesPrompt": "",
+            "klingOmniFramesNegativePrompt": "",
+            "klingOmniTab": "multi",
+            "klingOmniTabConfigs": {}
+          }
+        },
+        "prompt": "@图片1运行完成后来到@图片4的场景欣赏@图片4的女孩弹琴",
+        "negativePrompt": "",
+        "firstFrameImage": "https://aitop100app-1251510006.cos.ap-shanghai.myqcloud.com/openApi/212508/4357a077-d0c8-42c2-b4c4-6b00a8085603.png",
+        "firstFrameImageUrl": "https://aitop100app-1251510006.cos.ap-shanghai.myqcloud.com/openApi/212508/4357a077-d0c8-42c2-b4c4-6b00a8085603.png",
+        "quality": "标准",
+        "duration": "5s",
+        "numberOfImages": "1条",
+        "aspectRatio": "16:9",
+        "klingAudioSync": false,
+        "klingOmniTab": "multi",
+        "klingOmniMultiPrompt": "@图片1运行完成后来到@图片4的场景欣赏@图片4的女孩弹琴",
+        "klingOmniMultiNegativePrompt": "",
+        "klingOmniInstructionPrompt": "",
+        "klingOmniInstructionNegativePrompt": "",
+        "klingOmniVideoPrompt": "",
+        "klingOmniVideoNegativePrompt": "",
+        "klingOmniFramesPrompt": "",
+        "klingOmniFramesNegativePrompt": "",
+        "klingOmniMultiReferenceImages": [
+          "https://aitop100app-1251510006.cos.ap-shanghai.myqcloud.com/openApi/212508/c99fa3f0-fe6a-4993-9b63-31ef1fb526fb.png",
+          "blob:http://localhost:3001/bac8d71e-1c3b-415b-a35c-061e45f0e111",
+          "/flowgen-api/projects/14/assets/90bdcd95-b552-42ab-9562-255b8557d92d/file",
+          "https://aitop100app-1251510006.cos.ap-shanghai.myqcloud.com/openApi/212508/20e0605b-709d-497a-9428-c509f559214d.png"
+        ],
+        "klingOmniInstructionReferenceImages": [],
+        "klingOmniVideoReferenceImages": [],
+        "klingOmniMultiReferenceElementIds": [
+          null,
+          null,
+          null,
+          null
+        ],
+        "referenceImages": [],
+        "referenceImageLabels": [
+          "图片1",
+          "图片2",
+          "大牙-有牙",
+          "图片4"
+        ],
+        "referenceImageLocalRefs": [],
+        "klingOmniMultiReferenceLocalRefs": [
+          "flowgen-local:a69d57e4-7ac9-4e78-8757-e5996cab184e_14:node_1_1783479017650:ref:可灵30_Omni_multi:0",
+          "flowgen-local:a69d57e4-7ac9-4e78-8757-e5996cab184e_14:node_1_1783479017650:ref:可灵30_Omni_multi:1",
+          "",
+          "flowgen-local:a69d57e4-7ac9-4e78-8757-e5996cab184e_14:node_1_1783479017650:ref:可灵30_Omni_multi:3"
+        ],
+        "klingOmniInstructionReferenceLocalRefs": [],
+        "klingOmniVideoReferenceLocalRefs": [],
+        "klingOmniTabConfigs": {},
+        "status": "completed",
+        "progress": 100,
+        "taskId": "1524679",
+        "generationParams": {
+          "taskId": "1524679",
+          "generatedAt": "2026-07-08T02:53:42.177Z",
+          "prompt": "@图片1运行完成后来到@图片4的场景欣赏@图片4的女孩弹琴",
+          "negativePrompt": "",
+          "numberOfImages": "1条",
+          "referenceImages": [
+            "https://aitop100app-1251510006.cos.ap-shanghai.myqcloud.com/openApi/212508/4357a077-d0c8-42c2-b4c4-6b00a8085603.png",
+            "https://aitop100app-1251510006.cos.ap-shanghai.myqcloud.com/openApi/212508/c99fa3f0-fe6a-4993-9b63-31ef1fb526fb.png",
+            "https://aitop100app-1251510006.cos.ap-shanghai.myqcloud.com/openApi/212508/20e0605b-709d-497a-9428-c509f559214d.png"
+          ],
+          "model": "可灵3.0 Omni",
+          "referenceImageLabels": [
+            "图片1",
+            "图片4",
+            "图片3"
+          ],
+          "quality": "标准",
+          "duration": "5s",
+          "aspectRatio": "16:9",
+          "klingAudioSync": false,
+          "firstFrameImage": "https://aitop100app-1251510006.cos.ap-shanghai.myqcloud.com/openApi/212508/4357a077-d0c8-42c2-b4c4-6b00a8085603.png",
+          "firstFrameImageUrl": "https://aitop100app-1251510006.cos.ap-shanghai.myqcloud.com/openApi/212508/4357a077-d0c8-42c2-b4c4-6b00a8085603.png",
+          "klingOmniTab": "multi",
+          "outputUrl": "https://aitop100app-1251510006.cos.ap-shanghai.myqcloud.com/videosGenerations/videosGenerations/2698bc90-94a4-45f7-a966-a4c8e988b3d7.mp4"
+        },
+        "generatedAt": "2026-07-08T02:53:42.177Z",
+        "generatedThumbnails": [
+          {
+            "id": "node_2_1783479222181",
+            "url": "https://aitop100app-1251510006.cos.ap-shanghai.myqcloud.com/videosGenerations/videosGenerations/2698bc90-94a4-45f7-a966-a4c8e988b3d7.mp4",
+            "type": "video",
+            "nodeId": "node_2_1783479222181",
+            "name": "Video_209.mov",
+            "generationParams": {
+              "generatedAt": "2026-07-08T02:53:42.177Z",
+              "taskId": "1524679",
+              "prompt": "@图片1运行完成后来到@图片4的场景欣赏@图片4的女孩弹琴",
+              "negativePrompt": "",
+              "numberOfImages": "1条",
+              "referenceImages": [
+                "https://aitop100app-1251510006.cos.ap-shanghai.myqcloud.com/openApi/212508/4357a077-d0c8-42c2-b4c4-6b00a8085603.png",
+                "https://aitop100app-1251510006.cos.ap-shanghai.myqcloud.com/openApi/212508/c99fa3f0-fe6a-4993-9b63-31ef1fb526fb.png",
+                "https://aitop100app-1251510006.cos.ap-shanghai.myqcloud.com/openApi/212508/20e0605b-709d-497a-9428-c509f559214d.png"
+              ],
+              "model": "可灵3.0 Omni",
+              "referenceImageLabels": [
+                "图片1",
+                "图片4",
+                "图片3"
+              ],
+              "quality": "标准",
+              "duration": "5s",
+              "aspectRatio": "16:9",
+              "klingAudioSync": false,
+              "firstFrameImage": "https://aitop100app-1251510006.cos.ap-shanghai.myqcloud.com/openApi/212508/4357a077-d0c8-42c2-b4c4-6b00a8085603.png",
+              "firstFrameImageUrl": "https://aitop100app-1251510006.cos.ap-shanghai.myqcloud.com/openApi/212508/4357a077-d0c8-42c2-b4c4-6b00a8085603.png",
+              "klingOmniTab": "multi",
+              "outputUrl": "https://aitop100app-1251510006.cos.ap-shanghai.myqcloud.com/videosGenerations/videosGenerations/2698bc90-94a4-45f7-a966-a4c8e988b3d7.mp4"
+            },
+            "posterDataUrl": "/flowgen-api/projects/14/node-media/46390c7e-d4f6-4915-90cd-e45958f7ae30.jpg/file"
+          }
+        ]
+      }
+    },
+    {
+      "id": "node_2_1783479222181",
+      "type": "movNode",
+      "position": {
+        "x": 14855.94388921816,
+        "y": 11621.123750310731
+      },
+      "data": {
+        "aspectRatio": "16:9",
+        "numberOfImages": "1条",
+        "quality": "标准",
+        "duration": "5s",
+        "klingAudioSync": false,
+        "klingOmniTab": "multi",
+        "status": "idle",
+        "progress": 0,
+        "generationParams": {
+          "generatedAt": "2026-07-08T02:53:42.177Z",
+          "taskId": "1524679",
+          "prompt": "@图片1运行完成后来到@图片4的场景欣赏@图片4的女孩弹琴",
+          "negativePrompt": "",
+          "numberOfImages": "1条",
+          "referenceImages": [
+            "https://aitop100app-1251510006.cos.ap-shanghai.myqcloud.com/openApi/212508/4357a077-d0c8-42c2-b4c4-6b00a8085603.png",
+            "https://aitop100app-1251510006.cos.ap-shanghai.myqcloud.com/openApi/212508/c99fa3f0-fe6a-4993-9b63-31ef1fb526fb.png",
+            "https://aitop100app-1251510006.cos.ap-shanghai.myqcloud.com/openApi/212508/20e0605b-709d-497a-9428-c509f559214d.png"
+          ],
+          "model": "可灵3.0 Omni",
+          "referenceImageLabels": [
+            "图片1",
+            "图片4",
+            "图片3"
+          ],
+          "quality": "标准",
+          "duration": "5s",
+          "aspectRatio": "16:9",
+          "klingAudioSync": false,
+          "firstFrameImage": "https://aitop100app-1251510006.cos.ap-shanghai.myqcloud.com/openApi/212508/4357a077-d0c8-42c2-b4c4-6b00a8085603.png",
+          "firstFrameImageUrl": "https://aitop100app-1251510006.cos.ap-shanghai.myqcloud.com/openApi/212508/4357a077-d0c8-42c2-b4c4-6b00a8085603.png",
+          "klingOmniTab": "multi",
+          "outputUrl": "https://aitop100app-1251510006.cos.ap-shanghai.myqcloud.com/videosGenerations/videosGenerations/2698bc90-94a4-45f7-a966-a4c8e988b3d7.mp4"
+        },
+        "label": "Output Mov Node",
+        "imagePreview": "https://aitop100app-1251510006.cos.ap-shanghai.myqcloud.com/videosGenerations/videosGenerations/2698bc90-94a4-45f7-a966-a4c8e988b3d7.mp4",
+        "selectedModel": "可灵3.0 Omni",
+        "generatedAt": "2026-07-08T02:53:42.177Z",
+        "imageName": "Video_209.mov",
+        "taskId": "1524679",
+        "videoPosterDataUrl": "/flowgen-api/projects/14/node-media/46390c7e-d4f6-4915-90cd-e45958f7ae30.jpg/file"
+      }
+    }
+  ],
+  "edges": [
+    {
+      "id": "enode_1_1783479017650-node_2_1783479222181-1783479222181-0",
+      "source": "node_1_1783479017650",
+      "target": "node_2_1783479222181",
+      "animated": true,
+      "style": {
+        "stroke": "#6366f1",
+        "strokeWidth": 2
+      }
+    }
+  ],
+  "exportedAt": "2026-07-08T02:54:12.169Z",
+  "nodeCount": 2,
+  "edgeCount": 1
+}

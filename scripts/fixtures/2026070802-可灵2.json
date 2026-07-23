@@ -1,0 +1,244 @@
+{
+  "nodes": [
+    {
+      "id": "node_7_1783472899318",
+      "type": "processorNode",
+      "position": {
+        "x": 13765.702930063508,
+        "y": 13004.764206022068
+      },
+      "data": {
+        "label": "Input Picture Node",
+        "imageName": "miller_eszter-lynx-7253623_1920.jpg",
+        "imageLocalRef": "flowgen-local:a69d57e4-7ac9-4e78-8757-e5996cab184e_14:node_7_1783472899318:main",
+        "selectedModel": "可灵3.0 Omni",
+        "imagePreview": "https://aitop100app-1251510006.cos.ap-shanghai.myqcloud.com/openApi/212508/a06d168e-aba2-46e9-ae71-fe9aadb9d436.png",
+        "panelMainSlotVisible": false,
+        "modelConfigs": {
+          "Nano Banana 2.0": {
+            "imagePreview": "blob:http://localhost:3001/3d6b2ef4-9942-47c2-8c92-73ef8c68cb79",
+            "imageName": "miller_eszter-lynx-7253623_1920.jpg",
+            "imageLocalRef": "flowgen-local:a69d57e4-7ac9-4e78-8757-e5996cab184e_14:node_7_1783472899318:main"
+          },
+          "可灵3.0 Omni": {
+            "prompt": "@图片2运动后去换衣服换成@图片4，视频中展现她换衣服的全程",
+            "negativePrompt": "",
+            "firstFrameImage": "https://aitop100app-1251510006.cos.ap-shanghai.myqcloud.com/openApi/212508/13ad4c3f-51c1-4e96-968e-60cd93bffda1.png",
+            "firstFrameImageUrl": "https://aitop100app-1251510006.cos.ap-shanghai.myqcloud.com/openApi/212508/13ad4c3f-51c1-4e96-968e-60cd93bffda1.png",
+            "quality": "标准",
+            "duration": "5s",
+            "numberOfImages": "1条",
+            "aspectRatio": "16:9",
+            "klingAudioSync": false,
+            "referenceImages": [],
+            "klingOmniMultiReferenceImages": [
+              "blob:http://localhost:3001/c3b1ee6a-d750-4d10-b161-5b66b9bccdc2",
+              "https://aitop100app-1251510006.cos.ap-shanghai.myqcloud.com/openApi/212508/a06d168e-aba2-46e9-ae71-fe9aadb9d436.png",
+              "/flowgen-api/projects/14/assets/90bdcd95-b552-42ab-9562-255b8557d92d/file",
+              "https://aitop100app-1251510006.cos.ap-shanghai.myqcloud.com/openApi/212508/da28f030-6703-4c8a-924c-e6441d37754d.png"
+            ],
+            "klingOmniInstructionReferenceImages": [],
+            "klingOmniVideoReferenceImages": [],
+            "klingOmniMultiReferenceElementIds": [
+              null,
+              null,
+              null,
+              null
+            ],
+            "klingOmniMultiPrompt": "@图片2运动后去换衣服换成@图片4，视频中展现她换衣服的全程",
+            "klingOmniMultiNegativePrompt": "",
+            "klingOmniInstructionPrompt": "",
+            "klingOmniInstructionNegativePrompt": "",
+            "klingOmniVideoPrompt": "",
+            "klingOmniVideoNegativePrompt": "",
+            "klingOmniFramesPrompt": "",
+            "klingOmniFramesNegativePrompt": "",
+            "klingOmniTab": "multi",
+            "klingOmniTabConfigs": {}
+          }
+        },
+        "prompt": "@图片2运动后去换衣服换成@图片4，视频中展现她换衣服的全程",
+        "negativePrompt": "",
+        "firstFrameImage": "https://aitop100app-1251510006.cos.ap-shanghai.myqcloud.com/openApi/212508/13ad4c3f-51c1-4e96-968e-60cd93bffda1.png",
+        "firstFrameImageUrl": "https://aitop100app-1251510006.cos.ap-shanghai.myqcloud.com/openApi/212508/13ad4c3f-51c1-4e96-968e-60cd93bffda1.png",
+        "quality": "标准",
+        "duration": "5s",
+        "numberOfImages": "1条",
+        "aspectRatio": "16:9",
+        "klingAudioSync": false,
+        "klingOmniTab": "multi",
+        "klingOmniMultiPrompt": "@图片2运动后去换衣服换成@图片4，视频中展现她换衣服的全程",
+        "klingOmniMultiNegativePrompt": "",
+        "klingOmniInstructionPrompt": "",
+        "klingOmniInstructionNegativePrompt": "",
+        "klingOmniVideoPrompt": "",
+        "klingOmniVideoNegativePrompt": "",
+        "klingOmniFramesPrompt": "",
+        "klingOmniFramesNegativePrompt": "",
+        "klingOmniMultiReferenceImages": [
+          "blob:http://localhost:3001/c3b1ee6a-d750-4d10-b161-5b66b9bccdc2",
+          "https://aitop100app-1251510006.cos.ap-shanghai.myqcloud.com/openApi/212508/a06d168e-aba2-46e9-ae71-fe9aadb9d436.png",
+          "/flowgen-api/projects/14/assets/90bdcd95-b552-42ab-9562-255b8557d92d/file",
+          "https://aitop100app-1251510006.cos.ap-shanghai.myqcloud.com/openApi/212508/da28f030-6703-4c8a-924c-e6441d37754d.png"
+        ],
+        "klingOmniInstructionReferenceImages": [],
+        "klingOmniVideoReferenceImages": [],
+        "klingOmniMultiReferenceElementIds": [
+          null,
+          null,
+          null,
+          null
+        ],
+        "referenceImages": [],
+        "referenceImageLabels": [
+          "图片1",
+          "图片2",
+          "大牙-有牙",
+          "图片4"
+        ],
+        "referenceImageLocalRefs": [],
+        "klingOmniMultiReferenceLocalRefs": [
+          "flowgen-local:a69d57e4-7ac9-4e78-8757-e5996cab184e_14:node_7_1783472899318:ref:可灵30_Omni_multi:0",
+          "flowgen-local:a69d57e4-7ac9-4e78-8757-e5996cab184e_14:node_7_1783472899318:ref:可灵30_Omni_multi:1",
+          "",
+          "flowgen-local:a69d57e4-7ac9-4e78-8757-e5996cab184e_14:node_7_1783472899318:ref:可灵30_Omni_multi:3"
+        ],
+        "klingOmniInstructionReferenceLocalRefs": [],
+        "klingOmniVideoReferenceLocalRefs": [],
+        "klingOmniTabConfigs": {},
+        "status": "completed",
+        "progress": 100,
+        "taskId": "1525122",
+        "generationParams": {
+          "taskId": "1525122",
+          "generatedAt": "2026-07-08T03:09:50.355Z",
+          "prompt": "@图片2运动后去换衣服换成@图片4，视频中展现她换衣服的全程",
+          "negativePrompt": "",
+          "numberOfImages": "1条",
+          "referenceImages": [
+            "https://aitop100app-1251510006.cos.ap-shanghai.myqcloud.com/openApi/212508/13ad4c3f-51c1-4e96-968e-60cd93bffda1.png",
+            "https://aitop100app-1251510006.cos.ap-shanghai.myqcloud.com/openApi/212508/a06d168e-aba2-46e9-ae71-fe9aadb9d436.png",
+            "https://aitop100app-1251510006.cos.ap-shanghai.myqcloud.com/openApi/212508/da28f030-6703-4c8a-924c-e6441d37754d.png"
+          ],
+          "model": "可灵3.0 Omni",
+          "referenceImageLabels": [
+            "图片2",
+            "图片2",
+            "图片4"
+          ],
+          "quality": "标准",
+          "duration": "5s",
+          "aspectRatio": "16:9",
+          "klingAudioSync": false,
+          "firstFrameImage": "https://aitop100app-1251510006.cos.ap-shanghai.myqcloud.com/openApi/212508/13ad4c3f-51c1-4e96-968e-60cd93bffda1.png",
+          "firstFrameImageUrl": "https://aitop100app-1251510006.cos.ap-shanghai.myqcloud.com/openApi/212508/13ad4c3f-51c1-4e96-968e-60cd93bffda1.png",
+          "klingOmniTab": "multi",
+          "outputUrl": "https://aitop100app-1251510006.cos.ap-shanghai.myqcloud.com/videosGenerations/videosGenerations/4d797c16-b822-4f35-a18c-23a03e213b07.mp4"
+        },
+        "generatedAt": "2026-07-08T03:09:50.355Z",
+        "generatedThumbnails": [
+          {
+            "id": "node_0_1783480190360",
+            "url": "https://aitop100app-1251510006.cos.ap-shanghai.myqcloud.com/videosGenerations/videosGenerations/4d797c16-b822-4f35-a18c-23a03e213b07.mp4",
+            "type": "video",
+            "nodeId": "node_0_1783480190360",
+            "name": "Video_901.mov",
+            "generationParams": {
+              "generatedAt": "2026-07-08T03:09:50.355Z",
+              "taskId": "1525122",
+              "prompt": "@图片2运动后去换衣服换成@图片4，视频中展现她换衣服的全程",
+              "negativePrompt": "",
+              "numberOfImages": "1条",
+              "referenceImages": [
+                "https://aitop100app-1251510006.cos.ap-shanghai.myqcloud.com/openApi/212508/13ad4c3f-51c1-4e96-968e-60cd93bffda1.png",
+                "https://aitop100app-1251510006.cos.ap-shanghai.myqcloud.com/openApi/212508/a06d168e-aba2-46e9-ae71-fe9aadb9d436.png",
+                "https://aitop100app-1251510006.cos.ap-shanghai.myqcloud.com/openApi/212508/da28f030-6703-4c8a-924c-e6441d37754d.png"
+              ],
+              "model": "可灵3.0 Omni",
+              "referenceImageLabels": [
+                "图片2",
+                "图片2",
+                "图片4"
+              ],
+              "quality": "标准",
+              "duration": "5s",
+              "aspectRatio": "16:9",
+              "klingAudioSync": false,
+              "firstFrameImage": "https://aitop100app-1251510006.cos.ap-shanghai.myqcloud.com/openApi/212508/13ad4c3f-51c1-4e96-968e-60cd93bffda1.png",
+              "firstFrameImageUrl": "https://aitop100app-1251510006.cos.ap-shanghai.myqcloud.com/openApi/212508/13ad4c3f-51c1-4e96-968e-60cd93bffda1.png",
+              "klingOmniTab": "multi",
+              "outputUrl": "https://aitop100app-1251510006.cos.ap-shanghai.myqcloud.com/videosGenerations/videosGenerations/4d797c16-b822-4f35-a18c-23a03e213b07.mp4"
+            },
+            "posterDataUrl": "/flowgen-api/projects/14/node-media/b06c7ed3-6caf-4f89-8ea2-f099b6aa4218.jpg/file"
+          }
+        ]
+      }
+    },
+    {
+      "id": "node_0_1783480190360",
+      "type": "movNode",
+      "position": {
+        "x": 14115.702930063508,
+        "y": 13004.764206022068
+      },
+      "data": {
+        "aspectRatio": "16:9",
+        "numberOfImages": "1条",
+        "quality": "标准",
+        "duration": "5s",
+        "klingAudioSync": false,
+        "klingOmniTab": "multi",
+        "status": "idle",
+        "progress": 0,
+        "generationParams": {
+          "generatedAt": "2026-07-08T03:09:50.355Z",
+          "taskId": "1525122",
+          "prompt": "@图片2运动后去换衣服换成@图片4，视频中展现她换衣服的全程",
+          "negativePrompt": "",
+          "numberOfImages": "1条",
+          "referenceImages": [
+            "https://aitop100app-1251510006.cos.ap-shanghai.myqcloud.com/openApi/212508/13ad4c3f-51c1-4e96-968e-60cd93bffda1.png",
+            "https://aitop100app-1251510006.cos.ap-shanghai.myqcloud.com/openApi/212508/a06d168e-aba2-46e9-ae71-fe9aadb9d436.png",
+            "https://aitop100app-1251510006.cos.ap-shanghai.myqcloud.com/openApi/212508/da28f030-6703-4c8a-924c-e6441d37754d.png"
+          ],
+          "model": "可灵3.0 Omni",
+          "referenceImageLabels": [
+            "图片2",
+            "图片2",
+            "图片4"
+          ],
+          "quality": "标准",
+          "duration": "5s",
+          "aspectRatio": "16:9",
+          "klingAudioSync": false,
+          "firstFrameImage": "https://aitop100app-1251510006.cos.ap-shanghai.myqcloud.com/openApi/212508/13ad4c3f-51c1-4e96-968e-60cd93bffda1.png",
+          "firstFrameImageUrl": "https://aitop100app-1251510006.cos.ap-shanghai.myqcloud.com/openApi/212508/13ad4c3f-51c1-4e96-968e-60cd93bffda1.png",
+          "klingOmniTab": "multi",
+          "outputUrl": "https://aitop100app-1251510006.cos.ap-shanghai.myqcloud.com/videosGenerations/videosGenerations/4d797c16-b822-4f35-a18c-23a03e213b07.mp4"
+        },
+        "label": "Output Mov Node",
+        "imagePreview": "https://aitop100app-1251510006.cos.ap-shanghai.myqcloud.com/videosGenerations/videosGenerations/4d797c16-b822-4f35-a18c-23a03e213b07.mp4",
+        "selectedModel": "可灵3.0 Omni",
+        "generatedAt": "2026-07-08T03:09:50.355Z",
+        "imageName": "Video_901.mov",
+        "taskId": "1525122",
+        "videoPosterDataUrl": "/flowgen-api/projects/14/node-media/b06c7ed3-6caf-4f89-8ea2-f099b6aa4218.jpg/file"
+      }
+    }
+  ],
+  "edges": [
+    {
+      "id": "enode_7_1783472899318-node_0_1783480190360-1783480190360-0",
+      "source": "node_7_1783472899318",
+      "target": "node_0_1783480190360",
+      "animated": true,
+      "style": {
+        "stroke": "#6366f1",
+        "strokeWidth": 2
+      }
+    }
+  ],
+  "exportedAt": "2026-07-08T03:10:21.777Z",
+  "nodeCount": 2,
+  "edgeCount": 1
+}

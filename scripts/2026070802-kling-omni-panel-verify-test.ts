@@ -9,6 +9,7 @@
  */
 import fs from 'fs';
 import type { NodeData } from '../types.ts';
+import { resolveFixtureFile } from './fixturePath.ts';
 import {
   buildPanelReferenceDisplayEntries,
   filterPanelReferenceDisplayEntriesExcludingMainPreview,
@@ -152,7 +153,8 @@ function simulateInstructionVideoTabAfterRun(input: {
   } as NodeData;
 }
 
-const jsonPath = process.argv[2] || 'd:/json/2026070802-可灵.json';
+const jsonPath =
+  process.argv[2] || resolveFixtureFile('2026070802-可灵.json', 'd:/json/2026070802-可灵.json');
 const raw = JSON.parse(fs.readFileSync(jsonPath, 'utf8'));
 const exported = raw.nodes[0].data as NodeData;
 const gp = exported.generationParams!;
@@ -324,7 +326,7 @@ ok(
   typeof exported.klingOmniFramesPrompt === 'string'
 );
 
-const json2Path = 'd:/json/2026070802-可灵2.json';
+const json2Path = resolveFixtureFile('2026070802-可灵2.json', 'd:/json/2026070802-可灵2.json');
 if (fs.existsSync(json2Path)) {
   console.log('\n=== 2026070802-可灵2.json：主图备份 + MOV Details 仅@ ===\n');
   const raw2 = JSON.parse(fs.readFileSync(json2Path, 'utf8'));
@@ -388,7 +390,7 @@ if (fs.existsSync(json2Path)) {
   ok('可灵2 MOV Details 不含未@ 图片1/大牙', !movDetails.referenceImageDetailItems.some((i) => i.label === '图片1' || i.label === '大牙-有牙'));
 }
 
-const json3Path = 'd:/json/2026070802-可灵3.json';
+const json3Path = resolveFixtureFile('2026070802-可灵3.json', 'd:/json/2026070802-可灵3.json');
 if (fs.existsSync(json3Path)) {
   console.log('\n=== 2026070802-可灵3.json：@图片2/3/4 槽位解析 + 面板 5 槽 ===\n');
   const raw3 = JSON.parse(fs.readFileSync(json3Path, 'utf8'));
