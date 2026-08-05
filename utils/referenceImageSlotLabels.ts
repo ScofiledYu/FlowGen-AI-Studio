@@ -443,6 +443,22 @@ export function resolvePanelReferenceSlotDisplayUrl(
   return u;
 }
 
+/**
+ * 按面板标签查找命名资产库 URL。
+ * 用于 Omni 视频/指令参考格等场景：当标签是「鸱吻」等命名资产时，
+ * 直接返回资产库地址做显示，不依赖 projectAssetPairKey（COS 地址无 project/asset id）。
+ * 泛称标签（图片1 / 主图 等）返回 undefined。
+ */
+export function resolveNamedAssetUrlByLabel(
+  label: string | undefined,
+  projectAssets?: ProjectAssetLabelRow[]
+): string | undefined {
+  const cap = label?.trim();
+  if (!cap || !projectAssets?.length || isGenericPanelRefLabel(cap)) return undefined;
+  const row = projectAssets.find((a) => a.slug === cap || a.name.trim() === cap);
+  return row?.url?.trim() || undefined;
+}
+
 /** 虚拟补槽（slotIndex 超出 referenceImages）底栏用 URL/资产库解析名，避免落成「图片1」 */
 export function resolvePanelReferenceDisplayCaption(
   slotIndex: number,

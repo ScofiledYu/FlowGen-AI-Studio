@@ -2,6 +2,19 @@
 
 export type AitopTimeoutFamily = 'gemini' | 'claude';
 
+export type AitopModelCapabilities = {
+  /** 是否支持联网搜索 */
+  webSearch: boolean;
+  /** 是否支持思考模式（开启=深思考） */
+  thinking: boolean;
+  /** 是否支持视觉输入 */
+  vision: boolean;
+  /** 模型最大上下文长度（按 token 估算） */
+  maxTokens: number;
+  /** 是否可作为 fallback 目标 */
+  supportsFallback: boolean;
+};
+
 export type AitopChatModelDef = {
   uiId: string;
   name: string;
@@ -12,6 +25,8 @@ export type AitopChatModelDef = {
   timeoutFamily: AitopTimeoutFamily;
   /** SSE 错误时附加 Gemini 不可用提示 */
   useGeminiUnavailableHint?: boolean;
+  /** 模型能力矩阵，用于 UI 开关、fallback 路由、参数透传 */
+  capabilities: AitopModelCapabilities;
 };
 
 export const AITOP_LLM_API = {
@@ -34,6 +49,7 @@ export const AITOP_CHAT_MODELS: readonly AitopChatModelDef[] = [
     logSlug: 'gemini',
     timeoutFamily: 'gemini',
     useGeminiUnavailableHint: true,
+    capabilities: { webSearch: true, thinking: true, vision: false, maxTokens: 128000, supportsFallback: true },
   },
   {
     uiId: 'claude-4.5',
@@ -43,6 +59,8 @@ export const AITOP_CHAT_MODELS: readonly AitopChatModelDef[] = [
     displayLabel: 'Claude 4.6',
     logSlug: 'claude',
     timeoutFamily: 'claude',
+    // Claude 4.6: AiTop 上游对 thinking=true 支持不稳定（同日多次测试出现 10001「出了一些问题未能回复」，见 skill.md §10.65），暂禁用
+    capabilities: { webSearch: true, thinking: false, vision: false, maxTokens: 200000, supportsFallback: true },
   },
   {
     uiId: 'deepseek-v4-pro',
@@ -52,6 +70,7 @@ export const AITOP_CHAT_MODELS: readonly AitopChatModelDef[] = [
     displayLabel: 'DeepSeek V4 Pro',
     logSlug: 'deepseek',
     timeoutFamily: 'claude',
+    capabilities: { webSearch: true, thinking: true, vision: false, maxTokens: 128000, supportsFallback: true },
   },
   {
     uiId: 'doubao-seed-2.0',
@@ -61,6 +80,7 @@ export const AITOP_CHAT_MODELS: readonly AitopChatModelDef[] = [
     displayLabel: 'DouBao Seed 2.0',
     logSlug: 'doubao',
     timeoutFamily: 'claude',
+    capabilities: { webSearch: true, thinking: true, vision: false, maxTokens: 128000, supportsFallback: true },
   },
 ] as const;
 
@@ -82,6 +102,20 @@ export function isAitopLlmUiModel(uiId: string): boolean {
 
 export function isQwenChatUiModel(uiId: string): boolean {
   return uiId === QWEN_CHAT_UI_ID;
+}
+
+/** 获取模型能力矩阵（Qwen 作为未在 AITOP_CHAT_MODELS 中注册的兜底模型，能力固定） */
+export function getAitopModelCapabilities(uiId: string): AitopModelCapabilities {
+  if (isQwenChatUiModel(uiId)) {
+    return { webSearch: false, thinking: false, vision: false, maxTokens: 128000, supportsFallback: false };
+  }
+  return getAitopChatModel(uiId)?.capabilities || {
+    webSearch: true,
+    thinking: true,
+    vision: false,
+    maxTokens: 128000,
+    supportsFallback: true,
+  };
 }
 
 export function normalizeChatModelId(modelId: string): string {

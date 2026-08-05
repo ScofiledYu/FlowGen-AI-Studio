@@ -21,6 +21,23 @@ coverage/
 tricky-live-results.txt
 test-drag-pixel.png
 
+# 临时调试产物（勿提交）
+.dbg/
+_tmp_*
+build-output*.txt
+server-output*.txt
+debug-*.md
+scripts/__*
+scripts/_diff-*
+scripts/_tmp-*
+scripts/check-*.mjs
+scripts/fix-zombie-*.mjs
+scripts/inspect-*.ts
+temp_*
+test-*.txt
+test-mj-imagine.ts
+ws14*.json
+
 # ChatPanel 备份/草稿
 components/ChatPanel.tsx.bak
 components/ChatPanel.tsx.working

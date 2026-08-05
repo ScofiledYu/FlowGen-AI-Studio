@@ -9,6 +9,7 @@ export const FLOWGEN_CANVAS_MIDDLE_DRAG_END = 'flowgen:canvas-middle-drag-end';
 export type FlowgenMediaUrlDropZone =
   | 'node-main'
   | 'reference'
+  | 'mj-reference'
   | 'seedance-reference'
   | 'first-frame'
   | 'last-frame'
@@ -104,6 +105,7 @@ export function buildAssetItemsFromMediaDrop(d: FlowgenMediaUrlDropDetail): Flow
 const ALLOWED_DROP_ZONES: FlowgenMediaUrlDropZone[] = [
   'node-main',
   'reference',
+  'mj-reference',
   'seedance-reference',
   'first-frame',
   'last-frame',
@@ -114,6 +116,7 @@ const ALLOWED_DROP_ZONES: FlowgenMediaUrlDropZone[] = [
 /** 松手时优先匹配侧栏参考区，避免误命中下层画布 node-main / canvas-pane */
 const DROP_ZONE_HIT_PRIORITY: FlowgenMediaUrlDropZone[] = [
   'reference',
+  'mj-reference',
   'seedance-reference',
   'first-frame',
   'last-frame',

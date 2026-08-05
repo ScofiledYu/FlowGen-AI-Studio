@@ -3,7 +3,7 @@ import {
   buildStillImageOutputSpawnPatch,
   resolveSpawnOutputDefaultModel,
 } from '../../../utils/spawnOutputNode';
-import { MODEL_IMAGE_2, MODEL_NANO_BANANA_2 } from '../../../types';
+import { MODEL_IMAGE_2, MODEL_MIDJOURNEY, MODEL_NANO_BANANA_2 } from '../../../types';
 
 describe('spawnOutputNode', () => {
   it('Banana/image2 OUTPUT 继承源模型', () => {
@@ -25,6 +25,15 @@ describe('spawnOutputNode', () => {
         currentModelName: 'seedance2.0 (急速版)',
       })
     ).toBe('可灵 2.5 Turbo');
+  });
+
+  it('MidJourney OUTPUT 默认 seedance2.0', () => {
+    expect(
+      resolveSpawnOutputDefaultModel({
+        isVideoModel: false,
+        currentModelName: MODEL_MIDJOURNEY,
+      })
+    ).toBe('seedance2.0 (高质量版)');
   });
 
   it('视频 OUTPUT 继承运行模型', () => {

@@ -17,6 +17,7 @@ import {
   clearRunRecoveryHints,
   clearStaleRunTaskBeforeFreshRun,
   nodeHasDownstreamErrorResultForTaskIds,
+  nodeIsUploadPhaseRefreshPending,
   prepareNodesAfterWorkspaceLoad,
   shouldTriggerAiTopRunRecovery,
 } from '../utils/runRecovery';
@@ -272,6 +273,27 @@ export function useAiTopRunRecovery(params: UseAiTopRunRecoveryParams): void {
     const graphEdges = getEdges();
     for (const n of graphNodes) {
       if (isNodeLiveRunActive?.(n.id)) continue;
+      // §10.77 上传阶段刷新（无 taskId + runRecoveryPending）：prepareNodesAfterWorkspaceLoad
+      // 已恢复 running 进度条 UI；此处派发事件让 FlowEditor.handleNodeRun 重新跑完整流程。
+      // 参考 ComfyUI 模式：上传阶段中断=从头重启生成（不轮询 AiTop，因任务尚未创建）。
+      if (nodeIsUploadPhaseRefreshPending(n)) {
+        if (recoveringRef.current.has(n.id)) continue;
+        recoveringRef.current.add(n.id);
+        // 延迟一帧派发，确保 setNodes（prepare 阶段写入 running）已落地，避免重入。
+        // 派发后立即清 recoveringRef：handleNodeRun 会接管节点状态，
+        // 若失败节点会回落 idle/error + 清 runRecovery*，shouldTriggerAiTopRunRecovery 自然 false。
+        const resumeNodeId = n.id;
+        setTimeout(() => {
+          try {
+            window.dispatchEvent(
+              new CustomEvent('flowgen:auto-resume-run', { detail: { nodeId: resumeNodeId } })
+            );
+          } finally {
+            recoveringRef.current.delete(resumeNodeId);
+          }
+        }, 0);
+        continue;
+      }
       if (!shouldTriggerAiTopRunRecovery(n, graphNodes, graphEdges)) continue;
       if (recoveringRef.current.has(n.id)) continue;
       void recoverOneNode(n);

@@ -4,6 +4,7 @@ import {
   MODEL_NANO_BANANA_2,
   NodeType,
   isImage2Model,
+  isMidJourneyFamilyModel,
   isNanoBanana2Model,
 } from '../types';
 import {
@@ -19,6 +20,7 @@ import {
   isDuplicateOfMainImagePreview,
   isLikelyMainVideoUrl,
   isOmniTabVideoMainVideoReference,
+  isSeedanceReferenceMovMainVideo,
   omniMultiImagePreviewCountsAsPromptImageRef,
   matchAllPromptMediaTokens,
   panelReferenceSlotLabel,
@@ -93,6 +95,21 @@ export function buildReferenceVideoDetailItems(
   const urlsInOrder = referenceVideoUrlsInLabelOrder(node, ctx);
   const numberedLabels = videoLabelItems.filter((i) => i.kind === 'video');
 
+  // §11.71 Seedance 参考生主视频标签修复：
+  // referenceMovs 含主视频 URL（与 imagePreview/outputUrl 同源，运行时双写），
+  // 但 buildPromptMediaRefLabels 编号时跳过主视频（promptMediaRefs 范式），
+  // 导致 urlsInOrder 比 numberedLabels 多一项，ordIdx 与 numberedLabels 索引错位
+  // （主视频→视频1，视频1→视频2，视频2→视频3，全部错位）。
+  // 此处对 Seedance 参考生单独处理：主视频标「主视频」，非主视频按「排除主视频后的序号」编号，
+  // 与 NodeInspector.tsx 面板侧 isSeedanceReferenceMovMainVideo 判定逻辑对齐。
+  // 不动 referenceVideoUrlsInLabelOrder（其默认分支仍含主视频），避免影响 @视频N prompt 解析层。
+  const isSeedanceRef = ctx.isSeedance20 && ctx.seedanceMode === 'reference';
+  const movIsMain = isSeedanceRef
+    ? referenceMovs.map((m) =>
+        isSeedanceReferenceMovMainVideo(panelSource, String(m.url || '').trim())
+      )
+    : referenceMovs.map(() => false);
+
   return referenceMovs.map((m, movIdx) => {
     const url = String(m.url || '').trim();
     let label = '视频';
@@ -103,6 +120,14 @@ export function buildReferenceVideoDetailItems(
       isOmniTabVideoMainVideoReference(panelSource, url, tab)
     ) {
       label = '主视频';
+    } else if (isSeedanceRef) {
+      if (movIsMain[movIdx]) {
+        label = '主视频';
+      } else {
+        // 排除主视频后的序号：当前下标 - 前面出现的主视频数 + 1
+        const prevMainCount = movIsMain.slice(0, movIdx).filter(Boolean).length;
+        label = `视频${movIdx - prevMainCount + 1}`;
+      }
     } else {
       const ordIdx = urlsInOrder.findIndex((u) => isSameVideoAssetForDetails(u, url));
       if (ordIdx >= 0) {
@@ -588,10 +613,13 @@ export function buildStillImageGenNodeDetailsReferencePreview(input: {
     input.projectAssets
   );
   if (!recovered?.referenceImages?.length) return null;
+  // §11.80 修复：snapOpts.snapshotLabels（=input.snapLabels，常为 undefined）会覆盖 recovered.referenceImageLabels，
+  //   导致 pickStillImageRecoveryApiReferenceImages 解析出的 @资产:名称 标签丢失，Details 标签退化为通用名"图片n"。
+  //   recovered 标签优先；recovered 无标签时回退 snapOpts.snapshotLabels。
   return buildImageGenOutputReferenceDetailsFromSnapshot({
-    snapshotRefs: recovered.referenceImages,
-    snapshotLabels: recovered.referenceImageLabels,
     ...snapOpts,
+    snapshotRefs: recovered.referenceImages,
+    snapshotLabels: recovered.referenceImageLabels ?? snapOpts.snapshotLabels,
   });
 }
 
@@ -612,11 +640,35 @@ export function buildSeedanceReferenceDetailsFromSnapshot(input: {
     if (!u) continue;
     compacted.push({ url: u, label: String(rawLabels[i] || '').trim() });
   }
+  // §11.69 补充：gp.referenceImages 空槽补回面板 URL 后，标签可能仍为通用名（如"图片1"），
+  // 导致后续按 expectedLabels 过滤时被误删。若 prompt 含 @主图 且首项标签为通用名，则按 @主图 重映射。
   const promptText = String(input.prompt || '').trim();
   const pa = input.projectAssets;
+  // §11.85: 当 referenceImages 中的 URL 为代理路径（/flowgen-api/.../assets/.../file）
+  // 且标签为命名资产时，从 projectAssets 中查找对应的 COS URL 并替换，
+  // 确保 Node Details 显示真实的 COS 地址而非代理路径。
+  if (pa?.length) {
+    for (const item of compacted) {
+      if (!item.label || isGenericPanelRefLabel(item.label)) continue;
+      const ids = parseProjectAssetIdsFromMediaUrl(item.url);
+      if (!ids) continue;
+      const asset = pa.find(
+        (a) => a.slug === item.label || a.name.trim() === item.label
+      );
+      const lib = asset?.url?.trim();
+      if (lib && lib !== item.url) {
+        item.url = lib;
+      }
+    }
+  }
   const promptImageTokenCount = promptText
     ? countUniquePromptImageRefTokens(promptText, pa)
     : 0;
+  // §11.69: compacted[0] 为主图位，若其标签为通用名且 prompt 含 @主图，用 @主图 重映射，
+  // 防止后续 expectedLabels 过滤时因标签不匹配而误删主图。
+  if (compacted.length > 0 && promptText.includes('@主图') && isGenericPanelRefLabel(compacted[0].label)) {
+    compacted[0].label = '主图';
+  }
   // §5.9.1 #2：Details 仅展示创意描述 @ 到的素材。
   // 面板中拖入了未被 prompt @ 引用的图片时，快照会包含多余 URL，需按 prompt 标签过滤。
   let filtered = compacted;
@@ -842,6 +894,13 @@ export function applyRunPanelFieldsToGenerationParams(
     generationParams.image2QualityLevel = image2NormalizeQualityLevel(snap.image2QualityLevel);
     generationParams.aspectRatio = generationParams.image2AspectRatio;
     generationParams.resolution = generationParams.image2ImageSize;
+  } else if (isMidJourneyFamilyModel(model)) {
+    // MidJourney/Niji 文生快照：版本/比例/画质/计费模式落 gp，Node Details 展示
+    generationParams.mjVersion = snap.mjVersion;
+    generationParams.mjRatio = snap.mjRatio || '1:1';
+    generationParams.mjQuality = snap.mjQuality;
+    generationParams.mjMode = snap.mjMode === 'RELAX' ? 'RELAX' : 'FAST';
+    generationParams.aspectRatio = generationParams.mjRatio;
   }
 }
 
@@ -1328,7 +1387,11 @@ export function buildOmniInstructionVideoTabDetailsReferencePreview(input: {
   });
   if (
     panelPreview.referenceImages.length > 0 &&
-    !omniPanelFilledCountExceedsPromptImageRefs(slotRefs.length, prompt, input.projectAssets)
+    !omniPanelFilledCountExceedsPromptImageRefs(
+      panelPreview.referenceImages.length,
+      prompt,
+      input.projectAssets
+    )
   ) {
     return applyOmniAssetLabelsToDetailsReferencePreview(panelPreview, assetLabels);
   }
@@ -1369,7 +1432,7 @@ function applyOmniAssetLabelsToDetailsReferencePreview(
     referenceImages: preview.referenceImages,
     referenceImageDetailItems: preview.referenceImageDetailItems.map((it, i) => ({
       ...it,
-      label: assetLabels[i]?.trim() || assetLabels[0] || it.label,
+      label: assetLabels[i]?.trim() || it.label,
     })),
   };
 }
@@ -1461,6 +1524,10 @@ export function buildOmniMultiPanelSnapshotRefsForPrompt(
 ): string[] {
   const main = String(panel.imagePreview || '').trim();
   let slots = (panel.klingOmniMultiReferenceImages || []).filter(Boolean);
+  // §11.82 预过滤 blob:/data: 临时 URL，避免 sanitizeDetailsReferenceImageUrls 在 https 存在时
+  //   过滤掉 blob 导致 panelSnapRefs 项数 < snapRefs → needsSnapSlotIndex 误判 → preferPanel 降级为 false
+  //   → 走 snap 路径少图/标签错。
+  slots = slots.filter((u) => !/^(blob|data):/i.test(String(u || '')));
   const mentionsMain = /@主图|@主体/.test(prompt);
   const mentionsImg1 = /@图片1|@图片(?!\d)/.test(prompt);
 
@@ -1754,25 +1821,51 @@ export function buildOmniMultiTabDetailsReferencePreview(input: {
     });
   }
 
+  // §11.82 修复：projectAssets 为空（资产库未加载/中间节点恢复）且 prompt 含 @资产:xxx 时，
+  //   matchAllPromptMediaTokens 无法解析 @资产: 边界（matchLongestProjectAssetKey 返回 null），
+  //   导致 countUniquePromptImageRefTokens 少算、preferPanel 误判为 false、Details 少图/标签错。
+  //   用面板 referenceImageLabels + 面板 URL 构造 fallback projectAssets（仅具体资产名，排除"图片n"），
+  //   与 §11.80 pickStillImageRecovery 的 fallback 保持一致。
+  let effectiveProjectAssets = input.projectAssets;
+  if (!effectiveProjectAssets?.length && prompt.includes('@资产:')) {
+    const panelLabels = (panel.referenceImageLabels || []).map((l) => String(l || '').trim());
+    const panelRefs = panel.klingOmniMultiReferenceImages || [];
+    const builtAssets = panelLabels.flatMap<ProjectAssetLabelRow>((label, i) => {
+      if (!label || /^图片\d+$/.test(label)) return [];
+      const url = String(panelRefs[i] || '').trim();
+      if (!url || /^(blob|data):/i.test(url)) return [];
+      return [{ slug: label, name: label, url }];
+    });
+    if (builtAssets.length) effectiveProjectAssets = builtAssets;
+  }
+
   // 过滤掉 blob:/data: 等临时 URL，避免刷新后计数膨胀导致 omniPanelFilledCountExceedsPromptImageRefs 误判
   const activeSlotRefs = (panel.klingOmniMultiReferenceImages || [])
     .filter(Boolean)
     .filter((u) => !/^(blob|data):/i.test(u));
 
+  // §11.81 默认 filterItem 排除 blob:/data: 临时 URL（刷新后即失效，不应展示在 Node Details）。
+  //          此前仅 activeSlotRefs 计数时过滤，展示层未过滤导致面板 blob 槽残留到 Details。
   const filterItem =
-    input.filterItem ?? ((it: ReferenceImageDetailItem) => Boolean(it.url) && !input.movUrlSet.has(it.url));
+    input.filterItem ?? ((it: ReferenceImageDetailItem) =>
+      Boolean(it.url) &&
+      !input.movUrlSet.has(it.url) &&
+      !/^(blob|data):/i.test(it.url));
   const urlPool = input.urlPool.filter((u) => !input.movUrlSet.has(u));
 
   const panelSnapRefs = buildOmniMultiPanelSnapshotRefsForPrompt(panel, prompt);
-  const maxPromptSlot = omniMultiPromptMaxImageSlotIndex(prompt, input.projectAssets);
+  const maxPromptSlot = omniMultiPromptMaxImageSlotIndex(prompt, effectiveProjectAssets);
+  // §11.82 用 activeSlotRefs.length（实际有效持久化槽数）而非 panelSnapRefs.length（可能因
+  //   imagePreview 去重而欠计），与 snapRefs.length 比较决定 needsSnapSlotIndex。
+  //   避免面板有 2 个 COS 槽但 panelSnapRefs 只计 1 个时，误判 needsSnapSlotIndex=true → preferPanel=false → 少图。
   const needsSnapSlotIndex =
     maxPromptSlot >= 0 &&
-    snapRefs.length > panelSnapRefs.length &&
-    maxPromptSlot >= panelSnapRefs.length;
+    snapRefs.length > activeSlotRefs.length &&
+    maxPromptSlot >= activeSlotRefs.length;
   const panelExceedsPromptRefs = omniPanelFilledCountExceedsPromptImageRefs(
     activeSlotRefs.length,
     prompt,
-    input.projectAssets
+    effectiveProjectAssets
   );
   const preferPanel =
     !needsSnapSlotIndex &&
@@ -1783,19 +1876,82 @@ export function buildOmniMultiTabDetailsReferencePreview(input: {
         panelSnapRefs,
         snapRefs,
         prompt,
-        input.projectAssets
+        effectiveProjectAssets
       ));
 
   if (preferPanel) {
     const panelPreview = buildNodeDetailsReferencePreview({
       panelSource: panel,
       urlPool,
-      projectAssets: input.projectAssets,
+      projectAssets: effectiveProjectAssets,
       filterItem,
     });
-    const dedupedPanel = dedupeReferenceImageDetailItemsByUrl(
+    let dedupedPanel = dedupeReferenceImageDetailItemsByUrl(
       panelPreview.referenceImageDetailItems.filter(filterItem)
     );
+
+    // §11.65 当面板参考图数量超过创意描述中的 @ 引用数时，用快照 refs 过滤掉未被引用的多余图片
+    // 避免 Output Picture Node 等中间节点将面板全部拖入图片都展示在 Node Details 中
+    const promptImageCount = countUniquePromptImageRefTokens(prompt, effectiveProjectAssets);
+    if (promptImageCount > 0 && dedupedPanel.length > promptImageCount) {
+      // §11.79 排除 blob:/data: 临时 URL：刷新后会重新生成不同的 blob URL，
+      //         若混入 snapKeys 会导致 dedupedPanel 中持久化 COS URL 因 key 不匹配被误过滤（中间节点少图）。
+      //         仅用可持久化 URL 构建 snapKeys；若快照全是 blob（刷新前），snapKeys 为空则跳过过滤保留 dedupedPanel。
+      const snapKeys = new Set(
+        snapRefs
+          .filter((u) => !/^(blob|data):/i.test(u))
+          .map(normalizeDetailImageUrlKey)
+          .filter(Boolean)
+      );
+      if (snapKeys.size > 0) {
+        dedupedPanel = dedupedPanel.filter((item) => {
+          // §11.81 临时 blob:/data: URL 无效（刷新后失效），直接排除，勿展示在 Node Details。
+          //         持久化 COS URL 继续按 snapKeys 匹配（§11.79 防误过滤）。
+          if (/^(blob|data):/i.test(item.url)) return false;
+          const key = normalizeDetailImageUrlKey(item.url);
+          return key && snapKeys.has(key);
+        });
+      }
+    }
+
+    // §11.82 面板路径参考图顺序：按 prompt @ 引用顺序重排，与输出节点（snap 路径）对齐
+    // 面板槽位顺序（如 图片2→大牙）可能与 API/gp 顺序（大牙→图片2）不一致，
+    // 导致前节点 Node Details 顺序与后节点不同。此处按 prompt 推断标签顺序重排。
+    if (dedupedPanel.length > 1 && promptImageCount > 0) {
+      const inferredLabels = inferSeedanceReferenceDetailLabelsFromPrompt(
+        prompt,
+        dedupedPanel.length,
+        effectiveProjectAssets
+      );
+      if (inferredLabels.length === dedupedPanel.length) {
+        const panelLabelSet = new Set(dedupedPanel.map((i) => i.label.trim()));
+        const inferredLabelSet = new Set(inferredLabels.map((l) => l.trim()));
+        if (
+          panelLabelSet.size === inferredLabelSet.size &&
+          [...panelLabelSet].every((l) => inferredLabelSet.has(l))
+        ) {
+          const labelToItem = new Map<string, ReferenceImageDetailItem>();
+          for (const item of dedupedPanel) {
+            labelToItem.set(item.label.trim(), item);
+          }
+          const reordered: ReferenceImageDetailItem[] = [];
+          for (const infLabel of inferredLabels) {
+            const item = labelToItem.get(infLabel.trim());
+            if (item) reordered.push(item);
+          }
+          // 兜底：未被 prompt 命中的项保持原顺序追加
+          for (const item of dedupedPanel) {
+            if (!reordered.some((r) => r.url === item.url)) {
+              reordered.push(item);
+            }
+          }
+          if (reordered.length === dedupedPanel.length) {
+            dedupedPanel = reordered;
+          }
+        }
+      }
+    }
+
     if (dedupedPanel.length > 0) {
       return {
         referenceImages: dedupedPanel.map((i) => i.url),
@@ -1809,12 +1965,12 @@ export function buildOmniMultiTabDetailsReferencePreview(input: {
 
   if (effectiveSnapRefs.length > 0) {
     let snapItems =
-      buildOmniMultiPromptTokenReferenceItems(effectiveSnapRefs, prompt, input.projectAssets) ??
+      buildOmniMultiPromptTokenReferenceItems(effectiveSnapRefs, prompt, effectiveProjectAssets) ??
       (() => {
         const inferred = inferSeedanceReferenceDetailLabelsFromPrompt(
           prompt,
           effectiveSnapRefs.length,
-          input.projectAssets
+          effectiveProjectAssets
         );
         const labels =
           input.snapshotLabels?.length === effectiveSnapRefs.length
@@ -1827,7 +1983,7 @@ export function buildOmniMultiTabDetailsReferencePreview(input: {
         }));
       })();
     snapItems = resolveReferenceImageDetailItemsWithUrlPool(snapItems, urlPool, {
-      projectAssets: input.projectAssets,
+      projectAssets: effectiveProjectAssets,
     });
     snapItems = dedupeReferenceImageDetailItemsByUrl(snapItems.filter(filterItem));
     if (snapItems.length > 0) {
@@ -1841,7 +1997,7 @@ export function buildOmniMultiTabDetailsReferencePreview(input: {
   const preview = buildNodeDetailsReferencePreview({
     panelSource: panel,
     urlPool,
-    projectAssets: input.projectAssets,
+    projectAssets: effectiveProjectAssets,
     filterItem,
   });
   const dedupedPreview = dedupeReferenceImageDetailItemsByUrl(preview.referenceImageDetailItems);
@@ -1856,7 +2012,7 @@ export function buildOmniMultiTabDetailsReferencePreview(input: {
   const inferred = inferSeedanceReferenceDetailLabelsFromPrompt(
     prompt,
     effectiveSnapRefs.length,
-    input.projectAssets
+    effectiveProjectAssets
   );
   const labels =
     input.snapshotLabels?.length === effectiveSnapRefs.length

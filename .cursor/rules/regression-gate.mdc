@@ -68,7 +68,10 @@ alwaysApply: true
   - **各模型尾帧/主图/参考被覆盖（§5.8.3 已验收）** → `scripts/frame-model-switch-isolation-test.ts`
   - **Inspector 中键/Shift 框选重复拖入多槽 / 本地 1 张双槽 / 串行 batch 丢 eids（§5.8.4 已验收）** → `npm run test:2026070802-omni-panel-dedup` + `src/test/utils/omniPanelInspectorDropDedup.test.ts` + `test:panel-dedup-same-element`；**禁止**去掉 `canvas:{nodeId}` 或改回读 React `data` prop
   - **Seedance @图片n 上传串图（槽 COS + 过期 originals File）** → `scripts/20260709-seedance-ref-images-verify-test.ts` + `referencedMediaRun.test.ts`
-  - **Seedance MOV @主视频 非 @视频1** → `scripts/20260709-seedance-video1-mention-test.ts` + `seedanceMainVideoLabel.test.ts`
+  - **Seedance 输出节点 @主视频 标签（imagePreview≠参考视频）→ `src/test/utils/seedanceMainVideoLabel.test.ts` §11.85 + `node-details-simulation-test.ts` §11r
+- **Seedance 代理路径→COS URL 转换（命名资产）→ `src/test/utils/seedanceReferenceDetails.test.ts` §11.86
+- **Omni blob URL 污染 gp 后 snapKeys 排除防误过滤 → `src/test/utils/kling-omni-blob-repro.test.ts` §11.79
+- **image2 @资产 gp 空 Details recovery → `src/test/utils/kling-omni-blob-repro.test.ts` §11.80
   - **Seedance 参考生运行后主图=参考槽同 URL 丢图（§5.11.2）** → `scripts/20260709-seedance-main-dup-ref-panel-test.ts`
   - **全模型主图=参考槽同 URL / sync 清空（§5.11.2）** → `scripts/20260709-all-models-main-dup-ref-panel-test.ts`；**禁止** sync 直接用 `shouldDedupePanelRefsAgainstMainPreview`
   - **Seedance 纯@资产未@主图画布仍显示主图（§5.7）** → `scripts/20260710-seedance-asset-thumb-test.ts`
@@ -82,9 +85,9 @@ alwaysApply: true
   - **二次运行创意描述 @ 引用不 rewrite（§5.8.7·S级）** → `20260710-banana-run-gp-at-mention-test.ts` §8–§9 + vitest `promptRerunCanonical.test.ts`（Nano/image2/Omni/Seedance/即梦/vidu）；**禁止** `handleNodeRun` 写回 canonical prompt；**禁止** Seedance 运行中/收尾 `refTab.prompt = getCanonical…`
   - **导出 JSON 跨机器 INPUT 主图 EMPTY（§5.13）** → `scripts/20260713-export-json-main-image-persist-test.ts` + fixture `20260713-export-json-main-image-persist.json` + vitest `hydratePersistedNodePreviews.test.ts`；**禁止** `hydrateNodeImagePreviewFromPersisted` 在 `@主图` + 已持久化 COS `imagePreview` 时误清空走 IDB
 
-## test:gate 步骤（`scripts/test-gate.mjs`，44 步）
+## test:gate 步骤（`scripts/test-gate.mjs`，56 步）
 
-1. vitest（含拖入去重、Details 标签、**§5.12 `generatedThumbKeyboardNav`**、**§5.8.7 `promptRerunCanonical`**）
+1. vitest（47 files / 382 tests，含拖入去重、Details 标签、**§5.12 `generatedThumbKeyboardNav`**、**§5.8.7 `promptRerunCanonical`**、**§11.71-§11.86 防回归测试**）
 2. test:node-details
 3. test:panel-refs
 4. **test:panel-partial-ref** — 全模型：面板保留未@ + Details 仅 @ + 运行后新拖入可@

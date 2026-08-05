@@ -197,6 +197,192 @@ describe('Omni multi tab Details reference images', () => {
     expect(preview.referenceImages).toEqual([mainInk, dogRef]);
     expect(preview.referenceImages).not.toContain(staleGoat);
   });
+
+  it('§11.81 面板含 blob 槽时 Details 过滤 blob，仅保留 COS 参考图 (可灵中间节点.json)', () => {
+    const blob0 = 'blob:http://localhost:3001/1280951d-b007-4156-b891-771daaef758e';
+    const blob2 = 'blob:http://localhost:3001/7c6764f2-f685-46d2-a445-0006c5076412';
+    const cosMain =
+      'https://aitop100app-1251510006.cos.ap-shanghai.myqcloud.com/imagesGenerations/13c33dc3-9f9f-44c0-a297-21ede9cb7a4d.png';
+    const cosRef =
+      'https://aitop100app-1251510006.cos.ap-shanghai.myqcloud.com/openApi/212508/3dab2fba-86b8-48e7-8a7e-8ea33ab62671.png';
+    const prompt = '@资产:祭司老人出现在@主图中与@主图的角色交流起来';
+    const preview = buildOmniMultiTabDetailsReferencePreview({
+      panelSource: {
+        selectedModel: '可灵3.0 Omni',
+        klingOmniTab: 'multi',
+        klingOmniMultiReferenceImages: [blob0, cosRef, blob2],
+        klingOmniMultiPrompt: prompt,
+        prompt,
+        imagePreview: cosMain,
+        referenceImageLabels: ['图片1', '祭司老人', '图片3'],
+        generationParams: {
+          model: '可灵3.0 Omni',
+          referenceImages: [cosMain, cosRef, ''],
+          referenceImageLabels: ['图片1', '祭司老人', '图片3'],
+        },
+      },
+      urlPool: [cosMain, cosRef, blob0, blob2],
+      snapshotRefs: [cosMain, cosRef, ''],
+      snapshotLabels: ['图片1', '祭司老人', '图片3'],
+      prompt,
+      movUrlSet: new Set(),
+      projectAssets: [],
+    });
+    // blob 临时 URL 不得出现在 Details
+    expect(preview.referenceImages.some((u) => /^(blob|data):/i.test(u))).toBe(false);
+    // 保留主图 + 祭司老人两张 COS 参考图
+    expect(preview.referenceImages).toContain(cosMain);
+    expect(preview.referenceImages).toContain(cosRef);
+    expect(preview.referenceImages).toHaveLength(2);
+  });
+
+  it('§11.82 面板含 blob + @资产主图 时 Details 正确返回 2 张参考图 (可灵3.0.json)', () => {
+    // 模拟 node_17: prompt 含 @资产:大牙 + @图片2，面板 4 槽含 blob，
+    // projectAssets 为空（资产库未加载），验证修复后 returns 2 张正确标签图片
+    const blob0 = 'blob:http://localhost:3001/a42e10e4-558d-4b2d-bcb5-efc9af754877';
+    const blob3 = 'blob:http://localhost:3001/35364fee-2055-4c9f-bd5c-abb5df8eec56';
+    const cosMain =
+      'https://aitop100app-1251510006.cos.ap-shanghai.myqcloud.com/openApi/212508/b8ca5280-9ded-446d-bfd9-e061948f0aec.png';
+    const cosPic2 =
+      'https://aitop100app-1251510006.cos.ap-shanghai.myqcloud.com/imagesGenerations/56d45933-4d11-42c4-b947-75f3b1f91698.png';
+    const prompt = '@资产:大牙出现在@图片2中与@图片2角色交流起来';
+    const preview = buildOmniMultiTabDetailsReferencePreview({
+      panelSource: {
+        selectedModel: '可灵3.0 Omni',
+        klingOmniTab: 'multi',
+        klingOmniMultiReferenceImages: [blob0, cosPic2, cosMain, blob3],
+        klingOmniMultiPrompt: prompt,
+        prompt,
+        imagePreview: cosMain,
+        referenceImageLabels: ['图片1', '图片2', '大牙', '图片4'],
+        generationParams: {
+          model: '可灵3.0 Omni',
+          referenceImages: [cosMain, cosPic2],
+          referenceImageLabels: ['大牙', '图片2'],
+        },
+      },
+      urlPool: [cosMain, cosPic2, blob0, blob3],
+      snapshotRefs: [cosMain, cosPic2],
+      snapshotLabels: ['大牙', '图片2'],
+      prompt,
+      movUrlSet: new Set(),
+      projectAssets: undefined,
+    });
+    // 无 blob 残留
+    expect(preview.referenceImages.some((u) => /^(blob|data):/i.test(u))).toBe(false);
+    // 2 张 COS 参考图
+    expect(preview.referenceImages).toHaveLength(2);
+    expect(preview.referenceImages).toContain(cosPic2);
+    expect(preview.referenceImages).toContain(cosMain);
+    // §11.82 标签顺序按 prompt @ 引用顺序排列（大牙→图片2），与后节点 gp 顺序一致
+    expect(preview.referenceImageDetailItems.map((i) => i.label)).toEqual(['大牙', '图片2']);
+  });
+
+  // §11.82 needsSnapSlotIndex 修复：panel 有 2 个 COS 槽但 imagePreview 去重导致 panelSnapRefs 只计 1 个
+  // → preferPanel 仍为 true，不会误判降级为 snap 路径少图
+  it('§11.82 needsSnapSlotIndex 修复：panel 2 槽但 imagePreview 去重只计 1 → preferPanel 仍为 true', () => {
+    const cosA =
+      'https://aitop100app-1251510006.cos.ap-shanghai.myqcloud.com/openApi/212508/aaa.png';
+    const cosB =
+      'https://aitop100app-1251510006.cos.ap-shanghai.myqcloud.com/openApi/212508/bbb.png';
+    const prompt = '@图片2中的角色出现在@图片3中';
+    // panel 有 cosA(=imagePreview) + cosB 两个 COS 槽，但 imagePreview=cosA 与槽0重复
+    // → buildOmniMultiPanelSnapshotRefsForPrompt 去重后 panelSnapRefs 只计 1 个（cosB）
+    // → 修复前 needsSnapSlotIndex 用 panelSnapRefs.length=1 比较 snapRefs.length=2 → 误判为 true
+    // → 修复后 activeSlotRefs.length=2 → needsSnapSlotIndex=false → preferPanel=true
+    const preview = buildOmniMultiTabDetailsReferencePreview({
+      panelSource: {
+        selectedModel: '可灵3.0 Omni',
+        klingOmniTab: 'multi',
+        klingOmniMultiReferenceImages: [cosA, cosB],
+        klingOmniMultiPrompt: prompt,
+        prompt,
+        imagePreview: cosA,
+        referenceImageLabels: ['图片2', '图片3'],
+        generationParams: {
+          model: '可灵3.0 Omni',
+          referenceImages: [cosA, cosB],
+          referenceImageLabels: ['图片2', '图片3'],
+        },
+      },
+      urlPool: [cosA, cosB],
+      snapshotRefs: [cosA, cosB],
+      snapshotLabels: ['图片2', '图片3'],
+      prompt,
+      movUrlSet: new Set(),
+    });
+    expect(preview.referenceImageDetailItems).toHaveLength(2);
+    expect(preview.referenceImageDetailItems.map((i) => i.label)).toEqual(['图片2', '图片3']);
+  });
+
+  // §11.82 effectiveProjectAssets fallback 边界：prompt 无 @资产: 时不构造 fallback
+  it('§11.82 effectiveProjectAssets fallback 边界：prompt 无 @资产: 时不构造 fallback', () => {
+    const cosA =
+      'https://aitop100app-1251510006.cos.ap-shanghai.myqcloud.com/openApi/212508/aaa.png';
+    const cosB =
+      'https://aitop100app-1251510006.cos.ap-shanghai.myqcloud.com/openApi/212508/bbb.png';
+    const prompt = '@图片1中的角色出现在@图片2中';
+    const preview = buildOmniMultiTabDetailsReferencePreview({
+      panelSource: {
+        selectedModel: '可灵3.0 Omni',
+        klingOmniTab: 'multi',
+        klingOmniMultiReferenceImages: [cosA, cosB],
+        klingOmniMultiPrompt: prompt,
+        prompt,
+        imagePreview: cosA,
+        referenceImageLabels: ['图片1', '图片2'],
+        generationParams: {
+          model: '可灵3.0 Omni',
+          referenceImages: [cosA, cosB],
+          referenceImageLabels: ['图片1', '图片2'],
+        },
+      },
+      urlPool: [cosA, cosB],
+      snapshotRefs: [cosA, cosB],
+      snapshotLabels: ['图片1', '图片2'],
+      prompt,
+      movUrlSet: new Set(),
+      projectAssets: undefined,
+    });
+    // prompt 无 @资产:，effectiveProjectAssets 不构造 fallback，正常走 panel 路径
+    expect(preview.referenceImageDetailItems).toHaveLength(2);
+    expect(preview.referenceImageDetailItems.map((i) => i.label)).toEqual(['图片1', '图片2']);
+  });
+
+  // §11.82 顺序重排跳过：标签集不一致时跳过重排，保持原顺序
+  it('§11.82 顺序重排跳过：标签集不一致时保持原顺序', () => {
+    const cosA =
+      'https://aitop100app-1251510006.cos.ap-shanghai.myqcloud.com/openApi/212508/aaa.png';
+    const cosB =
+      'https://aitop100app-1251510006.cos.ap-shanghai.myqcloud.com/openApi/212508/bbb.png';
+    const prompt = '@图片2出现在@图片3中';
+    // 面板标签为「石头」「树木」— 但 prompt 用 @图片2/@图片3，标签集不一致
+    // → inferredLabels = ['图片2', '图片3']，panelLabels = ['石头', '树木']，Set 不一致 → 跳过重排
+    const preview = buildOmniMultiTabDetailsReferencePreview({
+      panelSource: {
+        selectedModel: '可灵3.0 Omni',
+        klingOmniTab: 'multi',
+        klingOmniMultiReferenceImages: [cosA, cosB],
+        klingOmniMultiPrompt: prompt,
+        prompt,
+        imagePreview: '',
+        referenceImageLabels: ['石头', '树木'],
+        generationParams: {
+          model: '可灵3.0 Omni',
+          referenceImages: [cosA, cosB],
+          referenceImageLabels: ['石头', '树木'],
+        },
+      },
+      urlPool: [cosA, cosB],
+      snapshotRefs: [cosA, cosB],
+      snapshotLabels: ['石头', '树木'],
+      prompt,
+      movUrlSet: new Set(),
+    });
+    // 面板路径保持原顺序 ['石头', '树木']
+    expect(preview.referenceImageDetailItems).toHaveLength(2);
+    expect(preview.referenceImageDetailItems.map((i) => i.label)).toEqual(['石头', '树木']);
+  });
 });
 
 describe('Omni multi tab Details — 2026070802-可灵2.json', () => {

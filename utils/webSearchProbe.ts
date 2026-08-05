@@ -27,6 +27,9 @@ const WEAK_SINGLE_TERMS = new Set([
 const SHORT_FOLLOW_UP_RE =
   /表格|对比|总结|再查|做成|继续|刚才|上面|^(用|再|请|帮|麻烦)/;
 
+/** 明确指代或依赖对话上下文的表述：命中后结合历史补全省略实体 */
+const CONTEXT_DEPENDENT_RE = /它|这些|那些|上述|这种情况|上述问题|这里|那里|刚才|之前|后来|结果|未来|现在/;
+
 /**
  * 用户在问「当前助手是谁 / 哪个模型」——会话元问题，禁止联网。
  * 原因：联网检索会把 DeepSeek 等带成 Claude 等其他产品名（已复现）。
@@ -102,12 +105,42 @@ export function isWeakWebSearchQuery(query: string): boolean {
   return false;
 }
 
-export function needsContextualProbeFallback(latestUserText: string): boolean {
+export function needsContextualProbeFallback(
+  latestUserText: string,
+  turns?: WebSearchDialogueTurn[]
+): boolean {
   const t = sanitizeWebSearchQueryText(latestUserText);
   if (!t) return true;
   if (isWeakWebSearchQuery(t)) return true;
   if (t.length <= 24 && SHORT_FOLLOW_UP_RE.test(t)) return true;
+  // 有历史对话时，短句含隐含指代/省略实体，需要上下文补全
+  if (turns?.length && t.length <= 30 && CONTEXT_DEPENDENT_RE.test(t)) return true;
   return false;
+}
+
+/**
+ * 模型降级 fallback 路径：把改写后的独立检索问题显式注入 message，
+ * 让 fallback 模型即使不走 probe 首轮，也能明确知道需要联网检索什么。
+ * 参考：LangChain RunnableWithFallbacks 应在 whole-runnable 级别为不同模型准备不同 prompt；
+ * Hugging Face Chat UI LLM Router 在模型切换时显式保留工具/搜索上下文。
+ */
+export function buildFallbackSearchAwareMessage(
+  baseMessage: string,
+  searchQuery: string,
+  latestUserText?: string
+): string {
+  const q = (searchQuery || '').trim();
+  if (!q) return baseMessage;
+  const userQ = (latestUserText || '').trim();
+  const parts = [
+    '【联网搜索已开启】请基于以下“独立检索问题”和完整对话上下文，先进行网络检索，再给出完整回答。',
+    `需要检索的问题：${q}`,
+  ];
+  if (userQ && userQ !== q) {
+    parts.push(`用户原始追问：${userQ}`);
+  }
+  parts.push('--- 以下为完整对话上下文 ---', baseMessage);
+  return parts.join('\n\n');
 }
 
 /** 从近期轮次拼一条可检索的自然语言（含助手里的实体，不做领域关键词表） */
@@ -137,11 +170,7 @@ export function buildWebSearchProbeQueryFallback(
   if (isNonSearchableChatUtterance(latestUserText) || isNonSearchableChatUtterance(latest)) {
     return compactWebSearchQuery(latest || latestUserText);
   }
-  if (latest && !needsContextualProbeFallback(latest)) {
-    return compactWebSearchQuery(latest);
-  }
-
-  if (!needsContextualProbeFallback(latest)) {
+  if (latest && !needsContextualProbeFallback(latest, turns)) {
     return compactWebSearchQuery(latest);
   }
 
@@ -150,6 +179,7 @@ export function buildWebSearchProbeQueryFallback(
     .map((t) => sanitizeWebSearchQueryText(t.content))
     .filter((c) => c && c !== latest);
 
+  // 优先把上一轮用户完整问题与当前追问拼接，补全省略的主语/实体
   for (let i = priorUser.length - 1; i >= 0; i--) {
     const prev = priorUser[i];
     if (!prev || prev === latest || isWeakWebSearchQuery(prev)) continue;
@@ -176,6 +206,46 @@ export function isPlausibleSearchQuery(query: string): boolean {
   return !isWeakWebSearchQuery(t);
 }
 
+/**
+ * Topic-shift 后校验：如果 LLM 改写后的 query 引入了原句没有的历史实体，且原句本身不含指代词，
+ * 说明 LLM 可能过度联想，应回退到原句。
+ * 参考 Perplexity AST/intent-enhanced rewriting 中的 topic-shift detection。
+ */
+function isQueryOverInfluencedByHistory(
+  rewritten: string,
+  latestUserText: string,
+  turns: WebSearchDialogueTurn[]
+): boolean {
+  const r = (rewritten || '').trim();
+  const l = (latestUserText || '').trim();
+  if (!r || !l) return false;
+
+  // 原句含指代词 → 允许改写引入历史实体
+  if (/[它这那此其这这些那些][个种样类些]?|上述|之前|前面|之前.*[问题话题]|刚才|之前.*提到/i.test(l)) {
+    return false;
+  }
+
+  // 提取历史中的用户实体（简单关键词提取）
+  const historyTexts = turns
+    .filter((t) => t.role === 'user')
+    .map((t) => t.content)
+    .join(' ');
+  const historyEntities = (historyTexts.match(/[\u4e00-\u9fa5]{3,}/g) || []).filter(
+    (w) => !/怎么|什么|为什么|多少|哪里|如何|怎样|吗|呢|吧/i.test(w)
+  );
+
+  // 如果改写后的 query 含历史实体但原句不含，判定为过度联想
+  for (const entity of historyEntities) {
+    if (r.includes(entity) && !l.includes(entity)) {
+      // 但该实体也可能是专有名词（如地名），需要出现在改写中是合理的
+      // 宽松条件：如果实体长度 <= 4 且原句 <= 10 字，允许改写
+      if (l.length <= 10 && entity.length <= 4) continue;
+      return true;
+    }
+  }
+  return false;
+}
+
 function buildRewritePrompt(turns: WebSearchDialogueTurn[], latestUserText: string): string {
   const latest = (latestUserText || '').trim();
   const lines = turns
@@ -185,8 +255,25 @@ function buildRewritePrompt(turns: WebSearchDialogueTurn[], latestUserText: stri
   const dlg = lines.length ? `【对话】\n${lines.join('\n')}\n\n` : '';
   return (
     `你是检索查询改写器。根据对话，将用户最后一问改写成一条适合搜索引擎的中文查询。\n` +
-    `要求：只输出一行查询（≤80字）；保留专有名词；纠正检索时按真实问题改写；禁止解释、JSON、引号、英文标题。\n` +
-    `若最后一问是问候、问你是谁/哪个模型、致谢、闲聊（如「你好」「你是哪个模型」「谢谢」），与检索无关：只输出最后一问原文，禁止用历史话题改写。\n\n` +
+    `要求：\n` +
+    `1. 只输出一行查询（≤80字），禁止解释、JSON、引号、英文标题。\n` +
+    `2. 保留专有名词（地名、人名、产品名、机构名等）。\n` +
+    `3. 如果最后一问缺少主语、宾语或包含隐含指代（如“它/这/那/未来/这种情况/上述问题”），必须从对话历史中补全主语和实体，改写成不依赖上下文也能独立理解的查询。\n` +
+    `4. 如果最后一问已经独立完整、包含全新实体且没有指代词（如用户主动切换话题到深圳天气），禁止引入上一轮的北京/东北等历史实体，只基于最后一问本身改写。\n` +
+    `5. 若最后一问是问候、问你是谁/哪个模型、致谢、闲聊（如「你好」「你是哪个模型」「谢谢」），与检索无关：只输出最后一问原文，禁止用历史话题改写。\n\n` +
+    `示例：\n` +
+    `历史：用户：介绍一下东北经济振兴的难点。助手：东北经济面临…\n` +
+    `最后一问：你认为未来会成为怎样的地位？\n` +
+    `查询：东北地区未来会成为怎样的经济地位？\n\n` +
+    `历史：用户：广州今天天气怎么样？助手：广州今天多云…\n` +
+    `最后一问：那明天呢？\n` +
+    `查询：广州明天天气怎么样？\n\n` +
+    `历史：用户：深中梅香和深中龙华升学率对比。助手：深中梅香…\n` +
+    `最后一问：用表格再对比一下。\n` +
+    `查询：深中梅香和深中龙华升学率对比表格\n\n` +
+    `历史：用户：北京今天天气怎么样？助手：北京今天晴…\n` +
+    `最后一问：深圳今天天气怎么样？\n` +
+    `查询：深圳今天天气怎么样？\n\n` +
     dlg +
     `【最后一问】\n${latest}\n\n` +
     `查询：`
@@ -325,8 +412,29 @@ export async function resolveWebSearchProbeQuery(params: {
       latestUserText: latest,
     });
     if (rewritten) {
-      console.warn('[chat] web search probe LLM rewrite', { query: rewritten.slice(0, 120) });
-      return rewritten;
+      // Topic-shift 后校验：LLM 过度联想时回退到原句
+      if (isQueryOverInfluencedByHistory(rewritten, latest, params.turns || [])) {
+        console.warn('[chat] web search probe LLM rewrite over-influenced by history', {
+          rewritten: rewritten.slice(0, 120),
+          latest: latest.slice(0, 120),
+        });
+      } else {
+        // 若 LLM 对上下文依赖型追问未做改写，fallback 拼接历史通常更可靠
+        const rewrittenNorm = sanitizeWebSearchQueryText(rewritten);
+        const latestNorm = sanitizeWebSearchQueryText(latest);
+        if (
+          rewrittenNorm === latestNorm &&
+          params.turns?.length &&
+          needsContextualProbeFallback(latest, params.turns)
+        ) {
+          console.warn('[chat] web search probe LLM returned unchanged for context-dependent query', {
+            query: rewritten.slice(0, 120),
+          });
+        } else {
+          console.warn('[chat] web search probe LLM rewrite', { query: rewritten.slice(0, 120) });
+          return rewritten;
+        }
+      }
     }
     console.warn('[chat] web search probe LLM rewrite skipped, using fallback');
   }

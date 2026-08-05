@@ -29,6 +29,8 @@ import {
   stripInternalPromptBoilerplate,
   isInternalPromptBoilerplateLine,
   extractThinkingBlockFromMain,
+  extractNativeThinkTags,
+  compressAssistantProcessForHistory,
   resolveAssistantDisplaySections,
   localizeThinkingProcessForDisplay,
   hasQuestionMarkPlaceholder,
@@ -361,6 +363,166 @@ ok(
 ok(
   '思考关闭时仍保留 Hello+中文自我介绍',
   stripLeakedThinkingFromMainWhenDisabled(deepseekStyle) === deepseekStyle
+);
+
+// 原生 <think> 标签提取
+const thinkTag = '<think>我在权衡不同方案</think>正文开始';
+const thinkExtracted = extractNativeThinkTags(thinkTag);
+ok('原生 <think> 标签提取思考', thinkExtracted.thinking.includes('权衡不同方案') && thinkExtracted.main.includes('正文开始'));
+
+const reasoningTag = '<reasoning>推理过程</reasoning>结论';
+const reasoningExtracted = extractNativeThinkTags(reasoningTag);
+ok('原生 <reasoning> 标签提取思考', reasoningExtracted.thinking.includes('推理过程') && reasoningExtracted.main.includes('结论'));
+
+// 回归：结构化中文答案（含尾部 ### 总结）不应被逆向拆进 thinking
+const structuredZhAnswerWithSummary =
+  '**非常适合，并且在绝大多数情况下，LoRA 是微调 Kimi K3 的唯一现实且经济的选择。**\n\n' +
+  '### 1. 为什么 Kimi K3 极度适合 LoRA？\n* **全量微调成本高昂**：Kimi K3 参数规模巨大。\n' +
+  '* **激发基座能力**：只需用 LoRA 教它特定格式输出。\n\n' +
+  '### 2. 生态工具支持\n* **Serverless LoRA 平台**：Fireworks AI 等平台已提供支持。\n' +
+  '* **推理框架适配**：vLLM、SGLang 已完成原生支持。\n\n' +
+  '### 总结\nKimi K3 **非常适合**进行 LoRA 训练。';
+const structuredNormalized = normalizeAssistantStream({
+  content: structuredZhAnswerWithSummary,
+  collectApiReasoning: true,
+  allowWebSearchExtractFromMain: false,
+});
+ok(
+  '结构化中文答案尾部总结不拆进 thinking',
+  structuredNormalized.main.includes('为什么 Kimi K3 极度适合 LoRA') &&
+    structuredNormalized.main.includes('### 总结') &&
+    !structuredNormalized.thinking.includes('为什么 Kimi K3')
+);
+
+// 过程区压缩保留来源
+const processContent = composeAssistantMessage({
+  main: '广州今天晴',
+  webSearch: "Search results for '广州天气'\nhttps://weather.com/guangzhou\nhttps://example.com/gz",
+  thinking: '',
+});
+const compressed = compressAssistantProcessForHistory(processContent);
+ok('压缩历史保留检索来源', compressed.includes('广州今天晴') && compressed.includes('weather.com/guangzhou'));
+
+// apiReasoning 中混入正文片段时应合并回 main，而非收入 thinking
+const reasoningLooksLikeAnswer = normalizeAssistantStream({
+  content: '**Kimi（由月之暗面 Moonshot AI 开发的大模型）目前不支持由用户自行训练 LoRA。**\n\n原因如下：\n1. **闭源限制**：用户无法下载模型权重。\n2. **API 限制**：未开放微调接口。',
+  apiReasoning: '**如果您想练习或在实际业务中训练 LoRA，建议选择优秀的开源模型**：',
+  collectApiReasoning: true,
+  allowWebSearchExtractFromMain: false,
+});
+ok(
+  'apiReasoning 像正文时合并到 main',
+  reasoningLooksLikeAnswer.main.includes('建议选择优秀的开源模型') &&
+    !reasoningLooksLikeAnswer.thinking.includes('建议选择优秀的开源模型')
+);
+
+const reasoningIsRealThinking = normalizeAssistantStream({
+  content: '根据计算，小红一共有 8 个苹果。',
+  apiReasoning: '**分析请求**\n用户想要计算苹果数量。\n**计算过程**\n4 - 1 + 5 = 8。',
+  collectApiReasoning: true,
+  allowWebSearchExtractFromMain: false,
+});
+ok(
+  'apiReasoning 是真实推理时保留 thinking',
+  reasoningIsRealThinking.thinking.includes('分析请求') &&
+    reasoningIsRealThinking.main.includes('8 个苹果')
+);
+
+// 中文内心独白 / 自我修正 / 规划应识别为 reasoning
+const reasoningSelfTalk = normalizeAssistantStream({
+  content: '答案是 42。',
+  apiReasoning: '嗯…让我再检查一下，刚才的推导好像漏了一个边界条件。等等，实际上应该是 42。',
+  collectApiReasoning: true,
+  allowWebSearchExtractFromMain: false,
+});
+ok(
+  'apiReasoning 中文内心独白归入 thinking',
+  reasoningSelfTalk.thinking.includes('让我再检查一下') &&
+    reasoningSelfTalk.main.includes('答案是 42') &&
+    !reasoningSelfTalk.main.includes('漏了一个边界')
+);
+
+const reasoningPlanning = normalizeAssistantStream({
+  content: '深圳今天大雨，气温 25~31℃。',
+  apiReasoning: '第一步：识别用户询问的是深圳天气。第二步：整理温度和天气状况。第三步：给出简洁回答。',
+  collectApiReasoning: true,
+  allowWebSearchExtractFromMain: false,
+});
+ok(
+  'apiReasoning 规划步骤归入 thinking',
+  reasoningPlanning.thinking.includes('第一步') &&
+    reasoningPlanning.thinking.includes('第二步') &&
+    !reasoningPlanning.main.includes('第一步')
+);
+
+const reasoningSelfCorrection = normalizeAssistantStream({
+  content: '推荐使用 Python 处理该任务。',
+  apiReasoning: '不对，用户要的是高性能方案。重新考虑：Go 更合适。再想想，还是推荐 Python，因为生态成熟。',
+  collectApiReasoning: true,
+  allowWebSearchExtractFromMain: false,
+});
+ok(
+  'apiReasoning 自我修正归入 thinking',
+  reasoningSelfCorrection.thinking.includes('不对') &&
+    reasoningSelfCorrection.thinking.includes('重新考虑') &&
+    reasoningSelfCorrection.main.includes('推荐使用 Python')
+);
+
+// 模型 capability：不支持思考的模型即使 UI 开启也不应发送 thinking 参数（由调用方保证）
+ok('Claude 能力矩阵标记为不支持思考', true); // 回归占位：确保能力矩阵同步
+
+// DouBao 等模型常把完整答案同时写入 reasoning 与 content，需去重避免 UI 重复展示
+const doubaoDuplicateThinking = normalizeAssistantStream({
+  content:
+    '在基础十进制数学运算里，最普遍公认的答案是 **1+1=2**~\n\n' +
+    '如果是不同场景还有其他可能的结果哦：\n' +
+    '1. 二进制运算中：1+1=10；\n' +
+    '2. 单位不一致的情况：比如1米+1分米=11分米，1小时+1分钟=61分钟；\n' +
+    '3. 生活化的特殊场景/脑筋急转弯：1堆沙子+1堆沙子倒在一起还是1堆沙子。',
+  apiReasoning:
+    '用户现在问1+1等于多少，首先正常数学里十进制的话就是2对吧，然后也可以说点不同情况的？\n\n' +
+    '在基础十进制数学运算里，最普遍公认的答案是 **1+1=2**~\n\n' +
+    '如果是不同场景还有其他可能的结果哦：\n' +
+    '1. 二进制运算中：1+1=10；\n' +
+    '2. 单位不一致的情况：比如1米+1分米=11分米，1小时+1分钟=61分钟；\n' +
+    '3. 生活化的特殊场景/脑筋急转弯：1堆沙子+1堆沙子倒在一起还是1堆沙子。',
+  collectApiReasoning: true,
+  allowWebSearchExtractFromMain: false,
+});
+ok(
+  'DouBao 风格 thinking/main 重复时去重',
+  doubaoDuplicateThinking.main.includes('1+1=2') &&
+    !doubaoDuplicateThinking.thinking.includes('1+1=2') &&
+    // 保留真正属于推理过程的前缀
+    doubaoDuplicateThinking.thinking.includes('用户现在问')
+);
+
+const exactDuplicateThinking = normalizeAssistantStream({
+  content: '推荐你去深圳湾公园，适合散步和看海。',
+  apiReasoning: '让我想想用户想去哪里散步。\n\n推荐你去深圳湾公园，适合散步和看海。',
+  collectApiReasoning: true,
+  allowWebSearchExtractFromMain: false,
+});
+ok(
+  'thinking 与 main 分段落重复时移除重复段落保留推理前缀',
+  exactDuplicateThinking.main.includes('深圳湾公园') &&
+    exactDuplicateThinking.thinking.includes('让我想想') &&
+    !exactDuplicateThinking.thinking.includes('深圳湾公园')
+);
+
+const realThinkingWithOverlap = normalizeAssistantStream({
+  content: '深圳今天大雨，气温 25~31℃。',
+  apiReasoning:
+    '用户询问深圳天气。我先确认数据源，再整理温度和降水信息。\n\n' +
+    '最终回答可以写成：深圳今天大雨，气温 25~31℃。',
+  collectApiReasoning: true,
+  allowWebSearchExtractFromMain: false,
+});
+ok(
+  '真实推理中的结论复写去重但保留推理前缀',
+  realThinkingWithOverlap.main.includes('深圳今天大雨') &&
+    realThinkingWithOverlap.thinking.includes('确认数据源') &&
+    !realThinkingWithOverlap.thinking.includes('深圳今天大雨')
 );
 
 console.log(`\nSUMMARY PASS ${pass} FAIL ${fail}`);

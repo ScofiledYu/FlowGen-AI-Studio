@@ -14,6 +14,8 @@ import {
   clearStaleRunTaskBeforeFreshRun,
   restoreUploadPhaseRunningUi,
   buildRecoveryGraphUpdates,
+  reconcileZombieRunningNode,
+  nodeIsUploadPhaseRefreshPending,
 } from '../../../utils/runRecovery';
 
 function simNode(partial: {
@@ -213,7 +215,11 @@ describe('runRecovery', () => {
     expect(out.data.taskId).toBeUndefined();
   });
 
-  it('prepareNodesAfterWorkspaceLoad restores running UI when runRecoveryPending has no taskId yet (Omni upload)', () => {
+  it('prepareNodesAfterWorkspaceLoad restores running UI when runRecoveryPending has no taskId yet (Omni upload-phase refresh)', () => {
+    // §10.77 修订 §10.56：刷新发生时上传 Promise 已丢失，但用户希望刷新后保持 running 进度条并自动完成生成。
+    // 因此 prepareNodesAfterWorkspaceLoad 仍恢复 running 进度条 UI（保留 §10.56 行为），
+    // 由 useAiTopRunRecovery 检测后派发 flowgen:auto-resume-run 事件，FlowEditor 监听并调用 handleNodeRun 重跑完整流程。
+    // 参考 ComfyUI 模式：上传阶段中断 = 从头重启生成（不轮询 AiTop，因任务尚未创建）。
     const n = simNode({
       id: 'omni-upload',
       data: {
@@ -230,10 +236,82 @@ describe('runRecovery', () => {
     expect(prepared[0].data.status).toBe('running');
     expect(prepared[0].data.progress).toBe(18);
     expect(prepared[0].data.runRecoveryPending).toBe(true);
+    // 上传阶段刷新不应触发 AiTop 轮询（无 taskId），由 auto-resume 事件触发 handleNodeRun 重跑
     expect(shouldTriggerAiTopRunRecovery(prepared[0], prepared, [])).toBe(false);
   });
 
+  it('reconcileZombieRunningNode skips upload-phase refresh nodes (no taskId + runRecoveryPending) to avoid misjudging upstream preview as completed output', () => {
+    // §10.77：上传阶段刷新时 imagePreview 可能是上游参考视频/参考图占位，
+    // 不能误判为本节点成片（否则错置 completed 且残留 runRecovery 字段）
+    const movNode = simNode({
+      id: 'mov-upload',
+      type: 'movNode' as never,
+      data: {
+        status: 'running',
+        progress: 5,
+        runRecoveryPending: true,
+        runRecoveryProgress: 5,
+        selectedModel: '可灵3.0 Omni',
+        klingOmniTab: 'instruction',
+        imagePreview: 'https://example.com/upstream-reference-video.mp4',
+      },
+    });
+    // 上传阶段：无 taskId + runRecoveryPending → 不应被误判为已完成
+    expect(reconcileZombieRunningNode(movNode)).toBeNull();
+    // 有 taskId 的正常 running 节点：imagePreview 是真实成片 → 仍判为已完成（回归保护）
+    const completedMov = simNode({
+      id: 'mov-done',
+      type: 'movNode' as never,
+      data: {
+        status: 'running',
+        progress: 80,
+        taskId: 'task-123',
+        selectedModel: '可灵3.0 Omni',
+        imagePreview: 'https://example.com/real-output.mp4',
+      },
+    });
+    expect(reconcileZombieRunningNode(completedMov)).toEqual({
+      status: 'completed',
+      progress: 100,
+      errorMessage: undefined,
+    });
+  });
+
+  it('nodeIsUploadPhaseRefreshPending detects upload-phase refresh nodes (no taskId + runRecoveryPending)', () => {
+    // §10.77：上传阶段刷新检测——用于 useAiTopRunRecovery 派发 auto-resume 事件
+    const uploadPhaseNode = simNode({
+      id: 'omni-upload',
+      data: {
+        status: 'running',
+        progress: 5,
+        runRecoveryPending: true,
+        runRecoveryProgress: 5,
+        selectedModel: '可灵3.0 Omni',
+        klingOmniTab: 'instruction',
+      },
+    });
+    expect(nodeIsUploadPhaseRefreshPending(uploadPhaseNode)).toBe(true);
+    // 有 taskId 的节点不是上传阶段刷新
+    const withTaskId = simNode({
+      id: 'with-task',
+      data: {
+        status: 'running',
+        progress: 50,
+        runRecoveryPending: true,
+        taskId: 'task-456',
+      },
+    });
+    expect(nodeIsUploadPhaseRefreshPending(withTaskId)).toBe(false);
+    // 无 runRecoveryPending 的节点也不是上传阶段刷新
+    const noPending = simNode({
+      id: 'no-pending',
+      data: { status: 'idle', progress: 0, selectedModel: 'Nano Banana 2.0' },
+    });
+    expect(nodeIsUploadPhaseRefreshPending(noPending)).toBe(false);
+  });
+
   it('restoreUploadPhaseRunningUi for Omni video tab upload-phase refresh', () => {
+    // 函数本身保留（prepareNodesAfterWorkspaceLoad 仍调用它恢复 running 进度条 UI）
     const patch = restoreUploadPhaseRunningUi({
       status: 'idle',
       progress: 0,

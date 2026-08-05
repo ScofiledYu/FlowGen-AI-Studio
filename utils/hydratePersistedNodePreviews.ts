@@ -285,7 +285,10 @@ export function hydrateNodeImagePreviewFromPersisted<
     const shouldClearForLocalMainRestore =
       !current ||
       (looksLikePanelFirstRef && !panelMainHidden) ||
-      (!isPersistableMediaUrl(current) && matchesGpRef);
+      (!isPersistableMediaUrl(current) && matchesGpRef) ||
+      // §10.69：imagePreview 是 panelMainImageUrl 备份的失效 blob/data + 有 imageLocalRef + 主图格显示中
+      // （运行失败 catch 回滚场景）→ 清空让后续 hydrateLocalMediaPreviews 从 IDB 恢复原主图
+      (!isPersistableMediaUrl(current) && hasLocalMainRef && !panelMainHidden);
     if (shouldClearForLocalMainRestore) {
       return { ...node, data: { ...node.data, imagePreview: '' } };
     }

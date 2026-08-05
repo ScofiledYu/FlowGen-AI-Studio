@@ -29,6 +29,10 @@ export function seedancePollConfigForModel(model?: string): AiTopPollConfig {
 }
 
 export function defaultPollConfigForModel(model?: string): AiTopPollConfig {
+  // MidJourney/Niji 生图常需 2~3 分钟，默认 150×2s=5min 刷新恢复易提前超时：放宽至 20min
+  if (model?.includes('MidJourney') || model?.includes('Niji')) {
+    return { maxAttempts: 300, intervalMs: 4000 };
+  }
   if (model?.includes('seedance')) return seedancePollConfigForModel(model);
   if (model === '即梦3.0 Pro') return { maxAttempts: 180, intervalMs: 5000 };
   if (model === 'vidu 2.0') return { maxAttempts: 240, intervalMs: 5000 };

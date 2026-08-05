@@ -192,10 +192,38 @@ export function composeAssistantMessage(sections: AssistantMessageSections): str
   return parts.join('\n\n');
 }
 
+/**
+ * 提取原生 <think> / <thinking> / <reasoning> 标签包裹的思考内容。
+ * 兼容标签跨 chunk 未闭合的情况（调用方需维护 buffer 继续传入）。
+ * 参考：Dify / GitHub Copilot LLM Gateway 对 reasoning 标签的分离处理。
+ */
+export function extractNativeThinkTags(text: string): { main: string; thinking: string; openTag?: string } {
+  const t = (text || '').replace(/\r\n/g, '\n');
+  const thinkMatch = t.match(/<(think|thinking|reasoning)>([\s\S]*?)<\/\1>/i);
+  if (thinkMatch) {
+    const thinking = thinkMatch[2].trim();
+    const main = t.replace(thinkMatch[0], '').trim();
+    return { main, thinking };
+  }
+  // 未闭合：检测开头是否已有开放标签
+  const openMatch = t.match(/<(think|thinking|reasoning)>\s*([\s\S]*)$/i);
+  if (openMatch) {
+    return { main: '', thinking: openMatch[2].trim(), openTag: openMatch[1] };
+  }
+  return { main: t, thinking: '' };
+}
+
 export function parseAssistantMessage(text: string): AssistantMessageSections {
   let rest = (text || '').replace(/\r\n/g, '\n');
   let webSearch = '';
   let thinking = '';
+
+  // 先处理原生 <think> 标签，再处理项目自定义的 [思考过程] 标记
+  const nativeThink = extractNativeThinkTags(rest);
+  if (nativeThink.thinking) {
+    thinking = nativeThink.thinking;
+    rest = nativeThink.main;
+  }
 
   const pull = (marker: string): void => {
     const midToken = `\n\n${marker}\n`;
@@ -559,6 +587,62 @@ function isThinkingProcessLine(line: string): boolean {
   );
 }
 
+/**
+ * 判断一段文本更像是「推理/思考过程」还是「面向用户的回答正文」。
+ * Gemini / AiTop 在某些思考模式下会把正文片段（如开篇结论、分节论证）放进
+ * reasoning_content / thinking_content 字段，导致正文被误收入思考卡。
+ * 参考 DeepSeek / OpenAI 官方 UI 的处理：只有当内容明确包含思考线索时才归入
+ * thinking；否则即使它来自 reasoning 字段，也应合并到 main 保证答案完整。
+ */
+function isLikelyReasoningContent(text: string): boolean {
+  const t = (text || '').replace(/\r\n/g, '\n').trim();
+  if (!t) return false;
+
+  const zhReasoningVerbs = /(?:分析|思考|推理|规划|反思|评估|探索|判断|细化|界定|考量|梳理|推导|论证|总结思路)/;
+  const hasDirectAnswerStatement = /(?:是|否|适合|不适合|可以|不可以|支持|不支持|能|不能|会|不会|建议|推荐|结论)[，,。：:\s]*$/m.test(t);
+
+  // 按行检查：只要出现典型思考/推理线索行，就整体视为 reasoning。
+  // 注意：不用 isChineseThinkingHeaderLine，因为它会把任何加粗中文行都误判为思考标题。
+  const zhReasoningKeywords = /^(?:\*\*)?(?:正在|让我|我需要)?(?:分析|思考|推理|规划|反思|评估|探索|判断|细化|界定|考量|梳理|推导|论证|总结思路)(?:过程|步骤|请求|分析|中|一下|：|:|$)/;
+  const enReasoningKeywords = /^\*\*(?:Analyzing|Analysis|Planning|Researching|Synthesizing|Thinking|Reasoning|Thought process|Brainstorming|Reflecting|Drafting|Evaluating|Exploring|Assessing|Determining|Considering|Refining)\b/i;
+  const reasoningCues = [
+    /自然语言思考过程/,
+    zhReasoningKeywords,
+    enReasoningKeywords,
+    /^让我(?:先|来|们)?(?:分析|思考|推理|梳理|推导|想想|考虑一下|重新审视|再检查|再想想)/,
+    /^我需要(?:先|进一步)?(?:分析|思考|推理|梳理|推导|重新审视|再检查|再评估)/,
+    // 中文内心独白 / 自我修正 / 自我质疑（模型常把这类内容混进 reasoning 字段）
+    /^(?:嗯|呃|啊|哦|哎|好吧?|不过|但是|等等|不对|没错|其实|实际上|老实说|坦白讲|仔细想想|深入思考|换个角度|重新审视)/,
+    /^(?:这(?:个|里|样|点|个问题|件事|种情况)|那(?:个|样|么)|上述|前面|之前|刚才)/,
+    /^(?:我(?:现在|接下来|应该|需要|想|觉得|认为|发现|意识到|注意到|漏掉|忽略|忘记))/,
+    /^(?:可能|也许|大概|似乎|好像|未必|不一定|假设|如果|是否|能否|会不会)/,
+    /(?:重新|再次|进一步|换个|调整|修正|更正|修改|补充|完善|优化|细化)(?:分析|思考|推理|评估|检查|核对|审视|考虑|梳理|推导|计算|判断)/,
+    /^(?:第一步|第二步|第三步|第[一二三四五六七八九十\d]+步|首先|其次|接着|然后|接下来|最后|最终|综上|总结)/,
+    /^I(?:'m| am| need| will|'ll|'ve)\b/i,
+    /^My goal\b/i,
+    /^Let me\b/i,
+    /^Here (?:is|are) my (?:thought|reasoning|analysis|thinking)/i,
+  ];
+  const lines = t.split('\n').map((l) => l.trim()).filter(Boolean);
+  const hasThinkingCueLine = lines.some((ln) => reasoningCues.some((p) => p.test(ln)));
+  if (hasThinkingCueLine) return true;
+
+  // 短句只包含思考动词、没有直接答案断言，也视为 reasoning（如「正在分析用户购房问题」）
+  if (t.length <= 40 && zhReasoningVerbs.test(t) && !hasDirectAnswerStatement) return true;
+
+  // 短句是内心独白或自我修正，也视为 reasoning
+  const shortSelfTalkPattern = /^(?:嗯|呃|啊|哦|不对|等等|让我想想|我再看看|我再想想|重新来|修正一下|更正|补充一下)/;
+  if (t.length <= 40 && shortSelfTalkPattern.test(t) && !hasDirectAnswerStatement) return true;
+
+  // 没有任何思考线索，且包含面向用户的答案结构（分节标题、结论句、编号列表），
+  // 更倾向于正文，不归入 thinking
+  const hasAnswerStructure = /#{1,3}\s+[^#\n]+/.test(t) || /^\d+[.、．]\s+\*\*/m.test(t);
+  if (hasAnswerStructure || hasDirectAnswerStatement) return false;
+
+  // 默认保守：没有明确思考线索的短文本，倾向于是答案片段
+  return false;
+}
+
 /** 思考段结束、面向用户的正文开始 */
 function isLikelyFinalAnswerStartLine(line: string): boolean {
   const t = (line || '').trim();
@@ -684,6 +768,157 @@ function rebalanceWebSearchAndThinking(
   return { webSearch: nextWebSearch, thinking: nextThinking };
 }
 
+/**
+ * 计算短文本 a 被长文本 b 包含的 n-gram 覆盖率（默认 10-gram）。
+ * 用于判断 thinking 中的某个片段是否已经在 main 中完整出现过。
+ */
+function ngramCoverage(a: string, b: string, n = 10): number {
+  const sa = (a || '').replace(/\s+/g, '');
+  const sb = (b || '').replace(/\s+/g, '');
+  if (!sa || !sb || sa.length < n) return 0;
+  // 快速失败：a 的首 n-gram 都不在 b 中，则覆盖率必然为 0
+  if (!sb.includes(sa.slice(0, n))) return 0;
+  let match = 0;
+  const total = sa.length - n + 1;
+  for (let i = 0; i < total; i++) {
+    if (sb.includes(sa.slice(i, i + n))) match++;
+  }
+  return total > 0 ? match / total : 0;
+}
+
+/**
+ * 将文本按常见中文/英文标点拆分为句子（保留末尾标点）。
+ */
+function splitSentences(text: string): string[] {
+  const s = (text || '').trim();
+  if (!s) return [];
+  const sentences: string[] = [];
+  const re = /[^。！？.!?]+[。！？.!?]+/g;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(s)) !== null) {
+    const part = m[0].trim();
+    if (part) sentences.push(part);
+  }
+  const tail = s.slice(re.lastIndex).trim();
+  if (tail) sentences.push(tail);
+  return sentences;
+}
+
+/**
+ * 判断 thinking 中的某个句子是否已在 main 中出现过。
+ */
+function sentenceIsDuplicate(sentence: string, mainParas: string[]): boolean {
+  const s = sentence.trim();
+  if (!s || s.length < 10) return false;
+  return mainParas.some((mp) => {
+    const mpTrim = mp.trim();
+    if (!mpTrim) return false;
+    if (mpTrim.includes(s)) return true;
+    if (s.includes(mpTrim) && mpTrim.length >= 15) return true;
+    return ngramCoverage(s, mpTrim) >= 0.85;
+  });
+}
+
+/**
+ * 当 thinking 中开始出现面向用户的最终答案组织语言时（如"整理一下"、"综上"、
+ * "最终回答"），将后续内容截断。模型常把腹稿与最终答案同时输出，若 main 已经
+ * 包含完整答案，thinking 中重复写一遍会降低阅读体验。
+ */
+function truncateThinkingAtAnswerStart(thinking: string): string {
+  const t = thinking.replace(/\r\n/g, '\n').trim();
+  const answerStartPatterns = [
+    /(?:^|\n)\s*那?(?:整理|总结|归纳)一下[：:]?\s*(?=\n|$)/,
+    /(?:^|\n)\s*(?:综上|所以|因此|于是)[，,。：:\s]*(?=\n|$)/,
+    /(?:^|\n)\s*(?:最终|最后)的?(?:回答|答案|回复|结论)[：:]?\s*(?=\n|$)/,
+    /(?:^|\n)\s*(?:组织|梳理)(?:一下|语言)[：:]?\s*(?=\n|$)/,
+    /(?:^|\n)\s*(?:回复|回答)(?:如下|可以这样)[：:]?\s*(?=\n|$)/,
+  ];
+  let earliest = -1;
+  for (const re of answerStartPatterns) {
+    const m = re.exec(t);
+    if (m && (earliest < 0 || m.index < earliest)) {
+      earliest = m.index;
+    }
+  }
+  if (earliest > 0) return t.slice(0, earliest).trim();
+  return t;
+}
+
+/**
+ * 部分模型（典型如 DouBao Seed 2.0）会把面向用户的完整答案又完整写入 reasoning 字段，
+ * 导致 thinking 与 main 大面积重复展示。本函数先按段落检测：若整个段落与 main 高度重复
+ * 则整段移除；否则按句子去重，移除 thinking 段落中已在 main 出现过的结论句，保留真正
+ * 属于推理过程的片段，提升阅读体验。
+ *
+ * 参考：DeepSeek/DouBao 等国产推理模型常把「腹稿」与最终答案同时输出，商业产品
+ *（如 Claude/ChatGPT 官方客户端）通常只展示精简 reasoning；此处通过去重避免
+ * 同一答案在 UI 上出现两次。
+ */
+function deduplicateThinkingFromMain(thinking: string, main: string): string {
+  const t = (thinking || '').replace(/\r\n/g, '\n').trim();
+  const m = (main || '').replace(/\r\n/g, '\n').trim();
+  if (!t || !m) return t;
+
+  const mainParas = m.split(/\n\s*\n/).map((p) => p.trim()).filter(Boolean);
+  const keptParas: string[] = [];
+
+  for (const para of t.split(/\n\s*\n/)) {
+    const p = para.trim();
+    if (!p) continue;
+    // 空段落或纯分隔线保留
+    if (/^[\s\-=*]+$/.test(p)) {
+      keptParas.push(p);
+      continue;
+    }
+
+    // 1) 整个段落与 main 某段落高度重复，直接丢弃
+    const wholeDuplicate = mainParas.some((mp) => {
+      if (p === mp) return true;
+      const minLen = Math.min(p.length, mp.length);
+      if (minLen < 20) return false;
+      return ngramCoverage(p, mp) >= 0.82 || ngramCoverage(mp, p) >= 0.82;
+    });
+    if (wholeDuplicate) continue;
+
+    // 2) 句子级别去重：段落内部分句子与 main 重复时，仅移除这些句子
+    const sentences = splitSentences(p);
+    if (sentences.length <= 1) {
+      keptParas.push(p);
+      continue;
+    }
+    const keptSentences = sentences.filter((s) => !sentenceIsDuplicate(s, mainParas));
+    const reduced = keptSentences.join('').trim();
+    // 若去重后该段落剩余内容不足原段落的 25%，说明该段落基本在复述答案，丢弃
+    if (reduced.length < p.length * 0.25) continue;
+    keptParas.push(reduced);
+  }
+
+  let result = keptParas.join('\n\n').trim();
+  // 去重后剩余内容不足原 thinking 的 15%，说明整段都是答案复述，直接清空 thinking
+  // 避免零散句子影响阅读。
+  if (result.length < t.length * 0.15) return '';
+  // 最终防御：若 main 已含完整答案且 thinking 仍明显更长，截断 thinking 中
+  // 面向用户的最终答案组织语言（如"整理一下"、"综上"之后的内容），避免同一
+  // 答案在 UI 上出现两次（典型如 DouBao Seed 2.0 把腹稿和最终答案都写进 reasoning）。
+  if (result.length > 0 && m.length > 0 && result.length > m.length * 1.2) {
+    result = truncateThinkingAtAnswerStart(result);
+    if (result.length < t.length * 0.15) return '';
+    // 截断后仍明显超过 main 长度，按句子边界保留前面的推理片段，避免 thinking 喧宾夺主。
+    if (result.length > m.length * 1.5) {
+      const maxKeep = Math.max(m.length, 240);
+      const sentences = splitSentences(result);
+      let preview = '';
+      for (const s of sentences) {
+        if (preview.length + s.length > maxKeep) break;
+        preview += s;
+      }
+      const trimmed = preview.trim();
+      return trimmed && trimmed.length < result.length ? `${trimmed}...` : trimmed;
+    }
+  }
+  return result;
+}
+
 /** 从正文中拆出「检索过程块」（含 Search results 列表） */
 export function extractWebSearchBlockFromMain(main: string): { main: string; webSearch: string } {
   const text = (main || '').replace(/\r\n/g, '\n').trim();
@@ -789,65 +1024,6 @@ export function extractThinkingBlockFromMain(main: string): { main: string; thin
   if (headLen > 0 && headZh / headLen > 0.12) return { main: text, thinking: '' };
 
   return { main: tail || text, thinking: head };
-}
-
-/**
- * Gemini 思考模式降级提取：AiTop API 不返回独立的 thinkingContent 字段，
- * 思考内容混在正文中。尝试在长文本中找「结论/答案」标记作为拆分点。
- * 仅当文本 >200 字符且有明确结论标记时才拆分，避免误伤普通回答。
- */
-function extractGeminiFallbackThinking(main: string): { main: string; thinking: string } {
-  const text = (main || '').replace(/\r\n/g, '\n').trim();
-  if (text.length < 200) return { main: text, thinking: '' };
-
-  const lines = text.split('\n');
-  // 从后往前找「结论」或「答案」标记（更可能出现在末尾）
-  const conclusionPatterns = [
-    /^\*\*结论\*\*/,
-    /^\*\*答案\*\*/,
-    /^\*\*总结[^*]*\*\*/,
-    /^\*\*最终[^*]*\*\*/,
-    /^结论[：:]/,
-    /^答案[：:]/,
-    /^总结[：:]/,
-    /^所以[，,]/,
-    /^因此[，,]/,
-    /^综上所述[，,]/,
-    /^第\d+次落地时[，,]/,
-    // Gemini 思考模式下更多答案起始标记
-    /^最终[的的]?.*(?:结果|答案|计算|路程|距离|总)[：:]/u,
-    /^总共.*(?:为|是)[：:]?/u,
-    /^根据(?:以上)?(?:分析|计算|推导)[，,]/u,
-    /^答[：:]/u,
-    /^答案为[：:]/u,
-    /^#{1,3}\s*(?:最终|答案|结果|总结)/u,
-  ];
-
-  let conclusionIdx = -1;
-  for (let i = lines.length - 1; i >= 1; i--) {
-    const ln = lines[i].trim();
-    if (!ln) continue;
-    if (conclusionPatterns.some((p) => p.test(ln))) {
-      conclusionIdx = i;
-      break;
-    }
-  }
-
-  if (conclusionIdx <= 0) return { main: text, thinking: '' };
-
-  const thinking = lines.slice(0, conclusionIdx).join('\n').trim();
-  const answer = lines.slice(conclusionIdx).join('\n').trim();
-
-  // 确保思考部分足够长（至少 80 字符）且答案部分不太短
-  if (thinking.length < 80 || answer.length < 8) {
-    return { main: text, thinking: '' };
-  }
-
-  // 确保思考部分有实质内容（不是纯标题）
-  const thinkingZh = (thinking.match(/[\u4e00-\u9fa5]/g) || []).length;
-  if (thinkingZh < 10) return { main: text, thinking: '' };
-
-  return { main: answer, thinking };
 }
 
 /**
@@ -963,10 +1139,19 @@ export function normalizeAssistantStream(params: {
   let thinking = parsed.thinking;
 
   if (params.collectApiReasoning && (params.apiReasoning || '').trim()) {
-    thinking = thinking
-      ? `${thinking}\n\n${params.apiReasoning!.trim()}`.trim()
-      : params.apiReasoning!.trim();
+    const apiReasoning = params.apiReasoning!.trim();
+    // Gemini / AiTop 偶尔把正文片段（如开篇结论、分节论证）塞进 reasoning 字段，
+    // 若直接归入 thinking 会导致用户正文缺失/被截断。仅当内容明确像推理时才保留。
+    if (isLikelyReasoningContent(apiReasoning)) {
+      thinking = thinking ? `${thinking}\n\n${apiReasoning}`.trim() : apiReasoning;
+    } else {
+      main = main ? `${main}\n\n${apiReasoning}`.trim() : apiReasoning;
+    }
   }
+
+  // 去重：部分模型（如 DouBao Seed 2.0）会把完整答案又写入 reasoning，
+  // 导致 thinking 与 main 重复展示。移除 thinking 中已在 main 出现过的段落。
+  thinking = deduplicateThinkingFromMain(thinking, main);
 
   if (params.allowWebSearchExtractFromMain !== false) {
     const ws = extractWebSearchBlockFromMain(main);
@@ -982,30 +1167,15 @@ export function normalizeAssistantStream(params: {
     !params.skipExtractThinkingFromMain &&
     !(params.collectApiReasoning && hasApiReasoning)
   ) {
-    // Gemini 思考模式（开了思考但 API 没返回独立 thinkingContent）：优先用结论标记拆分
-    const isGeminiThinkingFallback = params.collectApiReasoning && !hasApiReasoning;
-    if (isGeminiThinkingFallback) {
-      const geminiFallback = extractGeminiFallbackThinking(main);
-      if (geminiFallback.thinking.trim()) {
-        main = geminiFallback.main;
-        thinking = thinking
-          ? `${thinking}\n\n${geminiFallback.thinking}`.trim()
-          : geminiFallback.thinking;
-      } else {
-        // Gemini 降级未命中结论标记，回退到通用思考提取
-        const th = extractThinkingBlockFromMain(main);
-        if (th.thinking.trim()) {
-          main = th.main;
-          thinking = thinking ? `${thinking}\n\n${th.thinking}`.trim() : th.thinking;
-        }
-      }
-    } else {
-      // 非 Gemini 模式：通用思考提取
-      const th = extractThinkingBlockFromMain(main);
-      if (th.thinking.trim()) {
-        main = th.main;
-        thinking = thinking ? `${thinking}\n\n${th.thinking}`.trim() : th.thinking;
-      }
+    // 思考提取：统一走保守的顶部推理前缀识别。
+    // 不再按「总结/结论」等尾部标记做 bottom-up 拆分，避免把结构化的正文答案
+    // （如 ### 1. ... ### 总结）误判为 thinking 过程。
+    // 参考：OpenAI/Claude/DeepSeek 官方 UI 均依赖 API 独立 reasoning 字段或原生
+    // <think>/<reasoning> 标签，不会从普通正文中逆向拆分结论段。
+    const th = extractThinkingBlockFromMain(main);
+    if (th.thinking.trim()) {
+      main = th.main;
+      thinking = thinking ? `${thinking}\n\n${th.thinking}`.trim() : th.thinking;
     }
   }
 
@@ -1072,6 +1242,14 @@ export function isLikelyMainOnlySearchDump(main: string): boolean {
   return numberedHits >= 2 || (firstNumIdx === 0 && looksLikeNumberedSearchList(t));
 }
 
+/** 联网首轮正文疑似"引导语式截断"（冒号收尾承诺下文却无实质内容，如"以下是今天广州的天气情况："）→ 需二次总结 */
+export function isLikelyTruncatedLeadInMain(main: string): boolean {
+  const t = (main || '').trim();
+  if (!t || t.length > 200) return false;
+  if (!/[：:]\s*$/.test(t)) return false;
+  return /(以下是|如下|情况如下|一起来看|来看看|为您整理|为你整理|介绍如下)/.test(t);
+}
+
 /** 联网首轮若仅有检索快照、缺少中文正文 → 需二次总结 */
 export function needsWebSearchSynthesisPass(
   sections: AssistantMessageSections,
@@ -1081,6 +1259,7 @@ export function needsWebSearchSynthesisPass(
   const process = (sections.webSearch || '').trim();
   if (!process && isLikelyRawWebSearchDump(main)) return true;
   if (process && isLikelyTooShortMainAnswer(main)) return true;
+  if (process && isLikelyTruncatedLeadInMain(main)) return true;
   if (!main && process) return true;
   if (main && isLikelyRawWebSearchDump(main) && main.length < 200) return true;
   if (isLikelyMainOnlySearchDump(main)) return true;
@@ -1309,7 +1488,13 @@ export function assistantReplyHasVisibleMain(
     }
   }
   if (!main) return false;
-  return !isLikelyTooShortMainAnswer(main);
+  if (!isLikelyTooShortMainAnswer(main)) return true;
+  // 显式无效模式（未找到结果类）维持原判定，仍触发恢复/降级
+  if (/^no results found\b[.!?。！？]*$/i.test(main)) return false;
+  if (/^未找到相关结果[。！？!?.]*$/.test(main)) return false;
+  // 短但实质有效的回复（暗号/简短确认，如"银河流星2026""已记住""OK"）视为可见正文，
+  // 避免误触发模型降级链与思考内容回填；仅放宽本可见性判定，isLikelyTooShortMainAnswer 全局阈值不变
+  return /[\u4e00-\u9fff]{2,}/.test(main) || /[A-Za-z0-9]{2,}/.test(main);
 }
 
 /** 保存前统一补齐正文，避免界面只剩 [联网检索]/[思考过程] */
@@ -1362,4 +1547,43 @@ export function mergeWithWebSearchProcess(
 /** 发给上游的历史：去掉过程区，避免重复灌入检索原文 */
 export function stripAssistantProcessForHistory(content: string): string {
   return parseAssistantMessage(content).main.trim();
+}
+
+/**
+ * 把助手消息中的过程区压缩成摘要，保留关键来源 URL 和检索词，供多轮对话历史使用。
+ * 避免完全剥离导致用户追问「你刚才引用的链接」时 fallback 模型看不到上下文。
+ */
+export function compressAssistantProcessForHistory(content: string): string {
+  const sections = parseAssistantMessage(content);
+  const main = sections.main.trim();
+  const webSearch = sections.webSearch.trim();
+  const thinking = sections.thinking.trim();
+  const parts: string[] = [];
+  if (main) parts.push(main);
+
+  if (webSearch) {
+    const lines = webSearch.split('\n').map((l) => l.trim()).filter(Boolean);
+    const queries = lines
+      .filter((l) => /^(Search results for|I'll search for|Here are the search results|正在检索)\s*[：:]?\s*/i.test(l))
+      .map((l) => l.replace(/^[^"「]*["「]([^"」]+)["」].*$/, '$1').trim())
+      .filter(Boolean);
+    const urls = lines
+      .filter((l) => /^https?:\/\//i.test(l) || /^Source:\s*https?:\/\//i.test(l))
+      .map((l) => l.replace(/^Source:\s*/i, '').trim())
+      .slice(0, 3);
+    const summaryParts: string[] = [];
+    if (queries.length) summaryParts.push(`曾检索：${queries.join('；')}`);
+    if (urls.length) summaryParts.push(`来源：${urls.join('、')}`);
+    if (summaryParts.length) parts.push(`[${summaryParts.join('；')}]`);
+  }
+
+  if (thinking && thinking.length > 0) {
+    // 思考过程通常很长，只保留一句摘要
+    const firstLine = thinking.split('\n').find((l) => l.trim())?.trim() || '';
+    if (firstLine && firstLine.length <= 80) {
+      parts.push(`[思考：${firstLine}]`);
+    }
+  }
+
+  return parts.join('\n').trim();
 }

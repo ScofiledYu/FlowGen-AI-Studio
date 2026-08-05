@@ -29,9 +29,14 @@
   opacity: 0.5;
 }
 
-/* 导航图：z-index 3，低于 renderer(4) 故节点叠在上面；Controls 仍为 5 */
+/* 导航图：z-index 5（> renderer 4），确保点击不被 react-flow__pane 拦截。
+   Panel 是 .react-flow__renderer 的兄弟元素，z-index 直接互比：
+   原 z-index 3 < renderer 4 → pane（随 renderer）盖在 minimap 之上，拦截所有点击，
+   onSvgNodeClick/onSvgClick 永不触发（点击节点无反应）。
+   恢复为 5（= Controls 同级，React Flow 默认值），minimap 在 pane 之上，点击可达 svg。
+   代价：节点不再视觉叠在 minimap 上（minimap 会遮挡经过右下角的节点），但点击导航功能优先。 */
 .react-flow__panel.react-flow__minimap {
-  z-index: 3 !important;
+  z-index: 5 !important;
   pointer-events: auto !important;
   margin: 0 !important;
 }

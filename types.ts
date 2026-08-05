@@ -1,5 +1,3 @@
-import type { GenerationParams, NodeData } from '../types';
-
 export enum NodeType {
   INPUT = 'inputNode',
   PROCESSOR = 'processorNode',
@@ -94,6 +92,32 @@ export interface GenerationParams {
   image2Quality?: '1K' | '2K' | '4K';
   /** image2：画质等级 low / medium / high（满血版 API qualityLevel） */
   image2QualityLevel?: 'low' | 'medium' | 'high';
+  /** MidJourney 快照：风格族（realistic=真实感强 / cartoon=卡通动漫） */
+  mjFamily?: 'realistic' | 'cartoon';
+  /** MidJourney 快照：API model 参数（' --v 7' / ' --niji6' 等） */
+  mjVersion?: string;
+  /** MidJourney 快照：风格（API style 字段） */
+  mjStyle?: string;
+  /** MidJourney 快照：画面比例 ratio */
+  mjRatio?: string;
+  /** MidJourney 快照：quality 画质档 */
+  mjQuality?: string;
+  /** MidJourney 快照：mode 计费模式（FAST / RELAX） */
+  mjMode?: 'FAST' | 'RELAX';
+  /** MidJourney 快照：视角 angle */
+  mjAngle?: string;
+  /** MidJourney 快照：人物镜头 camera */
+  mjCamera?: string;
+  /** MidJourney 快照：灯光 light */
+  mjLight?: string;
+  /** MidJourney 快照：艺术程度 art */
+  mjArt?: string;
+  /** MidJourney 快照：风格一致性参考图 URL（sref） */
+  mjSrefUrl?: string;
+  /** MidJourney 快照：角色一致性参考图 URL（cref） */
+  mjCrefUrl?: string;
+  /** MidJourney 快照：参照万物参考图 URL（oref） */
+  mjOrefUrl?: string;
   /** 生成结果 PNG 实际像素（探测 IHDR；可能与 image2ImageSize 请求值不同） */
   outputImageSize?: string;
   /** 本次生成结果主 URL（AiTop COS / 持久化链；Node Details Source URL 优先） */
@@ -137,6 +161,127 @@ export function isImage2Model(model: string | undefined): boolean {
   return model === MODEL_IMAGE_2;
 }
 
+/** MidJourney 文生模型（面板下拉唯一选项） */
+export const MODEL_MIDJOURNEY = 'MidJourney';
+/** 旧 persisted 名称：MidJourney (真实感强)，用于向后兼容 */
+export const MODEL_MIDJOURNEY_REALISTIC = 'MidJourney (真实感强)';
+/** 旧 persisted 名称：Niji (卡通动漫)，用于向后兼容 */
+export const MODEL_NIJI = 'Niji (卡通动漫)';
+
+/** MidJourney 风格族类型 */
+export type MjFamily = 'realistic' | 'cartoon';
+
+/** MidJourney 风格族选项（面板内二级切换） */
+export const MJ_FAMILY_OPTIONS: { id: MjFamily; label: string }[] = [
+  { id: 'realistic', label: 'MidJourney (真实感强)' },
+  { id: 'cartoon', label: 'Niji (卡通动漫)' },
+];
+
+export function isMidJourneyModel(model: string | undefined): boolean {
+  return model === MODEL_MIDJOURNEY;
+}
+
+export function isNijiModel(model: string | undefined): boolean {
+  return model === MODEL_NIJI;
+}
+
+/** 是否为旧 persisted 的 MJ 家族模型名（真实感强 / 卡通动漫） */
+export function isLegacyMidJourneyFamilyModel(model: string | undefined): boolean {
+  return model === MODEL_MIDJOURNEY_REALISTIC || model === MODEL_NIJI;
+}
+
+/** 是否为 MJ 家族文生模型（含新名 MidJourney 与旧 persisted 名），面板与运行链路共用判断 */
+export function isMidJourneyFamilyModel(model: string | undefined): boolean {
+  return isMidJourneyModel(model) || isLegacyMidJourneyFamilyModel(model);
+}
+
+/** MJ API version 参数（真实感强；含前导空格，服务端接受） */
+export const MJ_VERSION_OPTIONS_REALISTIC = [' --v 7', ' --v 6.1', ' --v 6'] as const;
+/** MJ API version 参数（卡通动漫；含前导空格，服务端接受） */
+export const MJ_VERSION_OPTIONS_CARTOON = [' --niji6', ' --niji5'] as const;
+/** MJ 画面比例（ratio 字段；文档示例中出现，已实测接受） */
+export const MJ_RATIO_OPTIONS = ['1:1', '4:3', '3:4', '16:9', '9:16'] as const;
+/** MJ 画质档（quality 字段；UI 显示中文，API 透传 value） */
+export const MJ_QUALITY_OPTIONS: { name: string; value: string }[] = [
+  { name: '一般', value: '0.25' },
+  { name: '清晰', value: '0.5' },
+  { name: '高清', value: '1' },
+  { name: '超高清', value: '2' },
+];
+/** MJ 风格（style 字段） */
+export const MJ_STYLE_OPTIONS: { name: string; value: string }[] = [
+  { name: '赛博朋克', value: 'Cyberpunk' },
+  { name: '星际', value: 'Warframe' },
+  { name: '动漫', value: 'cartoon' },
+  { name: '日本漫画', value: 'Japanese Manga' },
+  { name: '水墨画风格', value: 'Ink painting style' },
+  { name: '原创', value: 'Original' },
+  { name: '风景画', value: 'Landscape Painting' },
+  { name: '插画', value: 'illustration' },
+  { name: '漫画', value: 'comics' },
+  { name: '现代自然', value: 'Modern Nature' },
+  { name: '创世纪', value: 'Genesis' },
+  { name: '海报风格', value: 'Poster Style' },
+  { name: '超现实主义', value: 'Surrealism' },
+  { name: '素描', value: 'sketch' },
+  { name: '写实', value: 'Realism' },
+  { name: '水彩画', value: 'Watercolor' },
+  { name: '立体主义', value: 'Cubism' },
+  { name: '黑白', value: 'Black and White' },
+  { name: '胶片摄影风格', value: 'fm photography' },
+  { name: '电影化', value: 'Cinematic' },
+  { name: '清晰的面部特征', value: 'dlear facial features' },
+];
+/** MJ 视角（angle 字段） */
+export const MJ_ANGLE_OPTIONS: { name: string; value: string }[] = [
+  { name: '宽视角', value: 'Wide view' },
+  { name: '鸟瞰视角', value: 'Aerial view' },
+  { name: '顶视角', value: 'Top view' },
+  { name: '仰视角', value: 'Looking up' },
+  { name: '正面视角', value: 'Front view' },
+  { name: '头部特写', value: 'Headshot' },
+  { name: '超广角视角', value: 'Ultrawideshot' },
+  { name: '中景', value: 'Medium Shot(MS)' },
+  { name: '远景', value: 'Long Shot(LS)' },
+  { name: '景深', value: 'depth offield(dof)' },
+];
+/** MJ 人物镜头（camera 字段） */
+export const MJ_CAMERA_OPTIONS: { name: string; value: string }[] = [
+  { name: '脸部特写', value: 'Face Shot (VCU)' },
+  { name: '大特写', value: 'Big Close-Up(BCU)' },
+  { name: '腰部以上', value: 'Waist Shot(WS)' },
+  { name: '膝盖以上', value: 'KneeShot(KS)' },
+  { name: '全身照', value: 'Full Length Shot(FLS)' },
+  { name: '极远景', value: 'Extra Long Shot(ELS)' },
+];
+/** MJ 灯光（light 字段） */
+export const MJ_LIGHT_OPTIONS: { name: string; value: string }[] = [
+  { name: '冷光', value: 'Cold Light' },
+  { name: '暖光', value: 'Warm light' },
+  { name: '硬光', value: 'Hard Light' },
+  { name: '戏剧性光线', value: 'Dramatic Light' },
+  { name: '反射光', value: 'Reflected Light' },
+  { name: '薄雾', value: 'mist' },
+  { name: '自然光', value: 'Natural Light' },
+  { name: '阳光', value: 'Sunlight' },
+  { name: '情绪化', value: 'Emotional' },
+];
+/** MJ 艺术程度（art 字段） */
+export const MJ_ART_OPTIONS: { name: string; value: string }[] = [
+  { name: '低强度风格', value: '50' },
+  { name: '中等强度风格', value: '100' },
+  { name: '高强度风格', value: '250' },
+  { name: '非常高强度风格', value: '750' },
+];
+/** MJ 默认 version（真实感强最新版） */
+export const MJ_DEFAULT_VERSION_REALISTIC = ' --v 7';
+/** MJ 默认 version（卡通动漫最新版） */
+export const MJ_DEFAULT_VERSION_CARTOON = ' --niji6';
+/** @deprecated 旧常量别名，建议改用 MJ_DEFAULT_VERSION_REALISTIC */
+export const MJ_DEFAULT_VERSION_MIDJOURNEY = MJ_DEFAULT_VERSION_REALISTIC;
+/** @deprecated 旧常量别名，建议改用 MJ_DEFAULT_VERSION_CARTOON */
+export const MJ_DEFAULT_VERSION_NIJI = MJ_DEFAULT_VERSION_CARTOON;
+
 /** 属性面板 Model 下拉可选模型（新节点） */
 export const INSPECTOR_SELECTABLE_MODELS = [
   MODEL_NANO_BANANA_2,
@@ -159,8 +304,29 @@ export function isDeprecatedInspectorModel(model: string | undefined): boolean {
   return (DEPRECATED_INSPECTOR_MODELS as readonly string[]).includes(model);
 }
 
+/**
+ * Text Node（文生节点）可选模型：Nano Banana 2.0 / image 2 / MidJourney 文生图 + seedance2.0 文生视频。
+ * MidJourney 面板内再通过 mjFamily 区分真实感强/卡通动漫。
+ * 仅为 Image Node 已验收模型的子集，运行链路完全复用（无 @ 引用即文生）。
+ */
+export const TEXT_GEN_NODE_MODELS = [
+  MODEL_NANO_BANANA_2,
+  MODEL_IMAGE_2,
+  MODEL_MIDJOURNEY,
+  'seedance2.0 (高质量版)',
+  'seedance2.0 (急速版)',
+] as const;
+
+/** 是否为 Text Node 文生面板可选模型 */
+export function isTextGenNodeModel(model: string | undefined): boolean {
+  if (!model) return false;
+  return (TEXT_GEN_NODE_MODELS as readonly string[]).includes(model);
+}
+
 export interface NodeData {
   label: string;
+  /** Text Node（文生节点）标记：纯文生图/文生视频，面板无拖图/参考区/@引用；PROCESSOR 类型复用全部运行链路 */
+  textGenNode?: boolean;
   description?: string;
   icon?: string;
   status?: 'idle' | 'running' | 'completed' | 'error';
@@ -342,6 +508,37 @@ export interface NodeData {
   /** image2：画质等级 low / medium / high */
   image2QualityLevel?: 'low' | 'medium' | 'high';
 
+  /** MidJourney：风格族（realistic=真实感强 / cartoon=卡通动漫） */
+  mjFamily?: MjFamily;
+  /** MidJourney：API model 参数（' --v 7' / ' --v 6.1' / ' --v 6' / ' --niji6' / ' --niji5'） */
+  mjVersion?: string;
+  /** MidJourney：风格（API style 字段，空=不传） */
+  mjStyle?: string;
+  /** MidJourney：画面比例 ratio（1:1 / 4:3 / 3:4 / 16:9 / 9:16） */
+  mjRatio?: string;
+  /** MidJourney：quality 画质档（'0.25' | '0.5' | '1' | '2'） */
+  mjQuality?: string;
+  /** MidJourney：mode 计费模式（FAST 快速=30 积分 / RELAX 低速=15 积分） */
+  mjMode?: 'FAST' | 'RELAX';
+  /** MidJourney：视角 angle（API angle 字段） */
+  mjAngle?: string;
+  /** MidJourney：人物镜头 camera（API camera 字段） */
+  mjCamera?: string;
+  /** MidJourney：灯光 light（API light 字段） */
+  mjLight?: string;
+  /** MidJourney：艺术程度 art（API art 字段） */
+  mjArt?: string;
+  /** MidJourney：风格一致性图 URL（sref，选填，面板上传即转 COS URL） */
+  mjSrefUrl?: string;
+  /** MidJourney：角色一致性图 URL（cref，卡通动漫风格族选填） */
+  mjCrefUrl?: string;
+  /** MidJourney：参照万物图 URL（oref，真实感强风格族选填） */
+  mjOrefUrl?: string;
+  /** MidJourney：参考图区是否展开（持久化） */
+  mjRefImagesOpen?: boolean;
+  /** MidJourney：高级参数区是否展开（持久化） */
+  mjAdvancedOpen?: boolean;
+
   // Snapshot of parameters used to generate this node
   generationParams?: GenerationParams;
   /** 最近一次生成完成时间（ISO 字符串） */
@@ -435,6 +632,24 @@ export interface NodeData {
       image2ImageSize?: string;
       image2Quality?: '1K' | '2K' | '4K';
       image2QualityLevel?: 'low' | 'medium' | 'high';
+    };
+    MidJourney?: {
+      prompt?: string;
+      negativePrompt?: string;
+      numberOfImages?: string;
+      mjFamily?: MjFamily;
+      mjVersion?: string;
+      mjStyle?: string;
+      mjRatio?: string;
+      mjQuality?: string;
+      mjMode?: 'FAST' | 'RELAX';
+      mjAngle?: string;
+      mjCamera?: string;
+      mjLight?: string;
+      mjArt?: string;
+      mjSrefUrl?: string;
+      mjCrefUrl?: string;
+      mjOrefUrl?: string;
     };
     '可灵 2.5 Turbo'?: {
       prompt?: string;

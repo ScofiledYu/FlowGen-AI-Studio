@@ -644,25 +644,27 @@ export function promptMentionsMainVideoForNodeData(data: Partial<NodeData>): boo
 export function resolveSeedanceReferenceMainVideoUrl(
   data: Partial<NodeData>
 ): string | undefined {
-  const prev = String(data.imagePreview || '').trim();
-  if (prev && isLikelyMainVideoUrl(prev)) return prev;
-
   const movs = data.referenceMovs || [];
   const soleMov = movs.length === 1 ? String(movs[0]?.url || '').trim() : '';
   const outputUrl = String(
     (data.generationParams as { outputUrl?: string } | undefined)?.outputUrl || ''
   ).trim();
+  const prev = String(data.imagePreview || '').trim();
 
+  // §11.70: referenceMovs 优先于 imagePreview 判断主视频，
+  // 避免 MOV 输出节点的 imagePreview（生成结果视频）被误判为参考主视频。
+  // 保留 outputUrl/prev 匹配 gate：仅当 soleMov 与 outputUrl 或 imagePreview
+  // 为同一视频时才确认为主视频，防止 imagePreview 为图片时普通参考视频被误标为 @主视频。
   if (soleMov && isLikelyMainVideoUrl(soleMov)) {
     if (outputUrl && isSameMediaUrl(soleMov, outputUrl)) return soleMov;
     if (prev && isSameMediaUrl(soleMov, prev)) return soleMov;
+    // §11.80: 输出节点的 imagePreview/outputUrl 是生成结果视频，与参考视频 URL 不同时，
+    // soleMov 无法通过上述匹配门禁。此时若 prompt 明确包含 @主视频，soleMov 即为参考主视频，
+    // 防止 fallback 到 imagePreview（生成结果）导致 Node Details 标签误显示为「视频1」。
+    if (promptMentionsMainVideoForNodeData(data)) return soleMov;
   }
 
-  if (outputUrl && isLikelyMainVideoUrl(outputUrl)) {
-    if (soleMov && isSameMediaUrl(soleMov, outputUrl)) return soleMov;
-    // 仅当 referenceMovs 中有 outputUrl 时才视为参考主视频；
-    // 无 referenceMovs 时 outputUrl 仅为生成结果，非参考视频，避免误将 @主图 变为 @主视频
-  }
+  if (prev && isLikelyMainVideoUrl(prev)) return prev;
 
   return undefined;
 }
@@ -1593,14 +1595,25 @@ export function inspectorMentionDisplayNameForItem(it: PromptMediaRefItem): stri
   const lab = String(it.label || '')
     .replace(/^素材·/, '')
     .trim();
-  if (lab) return lab;
+  /**
+   * §10.76 修复：label 为泛称（图片n/主图/主视频/首帧图/尾帧图）时，projectAsset 项的 displayName
+   * 不能再返回泛称，否则与 @图片n 项同名会被 buildInspectorPromptMentionItems / mergeInspectorAtMentionItems
+   * 误去重，导致 @ 下拉丢失资产条目（面板底栏仍能显示资产名，但 @ 下拉缺失）。
+   * 场景：referenceImageLabels[i] 为泛称「图片n」但槽 URL 实为资产库图片（Nano/image2/Seedance 参考生/Omni）。
+   * 项目库全量项 label 为「素材·名称」非泛称，仍走 lab 分支，行为不变。
+   * 资产名为非泛称的常规场景（lab=资产名）也不受影响。
+   */
+  if (lab && !isGenericPanelRefCaption(lab)) return lab;
   const ins = String(it.insertText || '').trim();
+  if (ins.startsWith('@资产:')) {
+    const name = ins.slice('@资产:'.length).trim();
+    if (name) return name;
+  }
   if (ins === '@主图') return '主图';
   if (ins === '@主视频') return '主视频';
   if (ins === '@首帧图') return '首帧图';
   if (ins === '@尾帧图') return '尾帧图';
-  if (ins.startsWith('@资产:')) return ins.slice('@资产:'.length).trim();
-  return '';
+  return lab || '';
 }
 
 /** 属性面板 @ 下拉：仅当前面板已拖入/选中的素材（不含项目素材库全量）；同资产名只一项 */
@@ -2600,11 +2613,11 @@ export function resolveProjectAssetUrlForPromptToken(
     if (libKey && slotKey && libKey === slotKey) return panel;
     return lib;
   }
+  // §11.74 面板 URL 已是 aitop100 COS 地址时直接返回，勿替换为资产库代理路径
+  // projectAssetMediaPairKey 只能从 /flowgen-api/... 格式提取 project/asset ID，
+  // COS URL 不含此格式，panelKey 始终为 null，导致原先逻辑永远返回 lib 而丢弃 COS URL
   if (/aitop100app-1251510006/i.test(panel)) {
-    const libKey = projectAssetMediaPairKey(lib);
-    const panelKey = projectAssetMediaPairKey(panel);
-    if (libKey && panelKey && libKey === panelKey) return panel;
-    return lib;
+    return panel;
   }
   return panel;
 }
@@ -2660,6 +2673,8 @@ function resolveSeedancePromptTokenMedia(
     return { kind: 'image', url, label: name, refImageSlotIndex };
   }
   if (token === '@主图' || token === '@主体') {
+    // §11.83: 回退 §11.78 的 referenceImages[0] 优先逻辑。与 banana、可灵 Omni 多图参考一致，
+    // @主图 始终使用 imagePreview 作为主图 URL。imagePreview 可能是 blob（待上传）或 COS URL（生成输出）。
     const url = data.imagePreview?.trim();
     if (!url || isLikelyMainVideoUrl(url)) return null;
     return { kind: 'image', url, label: mainMentionDisplayLabel(data, ctx.projectAssets) };

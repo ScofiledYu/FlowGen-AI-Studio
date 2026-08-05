@@ -1,5 +1,5 @@
 import type { Edge, Node as RFNode } from 'reactflow';
-import { NodeType, isImage2Model, isNanoBanana2Model, type GenerationParams, type NodeData } from '../types';
+import { NodeType, isImage2Model, isMidJourneyFamilyModel, isNanoBanana2Model, type GenerationParams, type NodeData } from '../types';
 import {
   parseAiTopTaskIds,
   isVideoModelName,
@@ -14,6 +14,7 @@ import {
   pickSeedanceReferencePanelSnapshot,
   repairSeedanceReferenceGenerationParamsFromPanel,
   repairSeedanceReferencePanelMainSlotIfNeeded,
+  repairOmniMultiGenerationParamsFromPanel,
   pickStillImageRecoveryApiReferenceImages,
   buildStillImageRecoveryPanelPreviewPatch,
 } from './referencedMediaRun';
@@ -92,6 +93,20 @@ export function nodeHasPendingRunRecovery(node: RFNode): boolean {
   if (!node.data?.runRecoveryPending) return false;
   const taskIds = parseAiTopTaskIds(node.data.taskId || node.data.generationParams?.taskId);
   return taskIds.length > 0;
+}
+
+/**
+ * §10.77 上传阶段刷新（Omni instruction/video 等长上传 tab 刷新中断）：
+ * 持久化快照含 runRecoveryPending=true 但无 taskId。
+ * 此时 AiTop 侧任务尚未创建（appendRunTaskId 未调用），无法走 AiTop 轮询恢复。
+ * 参考 ComfyUI 模式（保存/加载 in-progress job 会从头重启生成）：
+ * 由 useAiTopRunRecovery 派发 flowgen:auto-resume-run 事件，
+ * FlowEditor 监听并调用 handleNodeRun 重新跑完整"上传→创建任务→轮询→落盘"流程。
+ */
+export function nodeIsUploadPhaseRefreshPending(node: RFNode): boolean {
+  if (!node.data?.runRecoveryPending) return false;
+  const taskIds = parseAiTopTaskIds(node.data.taskId || node.data.generationParams?.taskId);
+  return taskIds.length === 0;
 }
 
 /** 刷新后是否应向 AiTop 恢复轮询（含 idle + runRecoveryPending，勿要求已是 running） */
@@ -343,6 +358,22 @@ export function clearStaleRunTaskBeforeFreshRun(data: NodeData): Partial<NodeDat
   });
 }
 
+/**
+ * 运行失败（catch 块）时回滚主图格显示状态（§10.68）。
+ * 仅当运行时因未 @主图 隐藏了主图格（panelMainSlotVisible:false + 有 panelMainImageUrl 备份）时，
+ * 恢复 imagePreview 为备份 + 主图格重新显示 + 清备份，避免运行报错后主图格消失误导用户。
+ * 仅回滚被运行修改的主图格显示；referenceImages 的 COS URL 替换不回滚（COS URL 有效，回滚到 blob 可能失效）。
+ */
+export function buildMainSlotRollbackPatchForRunError(data: NodeData): Partial<NodeData> {
+  const hasHiddenMainSlot = data?.panelMainSlotVisible === false && !!data?.panelMainImageUrl;
+  if (!hasHiddenMainSlot) return {};
+  return {
+    panelMainSlotVisible: true,
+    imagePreview: data!.panelMainImageUrl,
+    panelMainImageUrl: undefined,
+  };
+}
+
 /** 从 Error Result Node 文案解析 Task ID（与 FlowEditor spawn 格式一致） */
 function parseTaskIdsFromErrorMessage(msg: string): string[] {
   const text = String(msg || '');
@@ -384,6 +415,10 @@ function isOutputVideoNode(node: RFNode): boolean {
 /** 已有成片但 status 仍为 running（刷新中断） */
 export function reconcileZombieRunningNode(node: RFNode): Partial<NodeData> | null {
   if (node.data?.status !== 'running') return null;
+  // 上传阶段刷新（尚无 taskId + runRecoveryPending）：imagePreview 可能是上游参考视频/参考图占位，
+  // 不能误判为本节点成片，否则会把上传中断节点错置为 completed（残留 runRecovery 字段+错位预览）
+  const taskIds = parseAiTopTaskIds(node.data?.taskId || node.data?.generationParams?.taskId);
+  if (!taskIds.length && node.data?.runRecoveryPending) return null;
   const preview = String(node.data?.imagePreview || '').trim();
   const thumbs = node.data.generatedThumbnails || [];
   const hasMediaThumb = thumbs.some((t) => t?.url && (t.type === 'video' || t.type === 'image'));
@@ -549,6 +584,81 @@ export function applyWorkspaceSeedanceReferenceGpRepair(
 }
 
 /**
+ * 可灵3.0 Omni 多图 tab：面板 klingOmniMultiReferenceImages 已与 API 对齐，
+ * 但 generationParams 仍残留上游节点旧参考图时，从面板数据写回 generationParams。
+ * 参照 Seedance 2.0 参考生的 applyWorkspaceSeedanceReferenceGpRepair 模式。
+ * Omni 面板数据直接在节点顶层（klingOmniMultiReferenceImages），无需间接查找上游。
+ */
+function applyWorkspaceOmniMultiGpRepair(
+  nodes: RFNode[],
+  _edges: Edge[]
+): {
+  nodes: RFNode[];
+  changed: boolean;
+} {
+  let changed = false;
+
+  const repaired = nodes.map((n) => {
+    const gpPatch = repairOmniMultiGenerationParamsFromPanel({
+      ...n.data,
+      selectedModel: n.data.selectedModel,
+      klingOmniTab: n.data.klingOmniTab,
+      klingOmniMultiReferenceImages: n.data.klingOmniMultiReferenceImages,
+      referenceImageLabels: n.data.referenceImageLabels,
+      generationParams: n.data.generationParams,
+    });
+    if (!gpPatch) return n;
+    changed = true;
+    const prevGp = (n.data.generationParams || {}) as GenerationParams;
+    return {
+      ...n,
+      data: {
+        ...n.data,
+        generationParams: {
+          ...prevGp,
+          ...gpPatch,
+          outputUrl: prevGp.outputUrl ?? gpPatch.outputUrl,
+          outputUrls: prevGp.outputUrls ?? gpPatch.outputUrls,
+          taskId: prevGp.taskId ?? gpPatch.taskId,
+        },
+      },
+    };
+  });
+
+  const withThumbs = repaired.map((n) => {
+    const thumbs = n.data.generatedThumbnails;
+    if (!thumbs?.length) return n;
+    let thumbsChanged = false;
+    const nextThumbs = thumbs.map((t) => {
+      const thumbGp = repairOmniMultiGenerationParamsFromPanel({
+        ...n.data,
+        generationParams: t.generationParams,
+        selectedModel: n.data.selectedModel,
+        klingOmniTab: n.data.klingOmniTab,
+        klingOmniMultiReferenceImages: n.data.klingOmniMultiReferenceImages,
+        referenceImageLabels: n.data.referenceImageLabels,
+      });
+      if (!thumbGp) return t;
+      thumbsChanged = true;
+      return {
+        ...t,
+        generationParams: {
+          ...(t.generationParams || {}),
+          ...thumbGp,
+          outputUrl: t.generationParams?.outputUrl ?? thumbGp.outputUrl,
+          taskId: t.generationParams?.taskId ?? thumbGp.taskId,
+        },
+      };
+    });
+    if (!thumbsChanged) return n;
+    changed = true;
+    return { ...n, data: { ...n.data, generatedThumbnails: nextThumbs } };
+  });
+
+  return { nodes: withThumbs, changed };
+}
+
+/**
  * 工程加载后：僵尸 running 先收尾；有 taskId 且待恢复的任务立即标回 running（刷新后进度条可见）；
  * 其余无 taskId 的 running 回落 idle（持久化快照不含 running）。
  */
@@ -565,7 +675,10 @@ export function prepareNodesAfterWorkspaceLoad(
     }
     if (n.data?.runRecoveryPending || nodeNeedsAiTopTaskRecovery(n, nodes, edges)) {
       const taskIds = parseAiTopTaskIds(n.data?.taskId || n.data?.generationParams?.taskId);
-      // 上传阶段刷新（尚无 taskId）：恢复进度条 UI，勿触发 AiTop recovery
+      // 上传阶段刷新（尚无 taskId）：恢复 running 进度条 UI；由 useAiTopRunRecovery 派发
+      // flowgen:auto-resume-run 事件触发 FlowEditor.handleNodeRun 重新跑完整流程
+      // （参考 ComfyUI 模式：上传阶段中断=重新触发完整流程）。
+      // 之前曾改为"回落 idle"，但用户反馈希望刷新后保持 running 并自动完成生成，故恢复进度条 + 自动重跑。
       if (!taskIds.length) {
         if (n.data?.runRecoveryPending) {
           const uploadUi = restoreUploadPhaseRunningUi(n.data);
@@ -671,9 +784,11 @@ export function prepareNodesAfterWorkspaceLoad(
   });
   const { nodes: seedanceRepaired, changed: seedanceChanged } =
     applyWorkspaceSeedanceReferenceGpRepair(prepared, edges);
+  const { nodes: omniRepaired, changed: omniChanged } =
+    applyWorkspaceOmniMultiGpRepair(seedanceRepaired, edges);
   return {
-    nodes: seedanceRepaired,
-    changed: changed || seedanceChanged,
+    nodes: omniRepaired,
+    changed: changed || seedanceChanged || omniChanged,
   };
 }
 
@@ -1041,6 +1156,17 @@ export function mergeRecoveryGenerationParamsFromRunNode(
         merged.image2AspectRatio ?? d.image2AspectRatio ?? '1:1';
       merged.aspectRatio = merged.aspectRatio ?? merged.image2AspectRatio;
     }
+    return merged;
+  }
+
+  // MidJourney/Niji 刷新恢复：mj 版本/比例/画质/计费模式从面板态回填，避免 Node Details 缺参数
+  if (isMidJourneyFamilyModel(model)) {
+    merged.mjFamily = merged.mjFamily ?? d.mjFamily;
+    merged.mjVersion = merged.mjVersion ?? d.mjVersion;
+    merged.mjRatio = merged.mjRatio ?? d.mjRatio ?? '1:1';
+    merged.mjQuality = merged.mjQuality ?? d.mjQuality;
+    merged.mjMode = merged.mjMode ?? d.mjMode;
+    merged.aspectRatio = merged.aspectRatio ?? merged.mjRatio;
     return merged;
   }
 

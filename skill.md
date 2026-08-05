@@ -1387,7 +1387,7 @@ handleScheduleRun({ kind: 'selected', scheduledAt: Date.now() + 15 * 60 * 1000 }
 - `services/aitop.ts` 中 `createImage2Task` / image2 size 相关
 - `types.ts` 中 `NodeData` / `generationParams` / 面板参考字段相关
 
-### 8.2 `test:gate` 组成（`scripts/test-gate.mjs`，共 44 步）
+### 8.2 `test:gate` 组成（`scripts/test-gate.mjs`，共 47 步）
 
 ```bash
 npm run test:gate
@@ -1439,6 +1439,9 @@ npm run test:gate
 | 42 | 20260710-banana-run-gp-at-mention | **生成结果** banana 无@时 gp 勿写面板全量 + @时画布=首参考；**§5.8.7** 二次运行六模型 Inspector prompt 不写回（§8–§9） |
 | 43 | 20260710-asset-mention-details-recovery | **§5.8.5** @资产+@图片n × 四模型 fixture；Nano/image2 gp空 Details 2 张 |
 | 44 | 20260713-export-json-main-image | **§5.13** 导出 JSON 跨机器：@主图 + COS imagePreview 勿 hydrate 清空 |
+| 45 | 20260714-seedance-reference-consistency | Seedance processor/mov Details 参考一致 + @主图勿变@主视频 |
+| 46 | 20260715-seedance-unreferenced-filter | Details 仅展示 prompt 显式 @ 的参考图 |
+| 47 | text-gen-node | **Text Node（文生节点）** 白名单/面板/画布/菜单/S 级保护契约 |
 
 > 四大域总览见 **§5.9**；**§5.8.5** @资产 plan + gp空 Details 见上表第 43 步；**§5.8.7** 二次运行 prompt 不写回见第 42 步 + vitest `promptRerunCanonical`；**§5.13** 导出 JSON 跨机器主图见第 44 步；发版交付冻结见 **§5.11**；Node Details ←→ 整份历史见 **§5.12**（vitest `generatedThumbKeyboardNav`）；日常改动画布/面板/Details/拖拽跑 `test:gate` 一步即可；发版见 §8.4。
 
@@ -1771,6 +1774,67 @@ npm run test:llm
 - 修复：① `handleNodeRun` 开始时即设 `runRecoveryPending` + `stageRunPersistPatch`；② `bumpRunningNodeProgress` 同步写 `runRecoveryPending`；③ `restoreUploadPhaseRunningUi` + `prepareNodesAfterWorkspaceLoad` 无 taskId 时恢复 running 进度条 UI（不触发 AiTop 轮询）
 - 文件：`utils/runRecovery.ts`、`components/FlowEditor.tsx`
 - 测试：`runRecovery.test.ts`；`npm run test:gate` 全绿
+
+### 10.76 2026-07-31 修订 §10.56：Omni instruction/video 刷新后永久卡 5%（面板卡在%5.json）
+
+- 症状：`E:\问题\0731\面板卡在%5.json` 最后一个 Output Mov Node（可灵3.0 Omni instruction tab）刷新后进度条永久卡在 5%
+- 根因：§10.56 修复③有设计缺陷——「无 taskId 时恢复 running 进度条 UI（不触发 AiTop 轮询）」假设"上传仍在内存中进行"。实际 F5 刷新后内存里的异步上传 Promise 已死，结果：✅ 进度条恢复 5%；❌ 没有任何机制推进它（`shouldTriggerAiTopRunRecovery` 因无 taskId 返回 false）；❌ 永久卡死，用户只能手动重新运行
+- 第二处隐患：`reconcileZombieRunningNode` 对 MOV 节点仅看 `imagePreview` 是否为视频 URL；上传阶段刷新时 `imagePreview` 可能是上游参考视频/参考图占位，会被误判为本节点成片，错置为 `completed` 且残留 `runRecovery*` 字段（错位预览）
+- §10.76 第一版修复（已废弃）：把上传阶段刷新改为回落 idle。但用户反馈希望刷新后保持 running 并自动完成生成，故改为 §10.77 方案
+
+### 10.77 2026-07-31 Omni instruction/video 刷新后自动重跑（参考 ComfyUI 模式）
+
+- 症状：同 §10.76，用户要求刷新后保持 running 进度并自动完成生成（不回落 idle）
+- 调研：参考 GitHub ComfyUI 官方模式（"提交工作流 → 获取任务 ID → 用任务 ID 获取结果"，任务 ID 在长上传之前同步生成）+ Yara ComfyUI 工具（"保存/加载 in-progress job 会从头重启生成"）。成熟项目对"上传阶段中断"的标准处置就是**重新触发完整流程**。
+- 修复（最小变更·3 文件，非 S 级）：
+  1. **保留 §10.56 的 running 进度条恢复**（撤销 §10.76 第一版的"回落 idle"）：`prepareNodesAfterWorkspaceLoad` 无 taskId 分支继续调用 `restoreUploadPhaseRunningUi` 恢复 running 进度条 UI
+  2. **保留 §10.76 的 `reconcileZombieRunningNode` 守卫**：`!taskIds.length && runRecoveryPending` 返回 `null`，避免误判 imagePreview 为成片
+  3. **新增 `nodeIsUploadPhaseRefreshPending` 检测函数**（[utils/runRecovery.ts](file:///d:/aaa/flowgen-ai-studio/utils/runRecovery.ts)）：`runRecoveryPending && 无 taskId` → true
+  4. **`useAiTopRunRecovery` 派发 `flowgen:auto-resume-run` 事件**（[hooks/useAiTopRunRecovery.ts](file:///d:/aaa/flowgen-ai-studio/hooks/useAiTopRunRecovery.ts)）：检测到上传阶段刷新节点时，setTimeout(0) 派发事件携带 nodeId；派发后立即清 `recoveringRef`（避免重入阻塞）
+  5. **`FlowEditor.tsx` 监听 `flowgen:auto-resume-run` 事件**（[components/FlowEditor.tsx:12098-12121](file:///d:/aaa/flowgen-ai-studio/components/FlowEditor.tsx#L12098-L12121)）：调用 `handleNodeRun(nodeId)` 重新跑完整"上传 → 创建任务 → 轮询 → 落盘"流程；含 3 重防御：① 节点仍 `runRecoveryPending` 才重跑；② 无 taskId 才重跑（已有 taskId 走正常 recovery 轮询）；③ 不与 `activeRunIdsRef` 冲突
+- 文件：`utils/runRecovery.ts`、`hooks/useAiTopRunRecovery.ts`、`components/FlowEditor.tsx`、`src/test/utils/runRecovery.test.ts`
+- 测试：`runRecovery.test.ts` 30/30 通过；新增 `nodeIsUploadPhaseRefreshPending detects upload-phase refresh nodes` 用例（3 场景：上传阶段/有 taskId/无 pending）；保留 `reconcileZombieRunningNode skips upload-phase refresh nodes` 对照用例
+- 安全性：上传阶段刷新时 AiTop 侧任务尚未创建（`appendRunTaskId` 未调用），重跑不会产生重复任务；极小概率"任务创建成功→taskId 未持久化就刷新"会产生 AiTop 孤儿任务，但 AiTop 会自动过期回收，不影响新任务执行
+- 风险评估：① 已有 taskId 的 running 节点走原 recovery 轮询分支，不受影响；② 正常完成态节点不受影响；③ S 级稳定模块未触碰；④ 上传阶段刷新自动重跑会重新上传素材（耗时与首次相同），但避免永久卡死
+- 与既有约束关系：与 §10.55（image2 卡 95% 循环）、§10.68（运行失败主图格回滚）属同一 runRecovery 体系；本次仅修「上传阶段刷新」分支，不动其它分支；废弃 §10.76 第一版的"回落 idle"方案
+- 备注：`test:gate` 在本次修改后存在 1 个 pre-existing 失败（`seedanceMainVideoLabel.test.ts`），由 working tree 里 `utils/promptMediaRefs.ts` 等文件的修改导致，与本次修改无关，未触碰
+
+### 10.78 2026-07-31 修复 @ 下拉丢失资产条目（referenceImageLabels 为泛称时 projectAsset 项被误去重）
+
+- **症状**：`E:\问题\0731\banna.json` — Nano Banana 2.0 面板参考格底栏能显示资产名「原始丛林小路」，但创意描述输入 `@` 时下拉列表里没有 `@资产:原始丛林小路`。其他模型（image2 / Seedance 参考生 / Omni multi·instruction）在相同条件下也存在同样问题。
+- **根因**（`utils/promptMediaRefs.ts` `inspectorMentionDisplayNameForItem`）：
+  - 当 `referenceImageLabels[i]` 为泛称「图片n」、但槽 URL 实为资产库图片时，`pushPanelRefImageAtSlot` 内 `refSlotMentionDisplayLabel` 返回泛称「图片n」作为 `displayLabel`，于是 `projectAsset` 项的 `label="图片n"`，`insertText="@资产:原始丛林小路"`。
+  - `inspectorMentionDisplayNameForItem` 原实现 `if (lab) return lab;` 无条件返回 `label`，导致 `projectAsset` 项的 displayName = `"图片n"`。
+  - `buildInspectorPromptMentionItems` 用 `inspectorMentionDisplayNameForItem(it).toLowerCase()` 作 `nameKey` 去重：`@图片n`（image 项）与 `@资产:原始丛林小路`（projectAsset 项）的 nameKey 同为 `"图片n"`。
+  - 去重逻辑中，`projectAsset` 项仅在冲突项是 `@主图` / 首尾帧时才替换；冲突项是 `@图片n` 时直接 `continue` 丢弃 → **`@资产:原始丛林小路` 被误删**。
+  - 面板底栏走 `resolveReferenceSlotDisplayLabel`，会从 URL 反查资产库得到资产名，所以底栏显示正常；但 @ 下拉走 `inspectorMentionDisplayNameForItem`，路径不同，导致「底栏有 / 下拉无」的不一致。
+- **修复**（`utils/promptMediaRefs.ts` `inspectorMentionDisplayNameForItem`，S 级模块最小变更）：
+  ```typescript
+  // 原：if (lab) return lab;
+  // 新：label 为泛称（图片n/主图/主视频/首帧图/尾帧图）时，projectAsset 项改从 insertText 解析资产名
+  if (lab && !isGenericPanelRefCaption(lab)) return lab;
+  const ins = String(it.insertText || '').trim();
+  if (ins.startsWith('@资产:')) {
+    const name = ins.slice('@资产:'.length).trim();
+    if (name) return name;
+  }
+  // 其余分支保持原样（@主图/@主视频/@首帧图/@尾帧图）
+  ```
+  - 仅在 `label` 缺失或为泛称时，对 `projectAsset` 项从 `insertText`（`@资产:名称`）解析资产名作为 displayName。
+  - 项目库全量项 `label="素材·${name}"` 非泛称，仍走 `lab` 分支，行为不变。
+  - 资产名为非泛称的常规场景（`lab=资产名`）也不受影响。
+- **影响范围**：全模型统一生效（Nano / image2 / Seedance 参考生 / Omni multi·instruction / 即梦 / vidu 等所有走 `pushPanelRefImageAtSlot` 的模型）。
+- **文件**：`utils/promptMediaRefs.ts`（仅 1 个函数，约 10 行改动）
+- **测试**：
+  - `scripts/panel-mention-caption-alignment-test.ts` 31/31 通过
+  - `scripts/inspector-at-mention-e2e-test.ts` 49/49 通过
+  - `npm run test:gate` 全绿
+  - `npm run build` 成功
+- **风险评估**：低。
+  ① 仅改 `inspectorMentionDisplayNameForItem` 一个纯展示/去重函数，不动 `buildPromptMediaRefLabels` 的 `label` 语义，不影响运行 plan、API 上传、Node Details 等下游。
+  ② 修改后 `@资产:名` 与 `@图片n`（指向同一槽）会在下拉中共存，符合 §5.8.5 设计（两种引用方式都可解析到同一槽位）。
+  ③ 项目库全量项与面板项目资产名项的 displayName 行为不变，不引入新的去重冲突。
+- **勿回退约束**：`inspectorMentionDisplayNameForItem` 对 `projectAsset` 项不得重新无条件返回 `label`；当 `label` 为泛称时必须从 `insertText` 解析资产名，否则 @ 下拉会再次丢失资产条目。
 
 ### 10.55 2026-07-08 image2 刷新后卡 95% 循环（没完没了.json）
 
@@ -2178,6 +2242,609 @@ npm run test:llm
 - **文件**：`components/FlowEditor.tsx`、`utils/flowgenMiniMapLayout.ts`
 - **测试**：`src/test/utils/flowgenMiniMapLayout.test.ts`（新增 `hasVisibleMiniMapNodes` 用例）
 - **风险**：低；未改动 MiniMap 内部布局/导航/交互逻辑，仅控制是否挂载组件。
+
+### 10.53 2026-07-23 Text Node（文生节点）
+
+- **需求**：画布右键菜单新增「Text Node」，纯文生图/文生视频；模型仅保留 Nano Banana 2.0、image 2、seedance2.0（高质量版/急速版）文生视频；面板无拖图/参考区/@引用。
+- **设计**：
+  1. 复用 `PROCESSOR` 节点类型 + `NodeData.textGenNode` 标记（S 级 `NodeType` 枚举零改动），运行链路完全复用：Nano/image2 无 @ 引用即文生图、`seedanceGenerationMode='text'` 即文生视频（既有能力，未改运行代码）；
+  2. 模型白名单 `TEXT_GEN_NODE_MODELS`（types.ts），为 `INSPECTOR_SELECTABLE_MODELS` 子集；
+  3. 面板全部差异均以 `isTextGenNode` 短路，普通节点走原路径。
+- **实现**：
+  - `types.ts`：`TEXT_GEN_NODE_MODELS` / `isTextGenNodeModel` / `NodeData.textGenNode`；
+  - `FlowEditor.tsx`：右键菜单新增 Text Node（Type 图标），`addNodeFromMenu` 支持 `extraData`；
+  - `CustomNode.tsx`：文生节点空态显示「Text to Media」、不提供本地选择、不接收拖入媒体；
+  - `NodeInspector.tsx`（13 处）：模型下拉限定白名单；隐藏上传区/素材区；image2 仅保留风格卡片；seedance2.0 隐藏三 Tab 仅文生（`handleModelChange`/`switchSeedance20Tab` 强制 `text`）；`promptMentionItems` 置空禁用 @ 下拉；隐藏「扫描 @素材」；placeholder 改纯文生文案。
+- **顺带修复（构建阻塞，纯去重零逻辑改动）**：上一会话编辑事故残留的 4 处完全重复声明——`types.ts` 头部错误自引用 import、`FlowEditor.tsx` onSelectionEnd/onSelectionChange 双份、`NodeInspector.tsx` 参考注册辅助函数块双份、`BackdropNode.tsx` estimateTextFlowWidth 双份。
+- **文件**：`types.ts`、`components/FlowEditor.tsx`、`components/nodes/CustomNode.tsx`、`components/NodeInspector.tsx`、`scripts/text-gen-node-contract-test.ts`（新增）、`scripts/test-gate.mjs`、`package.json`
+- **测试**：`npm run test:text-gen-node`（30 项断言：白名单/面板源码/画布/菜单/S 级保护契约），已挂入 `test:gate` 第 47 步；`npm run build` + `npm run test:gate` 全绿
+- **风险**：低；运行链路零改动，面板差异仅 `textGenNode===true` 时生效；`INSPECTOR_SELECTABLE_MODELS` 未增删；S 级模块（§5.8.1–§5.8.7、§5.10–§5.13）未触碰。
+- **后续建议**：浏览器实测三模型文生（Nano 文生图 / image2 文生图 / seedance2.0 文生视频）各跑一次确认 API 参数与生成结果 Node Details 展示。
+
+### 10.54 2026-07-23 Text Node image2 文生图「图片未能上传」误报修复
+
+- **现象**：Text Node 选 image 2 纯文生（无任何参考图）运行即报错「**❌ image 2 运行失败** 提示词中 @ 到的图片未能上传，请检查主图/参考图是否有效。」
+- **根因**：`FlowEditor.tsx` image2 运行链路（约 7695 行）对图生图强制校验 `!imageUrls.length → throw`，未区分 Text Node 纯文生场景；下游「面板参考槽合并/写回」块（约 7699–7813 行）同样默认存在上传图。
+- **修复（最小变更，仅 2 处，均在 image2 运行块内）**：
+  1. throw 条件追加 `&& !currentNode.data.textGenNode`：Text Node 纯文生跳过图生图强制校验；
+  2. 面板参考槽合并/写回块整体包入 `if (imageUrls.length > 0)`：纯文生时快照变量保持 `null`，下游（约 10863 行）既有 null 安全逻辑直接复用，零新增分支。
+- **契约测试同步**：`text-gen-node-contract-test.ts` §5 由「运行链路零 textGenNode 引用」改为「image2 运行链路含文生空图守卫（勿移除）+ 全链路仅菜单/守卫两处 textGenNode」，断言总数 30 → 31。
+- **文件**：`components/FlowEditor.tsx`（2 处）、`scripts/text-gen-node-contract-test.ts`（§5 两条断言）
+- **测试**：`npm run test:gate` 全绿（含 text-gen-node 31/31）；`npm run build` 通过；liangyu 账号《AI技术测试》项目实测：Text Node + image 2 纯文生连续 2 次生成成功（Generated Outputs ×2），运行后 `textGenNode` 标志保持、面板契约（白名单 4 模型/无上传区/无 @引用/纯文生 placeholder）不变。
+- **风险**：低；普通 image2 图生图节点（`textGenNode` 为 undefined）走原校验路径不变；S 级模块未触碰。
+
+### 10.55 2026-07-23 Text Node 新增 MidJourney/Niji 文生图模型
+
+- **需求**：Text Node 文生图模型新增「MidJourney (真实感强)」与「Niji (卡通动漫)」，对接 `POST /api/v1/images/mj/imagine`（文档 §h.iqutor95zd0c；`test-mj-imagine.ts` 已实测 7 用例全通）。
+- **模型设计**：MJ/Niji 作为 `TEXT_GEN_NODE_MODELS` 成员（白名单 4 → 6），仅 Text Node 可选，不进 `INSPECTOR_SELECTABLE_MODELS`（普通 Image Node 面板不受影响）；运行链路复用 `runParallelGenerationTasks` + `pollImageTaskUntilUrl`，与 Nano/image2 同款批量多图（每任务 1 张，并行轮询）。
+- **类型**：`types.ts` 新增 `MODEL_MIDJOURNEY` / `MODEL_NIJI` / `isMidJourneyModel` / `isNijiModel` / `isMidJourneyFamilyModel`、`MJ_VERSION_OPTIONS_*` / `MJ_RATIO_OPTIONS` / `MJ_QUALITY_OPTIONS` / `MJ_DEFAULT_VERSION_*`；`NodeData` 新增 `mjVersion` / `mjStyle` / `mjRatio` / `mjQuality` / `mjMode` / `mjSrefUrl` / `mjCrefUrl` / `mjOrefUrl`；`modelConfigs` 新增两模型键；`GenerationParams` 新增 `mjVersion` / `mjRatio` / `mjQuality` / `mjMode` 快照字段。
+- **API 层**：`services/aitop.ts` `createMjImagineTask(prompt, options)`：必填 `platform='MidJourney'` + `model`（' --v 7' / ' --niji6' 等含前导空格，服务端接受）+ `mode`（FAST=30 积分 / RELAX=15 积分）；选填 `ratio` / `style` / `quality` / `sref` / `cref` / `oref`；sref/cref/oref 仅透传 `http(s)://`（blob: 上传中防护，不下发避免 API 拉取失败）。
+- **面板**（`NodeInspector.tsx`，Text Node 专属两个新分支，不动其它模型分支）：
+  - 素材区 `isMidJourney` 分支：参考图（选填）三槽 = 风格参考(sref)/角色参考(cref)/万物参考(oref) + 风格(mjStyle)自由文本输入；`handleMjReferenceFile` 上传即 `uploadImage` 转 COS URL（blob 即时预览 → COS 替换，失败回滚 alert），运行时零上传链路。
+  - 设置区 `isMidJourney` 分支：模型版本按钮组（MidJourney=--v 7/6.1/6，Niji=--niji6/5，按 `isNiji` 分流）、画面比例 1:1/4:3/3:4/16:9/9:16、画质下拉（默认不传 quality）、计费模式 FAST/RELAX（标注积分）、图像数量 1–4 张。
+  - `handleModelChange`：保存/恢复 MJ 配置进 `modelConfigs[模型名]`；切到非 MJ 模型统一清 `mj*` 字段；切到 MJ 清 `aspectRatio`/`resolution`/`referenceImages`/`imagePreview` 等其它模型字段。
+- **运行链路**（`FlowEditor.tsx`）：`else if (isMidJourneyFamilyModel(model))` 分支读面板 `mj*` 字段 + 默认版本/比例/FAST，prompt 走既有 `collectReferencedMediaFromPrompt`/`resolvePromptPlaceholders`（Text Node 无 @ 引用时原样透传），`runParallelGenerationTasks(finalImageCount, createMjImagineTask, pollImageTaskUntilUrl)`。
+- **Node Details**：`nodeDetailsPreview.ts` `applyRunPanelFieldsToGenerationParams` MJ 分支快照 `mjVersion/mjRatio/mjQuality/mjMode`（`aspectRatio=mjRatio`）；`FlowEditor` Used Parameters 新增 `isMjParams` 分支展示 Version/Aspect Ratio/Quality/Mode；`OUTPUT_NODE_INHERIT_KEYS` 追加 8 个 `mj*` 字段（OUTPUT 节点继承面板配置）。
+- **契约测试**：`text-gen-node-contract-test.ts` 30 → 47 断言：白名单 6 项、MJ/Niji 仅 Text Node 专属、面板两分支 + 版本分流 + 上传转 COS + 切模型保存/恢复、运行分支 + 参数透传 + OUTPUT 继承 + Details 展示 + aitop blob 防护。
+- **文件**：`types.ts`、`services/aitop.ts`、`components/NodeInspector.tsx`、`components/FlowEditor.tsx`、`utils/nodeDetailsPreview.ts`、`scripts/text-gen-node-contract-test.ts`
+- **测试**：`npm run test:gate` 全绿（47/47）；`npm run build` 通过；浏览器实测（liangyu《AI技术测试》）：MJ 面板元素齐全、切 Niji 版本组变 --niji6/5、切模型配置保留；真实生成 1 次（FAST，提示词「一只可爱的橘猫坐在窗台上看夕阳，电影感光线」）约 135s 出图成功，Node Details Used Parameters 正确展示 Model=MidJourney (真实感强)/Version=--v 7/Aspect Ratio=1:1/Mode=FAST，控制台零报错。
+- **风险**：低；MJ/Niji 仅新增独立分支，Nano/image2/seedance/可灵等已有链路零改动，S 级模块未触碰。已知边界：① sref/cref/oref 上传中（blob:）点运行时该参考不下发（防护设计，不阻断生成）；② `mjStyle` 未入 `generationParams` 快照（Details 不展示风格文本，仅展示版本/比例/画质/模式）；③ API 文档 `angle`/`camera`/`light`/`art`/`cw` 等高级参数面板未开放（最简实现，后续可按需扩展）。
+
+### 10.56 2026-07-28 Chat 短回复误判降级 / 联网截断 / 降级链丢上下文 / image2 误报文案 / Details 模型提示
+
+- **背景**：全面测试（liangyu《AI技术测试》）复盘发现 5 项问题，用户确认后统一修复；同步澄清 2 项非 bug（可灵 Details 显示旧模型=运行失败后 gp 快照正确；MJ OUTPUT 默认 seedance=§10.55 有意设计）。
+- **P0-1 短回复误触发全模型降级链**：Gemini 回「银河流星2026」（8字符）、DouBao 回「已记住」被 `isLikelyTooShortMainAnswer`（≤24字符阈值）判无效 → throw「未返回有效正文」→ 触发 Gemini→Claude→DeepSeek→DouBao→Qwen 全降级链；思考关闭时短正文还会被思考内容回填。**修复**（`assistantMessageLayout.ts` `assistantReplyHasVisibleMain`，非 §5.10.4 守护函数）：尾部判定改为——显式无效模式（no results found/未找到相关结果）维持原判定；其余短文本凡含 ≥2 个中文字符或 ≥2 个字母/数字即视为可见正文。`isLikelyTooShortMainAnswer` 全局阈值**未动**，联网二次总结（`needsWebSearchSynthesisPass`）等其它 8 处调用方行为不变。
+- **P1-1 Claude 联网回复引导语式截断**：联网首轮正文停在「以下是今天广州的天气情况：」（冒号收尾承诺下文、无实质数据），`needsWebSearchSynthesisPass` 各判定均不命中 → 不触发二次总结直接展示半成品。**修复**：新增 `isLikelyTruncatedLeadInMain`（≤200字符 + 冒号收尾 + 含「以下是/如下/情况如下/一起来看/来看看/为您整理/介绍如下」），`needsWebSearchSynthesisPass` 增加 `process && isLikelyTruncatedLeadInMain(main)` 分支触发 summarize 二次 pass。
+- **P1-2 降级链指代型追问丢上下文**：fallback 到 AiTop 模型且联网开启时走 probe 首轮（`message = probeQuery` 搜索重写查询），「我刚才问的是哪个城市？」等指代追问的对话结构被替换；且 `sendByModel` 对 AiTop 路径未透传 `fromFallback`。**修复**（`ChatPanel.tsx`，§5.10 S级文件，用户明确批准）：`LlmSendRetryOptions` 新增 `fromFallback?: boolean`；`sendByModel` 调 `handleAitopLlmSend` 时透传；`isGeminiWebSearchFirstPass` 增加 `retryOptions?.fromFallback !== true` 条件——fallback 时 message=带完整对话历史的 `baseMessage`（webSearch 仍开，由上游检索），直连路径 probe 行为不变。
+- **P2-1 image2 OUTPUT 节点纯文生误导性报错**：OUTPUT 节点跑无 @ 引用纯文生时报「@ 到的图片未能上传」（用户未 @ 任何图）。**修复**（`FlowEditor.tsx` image2 运行链路空图守卫，§10.54 契约保留）：按 `image2MediaPlan.images.length` 分流文案——有 @ 引用维持原文案；无 @ 引用提示「未检测到可用的主图/参考图：请在主图槽添加有效图片，或在提示词中 @ 引用图片；如需纯文生图请改用 Text Node」。
+- **P2-2 Details 面板模型≠生成快照模型 UX 提示**：切模型未重跑/上次生成失败时 Details 展示 gp 快照模型（正确但用户困惑）。**修复**（`FlowEditor.tsx` Used Parameters IIFE）：`snapshotModel` 与 `selectedModel` 均存在且不同时，参数网格顶部插入琥珀色提示条（col-span-2）「面板当前模型「X」与生成模型「Y」不一致，以下为实际生成时参数」；MJ OUTPUT（selectedModel=seedance2.0 / gp.model=MidJourney）属常态提示，文案中性。
+- **P2-3 联网开关 UI 反馈**：代码审查确认开关样式逻辑正确（开启态渐变+边框+发光+脉冲圆点），此前测试「视觉未变」系浏览器自动化 snapshot 时机误差（API 验证功能实际生效），**不改代码**。
+- **文件**：`utils/assistantMessageLayout.ts`、`components/ChatPanel.tsx`、`components/FlowEditor.tsx`
+- **测试**：`npm run test:chat-gate` 全绿（48/48）；`npm run test:gate` 全绿（47/47，image2 文生空图守卫契约保留）；`npm run build` 通过；服务已重启 http://localhost:3001。
+- **风险**：低。触碰 §5.10 S级文件 `ChatPanel.tsx`（用户明确批准的 P1-2 修复），§5.10.4 四个守护函数（`flattenAssistantSectionsWhenProcessDisabled`/`stripLeakedThinkingFromMainWhenDisabled`/`recoverAssistantReplyFromRaw`/`parseAssistantMessage`）零改动；`assistantMessageLayout.ts` 改动仅限非守护函数。已知边界：① P1-1 依赖引导语模式匹配，英文引导语（"Here is..."）未覆盖（上游 Claude 中文场景为主）；② P1-2 fallback 联网回答风格与直连 probe 路径略有差异（直连=客户端重写查询，fallback=上游基于历史自行检索），答案完整性优先；③ 短回复豁免后「OK」「42」等极短回复不再触发降级（符合预期）。
+
+### 10.57 2026-07-28 联网搜索 query rewriting 上下文补全（指代消解）
+
+- **背景**：用户实测发现，浅思考 + 联网搜索模式下，对「介绍一下东北经济振兴的难点」后的追问「你认为未来会成为怎样的地位」，系统直接把原句当作检索词，未补全「东北」这一主语，导致搜索结果偏离真实意图。该问题属于所有 LLM 模型的公共联网 probe 层，非单一模型缺陷。
+- **修复**（`utils/webSearchProbe.ts`，非 S 级检索策略层）：
+  1. `buildRewritePrompt`：明确要求「如果最后一问缺少主语、宾语或包含隐含指代（如“它/这/那/未来/这种情况/上述问题”），必须从对话历史中补全主语和实体」；新增 3 组中文示例（东北经济 / 广州天气 / 深中梅香）。
+  2. `needsContextualProbeFallback`：新增 `turns` 参数；引入 `CONTEXT_DEPENDENT_RE` 识别「未来/现在/上述/之前/结果」等隐含上下文依赖词；有历史对话且短句命中时触发 fallback 拼接。
+  3. `resolveWebSearchProbeQuery`：LLM 改写返回结果若与原文完全相同，且当前追问被判定为上下文依赖型，则不信任该改写，走 fallback 拼接历史。
+  4. `buildWebSearchProbeQueryFallback`：优先把上一轮用户完整问题与当前追问拼接，补全省略的主语/实体；保留问候/身份/致谢不串历史的双保险。
+  5. `buildFallbackSearchAwareMessage`（新增）：模型降级 fallback 路径下，把改写后的独立检索问题显式注入 message，提示 fallback 模型「联网搜索已开启，请先基于该检索问题联网检索，再回答」。参考 LangChain `RunnableWithFallbacks` 的 whole-runnable 设计（不同 fallback 模型应使用适合它的 prompt），以及 Hugging Face Chat UI `LLM Router` 在模型切换时显式保留工具/搜索上下文的做法。
+  6. `ChatPanel.tsx` fallback 分支（`isGeminiWebSearchFirstPass=false`）：若仍开启联网搜索，不再直接发送原 `baseMessage`，而是复用 probe 缓存或重新生成 standalone search query，再调用 `buildFallbackSearchAwareMessage` 构造 message，确保降级模型也能明确知道需要检索什么。
+- **测试**（`scripts/llm-web-search-probe-test.ts`）：新增 fallback 单元测试「主语省略型追问补全东北实体」「独立问句不被历史污染」「fallback 搜索感知 message 含独立检索问题」「fallback 搜索感知 message 保留原始追问」；API 改写测试新增东北经济追问与广州天气追问用例。
+- **范围**：所有 AiTop LLM 模型（Gemini 3.1 Pro / Claude 4.6 / DeepSeek V4 Pro / DouBao Seed 2.0 / Qwen）的联网首轮 probe query 生成，以及联网开启时的模型降级 fallback 路径；浅思考 / 深度思考 / 思考关闭三种模式均走同一 probe 层，均受益。
+- **测试**：`npm run test:chat-gate` 全绿（48/48，含 web-search-probe-unit 离线门禁）；`npm run test:gate` 全绿（47/47）；`npm run build` 通过；服务已重启 http://localhost:3001。
+- **风险**：低。`ChatPanel.tsx` §5.10 S 级文件仅修改 fallback 分支的 message 赋值，不改 SSE/降级链/业务协议；其余改动均在非 S 级检索策略层。已知边界：① 拼接式 fallback 在「用户完全换话题且短句恰好命中上下文词」时可能带入前序实体（已用 `CONTEXT_DEPENDENT_RE` 收窄）；② LLM 改写效果依赖上游模型对示例的理解；③ 上游模型是否真正触发联网仍受 AiTop 接口内部行为影响，客户端只能尽可能显式提示。
+
+### 10.58 2026-07-28 Chat LLM 全链路加固（上下文压缩 / <think> 标签 / fallback 参数 / SSE 分类 / topic-shift / 历史压缩 / 能力矩阵）
+
+- **背景**：参考 GitHub Copilot CLI auto-compaction、Dify `<think>` 分离、LangChain `RunnableWithFallbacks`、Hugging Face Chat UI `LLM Router`、@microsoft/fetch-event-source 等成熟方案，对 Chat LLM 处理链路做系统性审查，修复 7 处隐藏 bug/风险。
+- **P0 上下文压缩**：`components/ChatPanel.tsx`
+  - `buildAitopMessageWithHistoryAsync`（新增 async 版）：当 `estimateChatTokens` 超过阈值且轮次 >4 时，用轻量 LLM 对早期历史做摘要，保留最近 3 轮原文。
+  - `summarizeHistoryWithLlm`（新增）：调用 AiTop 接口生成 ≤200 字中文摘要。
+  - 原 `buildAitopMessageWithHistory` 保留为同步兜底。
+  - `estimateChatTokens` 放宽参数类型，支持 `{ role, content }[]`。
+- **P1 原生 <think> 标签处理**：
+  - `utils/assistantMessageLayout.ts` 新增 `extractNativeThinkTags`，兼容 `<think>` / `<thinking>` / `<reasoning>`，处理跨 chunk 未闭合。
+  - `parseAssistantMessage` 先提取原生 think 标签。
+  - `components/ChatPanel.tsx` 流式处理中维护 `thinkBuffer` / `thinkOpen`，闭合后归入 `fullReasoning`。
+- **P1 fallback 参数一致性**：
+  - `LlmSendRetryOptions` 新增 `inheritedParams`（thinkingMode / webSearchEnabled / temperature）。
+  - fallback 链调用 `sendByModel` 时透传原模型设置，并根据目标模型能力矩阵自动降级不支持的能力。
+  - `handleAitopLlmSend` payload 构造使用 `inheritedThinkingMode` / `inheritedWebSearch` / `inheritedTemperature`。
+  - `temperatureRef`（新增）保存当前温度默认值 0.7。
+- **P2 SSE 错误分类细化**：
+  - 新增 `classifyStreamError`：返回 `fatal` / `retriable` / `context-overflow` / `auth`。
+  - 401/403 直接 fatal；429/502/503/504 指数退避；context-overflow 后续可接入压缩重试；网络瞬断/超时直接重试。
+  - `exponentialBackoffMs` 提供退避间隔。
+  - `attemptSendWithFallback` 接入分类，认证错误直接抛出，限流错误先指数退避再同模型重试。
+- **P2 query rewriting topic-shift 后校验**：
+  - `utils/webSearchProbe.ts` 新增 `isQueryOverInfluencedByHistory`：LLM 改写后若引入原句没有的历史实体且原句无指代词，回退到原句。
+  - `buildRewritePrompt` 增加 topic-shift 示例和明确要求。
+  - `resolveWebSearchProbeQuery` 应用后校验。
+- **P2 历史过程区压缩替代完全剥离**：
+  - `utils/assistantMessageLayout.ts` 新增 `compressAssistantProcessForHistory`：保留正文，把 `[联网检索]` 压缩为「曾检索：…；来源：…」，把思考过程压缩为首行摘要。
+  - `components/ChatPanel.tsx` `sanitizeContentForCrossModelHistory` 改用压缩版；`isNoisyAssistantHistory` 基于压缩结果判断是否保留。
+- **P3 模型能力矩阵注册**：
+  - `utils/aitopChatModels.ts` 新增 `AitopModelCapabilities` 类型，每个模型注册 `capabilities: { webSearch, thinking, vision, maxTokens, supportsFallback }`。
+  - 新增 `getAitopModelCapabilities` 辅助函数，Qwen 固定为不支持联网/思考/fallback。
+  - `ChatPanel.tsx` fallback 链用能力矩阵替代硬编码 `fallbackModel === 'qwen'` 判断。
+- **测试**：
+  - `scripts/assistant-message-layout-test.ts`：新增原生 `<think>` / `<reasoning>` 提取测试、历史压缩保留来源测试。
+  - `scripts/llm-web-search-probe-test.ts`：新增 API topic-shift 不串历史测试。
+  - `scripts/llm-model-registry-contract-test.mjs`：新增 capabilities 矩阵契约测试。
+- **范围**：所有 AiTop LLM 模型（Gemini / Claude / DeepSeek / DouBao / Qwen）的 Chat 路径，涉及上下文管理、思考提取、模型降级、联网搜索、SSE 错误处理。
+- **风险**：中。`ChatPanel.tsx` 改动较多，但均集中在 §5.10 Chat 协议层；未改动节点运行/面板/Details 等 S 级模块。已知边界：① LLM 摘要压缩增加一次额外调用（15s 超时，失败则回退同步版本）；② `extractNativeThinkTags` 用正则匹配，极端嵌套标签可能解析不准确；③ 能力矩阵默认值需随上游模型能力变化及时更新。
+
+### 10.59 2026-07-29 Chat LLM 思考/能力矩阵补漏（Claude 禁用思考 / 中文推理识别 / e2e 重叠判定）
+
+- **背景**：浏览器端到端验证时发现 Claude 4.6 开启 `thinking` 后上游返回 10001 错误；部分模型 reasoning 字段包含中文内心独白、规划步骤、自我修正，需确保归入思考区；e2e 对中文 thinking/main 重叠的判定因分词方式过严导致误报。
+- **Claude 4.6 禁用思考**（⚠️ §10.64 曾短暂重新启用，因上游不稳定已于 §10.65 回退，当前仍为禁用）：
+  - `utils/aitopChatModels.ts`：将 `claude-4.5` 的 `capabilities.thinking` 设为 `false`，并注释说明上游限制。
+  - `components/ChatPanel.tsx`：`handleAitopLlmSend` payload 构造使用 `getAitopModelCapabilities(uiModelId).thinking`，上游不支持时强制 `payload.thinking = false`，避免 API 报错。
+  - `components/ChatPanel.tsx`：底部思考切换按钮根据 `capabilities.thinking` 禁用并显示模型专属提示（如「Claude 4.6 暂不支持深度思考」），避免 UI 状态与实际请求不一致。
+- **增强中文 reasoning 识别**：
+  - `utils/assistantMessageLayout.ts`：`isLikelyReasoningContent` 新增中文内心独白（嗯/呃/等等/不对/其实/仔细想想…）、规划步骤（第一步/首先/然后/接下来…）、自我修正（重新考虑/修正一下/补充一下…）、自我质疑（是否/能否/假设/也许…）等模式。
+  - 保持保守底线：若文本含面向用户的答案结构（分节标题、编号列表、结论断言）仍视为正文，不归入 thinking。
+- **e2e 重叠判定修复**：
+  - `scripts/llm-e2e-api-test.ts`：中文按连续字符、英文按词分词；重叠阈值从 0.8 放宽到 0.95（模型 thinking 中重复正文关键术语是正常特性）。
+  - 新增防御指标：计算正文 10-gram 被 thinking 包含的比例，若 >85% 才判定为 thinking 吞掉了正文。
+- **测试**：
+  - `scripts/assistant-message-layout-test.ts`：新增中文内心独白、规划步骤、自我修正归入 thinking 的回归用例。
+  - `scripts/llm-e2e-api-test.ts`：Claude `supportsThinking` 更新为 `false`；重叠判定逻辑更新。
+  - `npm run test:chat-gate` 50/50 通过；`npm run test:gate` 47/47 通过；`scripts/llm-e2e-api-test.ts` 14/14 通过。
+- **范围**：`utils/aitopChatModels.ts`、`utils/assistantMessageLayout.ts`、`components/ChatPanel.tsx`、`scripts/llm-e2e-api-test.ts`、`scripts/assistant-message-layout-test.ts`。
+- **风险**：低。仅调整 Chat 协议层与测试断言；未改动节点运行/面板/Details 等 S 级模块。已知边界：① Claude 上游未来若支持 thinking，需手动改回 `capabilities.thinking = true`；② `isLikelyReasoningContent` 新增模式可能极罕见地把极短自我对话正文误判为 thinking，但已通过「答案结构/结论断言」保守规则兜底。
+
+### 10.60 2026-07-29 Chat LLM 浏览器端到端验证与交付
+
+- **背景**：§10.58–§10.59 的修改完成后，按用户要求登录 liangyu《AI技术测试》项目进行浏览器端到端验证，并完成交付报告。
+- **验证环境**：
+  - 服务：`npm start` 运行在生产模式，端口 `3001`，`server.js` 托管 `dist/` + 代理 API。
+  - 浏览器：自动化访问 `http://localhost:3001/#/workspace/14`。
+  - 账号：liangyu / 《AI技术测试》。
+- **已验证项**：
+  1. **DouBao Seed 2.0 + 浅思考模式**：提问「1+1等于多少？请用一句话回答」；正文仅输出「1+1等于2。」，思考过程为内心独白（「用户现在问的是…直接按照要求给一句话就行…」），未把完整答案重复写入 thinking，多阶段去重生效。
+  2. **模型切换**：从 DouBao Seed 2.0 切换至 DeepSeek V4 Pro，底部模型选择器与当前会话状态同步；切换提示「联网搜索/思考模式设置已保留」。
+  3. **DeepSeek V4 Pro + 浅思考模式**：提问「请解释下为什么1+1=2？要简单易懂」；正文输出生活化解释，thinking 保留推理前缀。
+  4. **联网搜索 + 浅思考 + DeepSeek V4 Pro**：提问「今天北京天气怎么样？」；[联网检索] 区显示「检索完成：「今天北京天气怎么样」」，[思考过程] 区显示英文检索前缀，正文输出完整天气、气温、预警、未来预报，三态分离正常。
+  5. **历史上下文保留**：多轮对话中模型切换提示显示「当前对话历史已保留，可以继续对话」；会话 ID 未因切换模型而变更。
+  6. **回归门禁**：`npm run test:chat-gate` 57/57 通过；`npm run test:gate` 47/47 通过；服务持续运行在 http://localhost:3001。
+- **新发现（待用户决策是否修复）**：
+  - DeepSeek V4 Pro 的思考过程末尾偶尔出现「角度 / 解释」形式的答案总结表格（如「实物合并 | 1个东西+1个东西=2个东西」），与正文中的总结表格重复。当前 `truncateThinkingAtAnswerStart` 的触发模式（「整理一下」「综上」「最终回答」等）未覆盖「角度\t解释」这类表格标题，因此未截断。建议：若用户认为该重复影响阅读体验，可在 `assistantMessageLayout.ts` 的 `truncateThinkingAtAnswerStart` 中新增表格类答案组织语言模式（如 `/^角度\s*[\t:：]\s*解释/` 或 `/^项目\s*[\t:：]\s*详情/`），并补充对应回归用例。
+- **临时文件说明**：
+  - 本轮调试与验证过程中在根目录/ `scripts/` 留下大量 `_tmp-*`、`temp_*`、`test-*`、`server-output*` 等临时文件（约 60+ 个）。这些文件不参与构建与运行，建议交付前统一清理；若用户需要保留部分调试日志，可提前告知。
+- **范围**：本次仅做验证与文档记录，无新增代码改动（`skill.md` 除外）。
+- **风险**：低。验证过程中未触发降级链，未发现服务异常；历史聊天记录因用户已存在大量会话而保留在 workspace 14 中。
+
+### 10.61 2026-07-29 Chat 思考模式由三态简化为二态（开启=深思考）
+
+- **背景**：用户反馈不希望区分「浅思考/深思考」，要求统一为单一「思考模式」开关，开启即等价于原深思考。对照 GitHub 上 Claude 官方（Extended Thinking on/off toggle）、ChatGPT（o 系列 Reasoning toggle）、DeepSeek 官方（深度思考按钮）等成熟案例，主流产品均采用开关式设计，不区分浅/深，当前项目的 `关→浅→深` 三态循环属于过度设计。
+- **改动文件**：
+  1. `components/ChatPanel.tsx`
+  2. `utils/aitopChatModels.ts`
+- **改动内容**：
+  1. **类型收窄**：`type ThinkingMode = 'off' | 'light' | 'deep'` → `'off' | 'on'`；`inheritedParams.thinkingMode` 同步。
+  2. **thinkingLevel 映射**：`inheritedThinkingMode === 'deep' ? 'high' : 'low'` → `=== 'on' ? 'high' : 'low'`（两处：常规与 summarizeRetry）。保留「轻量提示词降级为 low」的优化，避免「你好」也走 180s 深思考。
+  3. **流式空闲超时**：`resolveAitopStreamIdleTimeoutMs` 中 `thinkingMode === 'deep'` → `=== 'on'`。开思考=180s，关=90s。
+  4. **UI 切换**：循环 `off→light→deep→off` → `off→on→off` 二态。
+  5. **UI 颜色**：移除 indigo（浅思考）分支，只保留 purple（深思考，开态）+ 灰（关态）。
+  6. **UI 文案**：按钮文字「深度思考/浅思考/思考」→「思考中/思考」；title「思考：关 → 浅 → 深（循环切换）」→「思考：关 → 开（深度思考）」；禁用态「暂不支持深度思考」→「暂不支持思考」；模型切换提示与空状态引导文案中的「深度思考」→「思考」。
+  7. **注释**：`aitopChatModels.ts` 能力矩阵注释 `（light/deep）` → `（开启=深思考）`。
+- **不变项（重要）**：
+  - `thinkingEnabledForTurn = inheritedThinkingMode !== 'off' && modelSupportsThinking` 逻辑不变。
+  - `collectReasoning: thinkingMode !== 'off'` 不变。
+  - 能力矩阵（Claude 4.6 禁用思考、Qwen 禁用思考与联网）不变。
+  - `assistantMessageLayout.ts` 零改动（不依赖 ThinkingMode 类型）。
+  - fallback 链 `thinkingMode !== 'off' && !fallbackCaps.thinking ? 'off' : thinkingMode` 逻辑不变。
+- **验证**：
+  - `npm run test:chat-gate`：51/51 通过。
+  - `npm run test:gate`：47/47 通过。
+  - `npm run build`：成功（10.65s）。
+  - 服务已重启，`http://localhost:3001/` 返回 HTTP 200。
+- **风险评估**：低。类型收窄后所有 `!== 'off'` 判断语义不变；`=== 'deep'` 仅 2 处（thinkingLevel + timeout）已同步改为 `=== 'on'`；契约测试未硬编码三态，全绿。未触碰 S 级模块。
+- **后续注意**：若未来 AiTop 上游支持 Claude 4.6 思考，将 `aitopChatModels.ts:63` 的 `thinking: false` 改回 `true` 即可，无需再调整三态逻辑。（⚠️ §10.64 曾短暂落实，但同日多次测试发现上游对 `thinking=true` 不稳定——随机返回 10001「出了一些问题未能回复」，已于 §10.65 回退禁用。需多日多次验证上游稳定后再启用。）
+
+### 10.62 2026-07-29 Chat 思考模式三项优化（轻量降级 UI 透明 / thinkingLevel 语义清理 / 类型约束）
+
+- **背景**：§10.61 将思考模式简化为二态后，对照 OpenAI GPT-5 `reasoning.effort`（none/minimal/low/medium/high/xhigh，用户可见可控）、Claude Extended Thinking（on/off + 独立 effort 维度）、LobeChat 思维链开关等成熟案例做全面评估，发现 3 处可优化点，用户确认全部修复。
+- **改动文件**：`components/ChatPanel.tsx`
+- **改动内容**：
+  1. **P0 方案 B：轻量降级 UI 透明化**（参考 OpenAI reasoning.effort 用户可见理念）。
+     - 新增组件级实时计算变量 `thinkingLightweightNow`（line 2723）：当思考开启、模型支持思考、输入非空且命中 `isLightweightPrompt`（问候/致谢等短句）时为 true。
+     - 思考按钮 title 动态化：轻量时显示「思考：开（深度思考）· 当前输入较短，将自动轻量思考以加快响应」。
+     - Brain 图标颜色：深思考=`text-purple-400`，轻量降级=`text-amber-400`。
+     - 脉冲圆点颜色：深思考=`bg-purple-400`，轻量降级=`bg-amber-400`。
+     - 保留 `!lightweight` 自动降级为 `low` 的逻辑（避免「你好」也走 180s 深思考），但通过 UI 颜色 + tooltip 让用户感知到当前轮思考强度被自动调整。
+  2. **P1：关闭思考时不赋 thinkingLevel**（语义清理）。
+     - 原：`thinking=false` 时 `thinkingLevel` 仍被赋 `'low'`，语义混淆（易误以为「关思考 = low 思考」）。
+     - 现：`thinkingLevel` 仅在 `thinkingEnabledForTurn=true` 时赋值（`as ThinkingLevel`），关闭时不赋值。字段语义清晰：「thinkingLevel 仅在 thinking=true 时有意义」。
+     - 影响两处：`isSummarizeRetry` 分支与常规分支。
+  3. **P2：新增 ThinkingLevel 类型约束**。
+     - 新增 `type ThinkingLevel = 'high' | 'low'`（line 128），与 ThinkingMode 并列。
+     - thinkingLevel 赋值处加 `as ThinkingLevel`，拼写错误可被编译器捕获。
+- **不变项**：
+  - 轻量降级的 `low` 行为本身保留（仅 UI 透明化，不改变实际请求参数）。
+  - 能力矩阵、fallback 链、超时分级、assistantMessageLayout 均不变。
+- **验证**：
+  - `npm run test:chat-gate`：51/51 通过。
+  - `npm run build`：成功（10.45s）。
+  - 服务已重启，`http://localhost:3001/` 返回 HTTP 200。
+- **风险评估**：低。P0 仅 UI 层（title/className），不影响请求；P1 关闭思考时不赋值，上游原本就忽略 thinking=false 时的 thinkingLevel；P2 纯类型层。未触碰 S 级模块。
+- **UI 最终效果**：
+  - 思考关闭：灰色「思考」按钮。
+  - 思考开启 + 正常输入：紫色高亮「思考中」+ 紫色脉冲点。
+  - 思考开启 + 轻量短句（你好/谢谢）：紫色高亮「思考中」+ 琥珀色脉冲点 + Brain 图标变琥珀色 + tooltip 提示「将自动轻量思考以加快响应」。
+  - 不支持思考（Claude/Qwen）：灰色禁用。
+
+### 10.63 2026-07-29 修复切换模型后联网+思考过程展示框消失（degradedOnceAfterModelSwitchRef 残留）
+
+- **背景**：用户反馈"切换模型 + 同时开联网和思考 = 思考过程展示框消失"。经多轮浏览器端到端调试定位根因。
+- **根因**：`degradedOnceAfterModelSwitchRef` 残留 true。
+  - 切换到 Qwen 时 `beginDegradedUiForModelSwitch` 被调用，设 `degradedOnceAfterModelSwitchRef=true`、`thinkingMode='off'`、`useWebSearch=false`。
+  - 切换回 Gemini/DeepSeek/DouBao 时 `handleModelSelect` 不重置 `degradedOnceAfterModelSwitchRef`，残留 true。
+  - 用户手动重新开启联网+思考后，发送时 `degradedAfterSwitch=true` → `useDegraded=true` → `effectiveWebSearch=false`（line 4269 `useDegraded || lightweight ? false : inheritedWebSearch`）→ 联网被静默关闭。
+  - 同时 `useDegraded=true` 导致 `thinkingLevel` 降级为 low，且不走联网第一轮（`isGeminiWebSearchFirstPass=false`），回复丢失 [联网检索] 和 [思考过程] 展示框。
+- **改动文件**：`components/ChatPanel.tsx`
+- **改动内容**：在 `handleModelSelect`（line 5414-5423）新增 else if 分支：切换到非 Qwen 模型时，若 `degradedOnceAfterModelSwitchRef.current=true`，清除它和 `toggleSnapshotBeforeModelSwitchRef` 快照。
+  - 不恢复快照（`setThinkingMode(snap.thinkingMode)`）：用户可能已手动重新设置，恢复快照会覆盖用户当前选择。
+  - 仅清除 degraded 标记，让后续发送走正常路径（`useDegraded=false` → `effectiveWebSearch=inheritedWebSearch`）。
+- **调试验证**：通过 `localStorage.setItem('__debug_aitop', ...)` 写入关键路径变量，`browser_evaluate` 读取确认：
+  - 修复前：`useDegraded=true`, `effectiveWebSearch=false`, `isGeminiWebSearchFirstPass=false`
+  - 修复后：`useDegraded=false`, `effectiveWebSearch=true`, `isGeminiWebSearchFirstPass=true`, `thinkingMode="on"`
+- **验证**：
+  - `npm run test:chat-gate`：51/51 通过。
+  - `npm run build`：成功。
+  - 服务已重启，`http://localhost:3001/` 返回 HTTP 200。
+- **风险评估**：低。仅在 `handleModelSelect` 新增 else if 分支，不影响 fallback 链（fallback 链的 `beginDegradedUiForModelSwitch` 在 line 3311 独立调用，`endDegradedModelSwitch` 在发送完成后 line 5030/5390 恢复）。未触碰 S 级模块。
+- **注意**：用户需 **Ctrl+Shift+R 硬刷新** 浏览器才能加载最新版本（旧版本 JS 会被缓存）。
+
+### 10.64 2026-07-29 Claude 4.6 重新启用思考模式（thinking=true+high，跳过 low 降级）【⚠️ 已回退，见 §10.65】
+
+- **背景**：§10.59 因 AiTop 上游对 Claude `thinking=true` 返回 10001 错误而禁用思考。本次重新评估发现上游已恢复支持，经 `scripts/test-claude-thinking-levels.mjs` 三档实测验证：`thinking=false` 正常、`thinking=true+low` 仍 502、`thinking=true+high` 成功返回 913 tokens reasoning 内容。故重新启用 Claude 思考，但仅限 `high` 级别。
+- **改动文件**：
+  1. `utils/aitopChatModels.ts`
+  2. `components/ChatPanel.tsx`
+- **改动内容**：
+  1. **能力矩阵**（`aitopChatModels.ts:63`）：`claude-4.5` 的 `capabilities.thinking` 由 `false` 改回 `true`，注释标注「AiTop 已支持 thinking=true+high（2026-07-29 验证通过）；thinkingLevel=low 仍 502，故 ChatPanel 中跳过 low 降级」。
+  2. **thinkingLevel 跳过 low**（`ChatPanel.tsx`）：payload 构造处新增 `claudeSkipLow = uiModelId === 'claude-4.5'`；当 Claude 且本应降级到 `low` 时强制保持 `high`，避免触发上游 502。
+     ```typescript
+     const claudeSkipLow = uiModelId === 'claude-4.5';
+     payload.thinkingLevel = (
+       !useDegraded && inheritedThinkingMode === 'on' ? 'high' :
+       claudeSkipLow ? 'high' : 'low'
+     ) as ThinkingLevel;
+     ```
+- **不变项（重要）**：
+  - `thinkingEnabledForTurn = inheritedThinkingMode !== 'off' && modelSupportsThinking` 逻辑不变。
+  - fallback 链 `thinkingMode !== 'off' && !fallbackCaps.thinking ? 'off' : thinkingMode` 不变。
+  - `assistantMessageLayout.ts` 零改动。
+  - 其余模型（Gemini/DeepSeek/DouBao）的 thinkingLevel 降级逻辑不变，仅 Claude 走 `claudeSkipLow` 分支。
+- **验证**：
+  - `npm run test:chat-gate`：51/51 通过。
+  - `npm run test:gate`：47/47 通过。
+  - 中转日志确认 Claude `thinking=true` 请求成功（relay_1785307956035，183 个 data 事件，reasoning 内容正常返回）。
+- **风险评估**：低。仅能力矩阵 1 处 `false→true` + ChatPanel 新增 `claudeSkipLow` 单模型分支；不影响其余模型降级路径，未触碰 S 级模块。已知边界：① 若用户对 Claude 输入轻量短句（你好/谢谢），原本会降级到 `low` 加快响应，现因 `claudeSkipLow` 强制 `high`，响应会略慢但避免 502，符合「正确性优先于速度」；② 若上游未来修复 `low` 级别，可移除 `claudeSkipLow` 分支恢复统一降级。
+- **⚠️ 已回退（见 §10.65）**：本次重新启用后，同日多次实测发现 AiTop 上游对 Claude `thinking=true` 不稳定——简单问题（1+1）与推理题（灯泡开关）均返回 `{"code":10001,"content":"出了一些问题未能回复，请多试几次"}`。§10.64 全部改动已回退，Claude 思考恢复禁用。
+
+### 10.65 2026-07-29 Claude 4.6 思考模式回退禁用（上游 thinking=true 不稳定）
+
+- **背景**：§10.64 基于单次成功测试（灯泡推理题返回 913 tokens reasoning）重新启用了 Claude 思考。但用户反馈前端 Claude 思考未开启，排查后发现上游实际不稳定。
+- **根因**：AiTop 上游对 Claude `thinking=true` 的支持时好时坏。
+  - 几小时前 `test-claude-thinking-levels.mjs` 测试灯泡推理题 → 成功（913 tokens reasoning）。
+  - 本次用同一道灯泡推理题 + "1+1等于几"两个 prompt 直打 `/aitop-llm-see` → **均返回 `{"code":10001,"isDone":true,"content":"出了一些问题未能回复，请多试几次"}`**。
+  - 与 §10.59 当初禁用时的 10001 错误完全一致，说明上游并未稳定支持，§10.64 的单次成功属偶发。
+- **前端"思考未开启"的附带根因**：§10.64 改了 `aitopChatModels.ts` 后未重新 build，dist 停留在 11:43 旧版（`thinking=false`），浏览器加载旧 JS。已 build 修复，但随后发现上游不稳定，故整体回退。
+- **回退改动**（恢复到 §10.64 之前的状态）：
+  1. `utils/aitopChatModels.ts:63`：`capabilities.thinking` 由 `true` 改回 `false`，注释更新为「上游不稳定，暂禁用」。
+  2. `components/ChatPanel.tsx`（line 4395-4414）：移除 `const claudeSkipLow = uiModelId === 'claude-4.5'` 声明及两处 `claudeSkipLow ? 'high' : 'low'` 分支，恢复统一 `low` 降级逻辑。
+  3. `scripts/llm-e2e-api-test.ts`：Claude `supportsThinking` 由 `true` 改回 `false`；移除 `thinkingLevelHighOnly` 类型字段与 thinkBody 的 `thinkingLevel` 透传逻辑。
+- **验证**：
+  - `npm run build`：成功（22.93s，新 dist `index-D6eBbh_X.js`）。
+  - `npm run test:chat-gate`：51/51 通过。
+  - `npm run test:gate`：47/47 通过。
+- **风险评估**：低。本次为纯回退，恢复到 §10.59/§10.61 验证过的稳定状态；未触碰 S 级模块；其余模型（Gemini/DeepSeek/DouBao）思考逻辑零改动。
+- **经验教训**：① 单次成功测试不足以判定上游稳定，需多日多次、多 prompt 验证；② 代码改动后必须立即 build，否则前端加载旧 dist 会误导排查方向；③ Claude 思考的启用条件应设为「连续 N 天、多 prompt 稳定返回 reasoning」而非单次成功。
+- **后续启用条件**：需在未来多日（建议 ≥3 天）每日多次用不同复杂度 prompt 验证 AiTop 对 Claude `thinking=true` 稳定返回 reasoning 内容且无 10001 后，方可按 §10.61 的「后续注意」重新启用。
+
+### 10.66 2026-07-29 画布拖动性能优化（autoPanOnNodeDrag / elevateNodesOnSelect）
+
+- **背景**：评估"节点过多时鼠标拖动卡顿"优化空间，对照 GitHub xyflow/React Flow 成熟案例（reactflow.dev whats-new、xyflow 千级节点 60fps 优化指南）。结论：项目已有优化（onlyRenderVisibleElements、nodeTypes/edgeTypes 模块级单例、CustomNode memo+精细比较、canvasRefreshPause 拖动暂停+LOD 降档+rAF 节流、selectNodesOnDrag=false）覆盖了约 80% 最佳实践，属中上水平。剩余低成本优化空间为两个 ReactFlow prop。
+- **改动文件**：`components/FlowEditor.tsx`
+- **改动内容**（ReactFlow 组件 props，line 16051-16052 新增两行）：
+  1. `autoPanOnNodeDrag={false}` — 拖动节点到视口边缘不再触发自动平移计算，避免大型画布下平移+渲染叠加卡顿。用户仍可用中键/Alt+拖动（`isAltMiddlePanActive`）手动平移。
+  2. `elevateNodesOnSelect={false}` — 选中节点不再提升 z-index，避免 DOM 重排。代价：节点重叠时选中节点不自动置顶。
+- **未做项（评估后排除）**：
+  - React Flow 11.10 → 12.11 升级：收益最大（XYDrag 实例化/MiniMap/Viewport/Handle 框架级优化），但 12.x 破坏性 API 变化，FlowEditor 为 ~15k 行 S 级 monolith，需单独排期全回归，不混入日常。
+  - zustand 细粒度状态订阅：现有 memo + canvasRefreshPause 已缓解，重构 S 级状态层性价比低。
+  - edge 类型 bezier→straight：onlyRenderVisibleElements 已过滤视口外 edge，影响有限且影响美观。
+- **验证**：
+  - `npm run build`：成功（21.55s）。
+  - `npm run test:gate`：47/47 通过。
+  - `npm run test:chat-gate`：51/51 通过。
+- **风险评估**：低。仅新增 2 个 ReactFlow 声明式 prop，不改业务逻辑/接口/数据流；未触碰节点运行/面板/Details。已知行为变化：① 拖节点到边缘不自动平移（用中键替代）；② 选中节点不置顶（重叠时需手动调整层级）。若体验不符可移除对应 prop 回退。
+- **后续建议**：择期评估 React Flow 12 升级（单独排期 + test:gate + 浏览器全回归）；届时可免费获得 Handle context 订阅、MiniMap 不重渲染、Viewport 命令式 transform 等框架级优化。
+
+### 10.67 2026-07-29 节点生成链路全面排查 + 并发运行部分失败契约测试
+
+- **排查范围**：用户要求排查"各个模型的节点、属性面板、引用等节点生成全部是否有漏洞"。启动 3 个 Explore agent（文生图 / 视频 / 跨模型公共链路）广度扫描 + 人工逐一核实。
+- **排查结论**：agent 报告经核实**全部为误报**（基于代码片段推测，与真实代码和守护契约矛盾）。人工核实 4 个关键点均实现正确：
+  1. `repairSeedanceReferenceGenerationParamsFromPanel`（referencedMediaRun.ts:1307）空值返回 undefined ✅
+  2. `seedanceReferenceSnapshotUrlsMatch`（referencedMediaRun.ts:1281-1284）过滤空/blob/data URL ✅
+  3. `createMjImagineTask`（aitop.ts:617-623）sref/cref/oref 仅透传 http(s) ✅
+  4. `resolveSeedanceReferenceMainVideoUrl`（promptMediaRefs.ts:663-667）referenceMovs 空时返回 undefined，防止 @主图→@主视频 ✅
+- **发现一个真实设计缺口**（基于代码事实，非推测）：
+  - `runParallelGenerationTasks`（multiGenerateTasks.ts:91-139）部分成功时 `return urls`（string[]），**errors 数组在函数内部被丢弃**。
+  - 调用方（FlowEditor.tsx 7 处，如 L7636）直接 `generatedImages = await ...` 不检查长度差异。
+  - 用户影响：请求批量生成 3 张，1 张失败时只 spawn 2 个输出节点，用户无失败提示，静默丢失。
+  - 定性：倾向设计取舍（部分成功优于全失败），但"无失败提示"是体验缺口。
+- **新增测试**：`scripts/parallel-run-partial-failure-test.ts`（方案 A：先用测试暴露问题）。
+  - 4 用例：全成功保序 / 部分失败不阻塞 / 全失败抛错 / 部分失败可获取 errors。
+  - 运行结果：9 通过 1 失败（断言 4 预期红，暴露 errors 丢弃）。
+  - **暂不注册 test-gate.mjs**：断言 4 故意红，注册会阻塞门禁。待修复后转绿再注册。
+  - 运行：`npx tsx scripts/parallel-run-partial-failure-test.ts`。
+- **已按方案 B 修复**（2026-07-29）：
+  - `multiGenerateTasks.ts`：`runParallelGenerationTasks` 返回类型 `Promise<string[]>` → `Promise<{ urls: string[]; errors: string[] }>`，`return urls` → `return { urls, errors }`。
+  - `FlowEditor.tsx`：L6775 声明 `partialGenerationErrors` 收集器；7 处调用方（Nano/image2/MJ/Kling/vidu/seedance/即梦，L7638/7893/7982/9248/9408/10316/10430）解构 `{ urls, errors }` 赋值给 `generatedImages` 并收集 errors；L11197 统一处理前若 errors 非空 `console.warn` 记录部分失败（UI 可见提示作为后续增强，项目无 toast 组件）。
+  - 测试断言 4 转绿（13/13 通过），已注册 test-gate.mjs（L55）+ package.json `test:parallel-run-partial-failure`。
+- **验证**：`npm run build` 成功（TS 类型检查通过）；`npx tsx scripts/parallel-run-partial-failure-test.ts` 13/13；`npm run test:gate` 全部通过（48 项）。
+- **风险评估**：低。runParallelGenerationTasks 返回类型变更影响 7 处调用方，均已解构适配；TS 编译通过；7 处其他赋值（可灵 Omni 视频轮询/mock URL L8955/8957/8972/10440）不经过 runParallelGenerationTasks，不受影响。部分失败现在可被调用方感知（console.warn），不再静默丢失。已知局限：UI 提示暂为 console.warn（项目无 toast），后续可加节点状态/通知组件增强用户可见性。
+- **勿回退约束**：`runParallelGenerationTasks` 返回 `{ urls, errors }` 不得改回 `string[]`；7 处调用方必须解构并收集 errors；`parallel-run-partial-failure` 契约不得从 test-gate.mjs 移除。
+
+### 10.68 2026-07-29 修复运行报错后面板主图格消失（catch 块回滚主图格）
+
+- **背景**：用户报告 Nano Banana 2.0 运行报错后，属性面板中主图格消失（"面板少图"）。
+- **根因**（基于代码事实）：图生图/图生视频模型运行链路存在**时序缺陷**：
+  1. 上传参考图后、API 调用前，调用 `buildPanelImagePreviewPatchAfterRun`（referencedMediaRun.ts:585）计算主图 patch，未 `@主图` 时设 `panelMainSlotVisible: false`（主图格隐藏）+ 备份原主图到 `panelMainImageUrl`。
+  2. 随即 `setNodes` 写回面板（FlowEditor.tsx Nano L7580 / image2 L7780+ / Omni L8449+ / Seedance L9992+）。
+  3. 之后才调用 `runParallelGenerationTasks`（API 创建任务 + 轮询）。
+  4. **API 失败 → catch 块（L11984）只清 status/taskId/progress，不回滚面板主图格** → 主图格保持隐藏状态 → 用户看到"面板少图"。
+- **影响范围**：所有调用 `buildPanelImagePreviewPatchAfterRun` 的模型：Nano(7551) / image2(7775) / Omni multi(8449) / Omni tab(8602) / Seedance(9992)。MJ 不调用该函数（参考图处理方式不同），不受影响。
+- **修复**（抽函数 + catch 块调用）：
+  - 新增 `buildMainSlotRollbackPatchForRunError(data)`（utils/runRecovery.ts:352，与 clearStaleRunTaskBeforeFreshRun 同文件，可单元测试）。
+  - FlowEditor catch 块（L11987）调用该函数，条件回滚主图格：
+    - 条件：`panelMainSlotVisible === false && panelMainImageUrl 有值`（运行时确实隐藏了主图格）。
+    - 回滚：`panelMainSlotVisible: true` + `imagePreview: panelMainImageUrl 备份` + 清 `panelMainImageUrl`。
+    - 不回滚：`referenceImages` 的 COS URL 替换（COS URL 有效，回滚到 blob 可能失效）。
+    - 对未动主图格的模型无影响（条件不满足，返回空 patch）。
+- **契约测试**：`scripts/run-error-panel-rollback-test.ts`（5 场景 16 断言）：
+  - 场景1：运行时隐藏主图格 → catch 回滚（恢复 imagePreview + panelMainSlotVisible:true + 清备份）
+  - 场景2：运行时未动主图格 → catch 不回滚
+  - 场景3：隐藏但无备份 → 不回滚（避免 imagePreview 变 undefined）
+  - 场景4：对照旧行为（不回滚时主图格保持隐藏，暴露根因）
+  - 场景5：Omni/Seedance 多 tab（回滚仅基于字段，与模型无关）
+  - 已注册 test-gate.mjs（L56）+ package.json（L72 `test:run-error-panel-rollback`）。
+- **验证**：`npm run build` 成功（TS 类型检查通过）；`npm run test:gate` 全部通过（49 项，含新契约）；`npm run test:chat-gate` 51/51 通过。
+- **风险评估**：低。仅在 catch 块新增条件回滚，不改运行成功路径；条件式回滚只影响"运行时被隐藏的主图格"，不影响其他模型；referenceImages 不回滚避免引入失效 blob。
+- **勿回退约束**：catch 块的主图格条件回滚（`shouldRollbackMainSlot` + `mainSlotRollbackPatch`）不得移除；运行失败时必须恢复 `panelMainSlotVisible: true` + `imagePreview` 备份。
+
+### 10.69 2026-07-29 修复运行失败刷新后主图 blob 丢失（hydrate 恢复边界）
+
+- **背景**：用户报告 Nano Banana 2.0 运行失败**刷新后**，面板主图 blob 丢失（§10.68 修复主图格回滚后暴露的既有缺陷）。
+- **根因**（基于代码事实）：
+  1. 用户拖入本地图片作主图 → 运行前 `imagePreview=blob:xxx`，`imageLocalRef='idb-key'`（IDB 备份）。
+  2. 运行中 `buildPanelImagePreviewPatchAfterRun`（referencedMediaRun.ts:592）未 @主图 时备份 `panelMainImageUrl=panelMainImageBackupFromNode()`（L425 `return preRunMain` = 原 imagePreview **blob**），imagePreview 切换为首个 @参考 COS URL。
+  3. 运行失败 catch（§10.68）回滚 `imagePreview=panelMainImageUrl`（**blob 备份**）+ `panelMainSlotVisible:true`。
+  4. 刷新后 `hydrateNodeImagePreviewFromPersisted`（hydratePersistedNodePreviews.ts:285）的 `shouldClearForLocalMainRestore` 三个条件**未覆盖"imagePreview 是 panelMainImageUrl 备份的失效 blob + 有 imageLocalRef + 主图格显示"**：
+     - `!current`=false（blob 非空）
+     - `looksLikePanelFirstRef && !panelMainHidden`=false（blob≠panelFirstRef）
+     - `!isPersistableMediaUrl(current) && matchesGpRef`=false（blob≠gpRef）
+     - 结果=false → 不清空 imagePreview → 不走 IDB 恢复 → blob 失效 → 主图丢失。
+  5. `pickPersistableMainPreviewUrl`（L159）对 runNode 过滤 blob（`pushPersistableUrl` 只收持久化 URL），找不到替代 → imagePreview 保持失效 blob。
+- **修复**（hydratePersistedNodePreviews.ts:285-291）：`shouldClearForLocalMainRestore` 新增第 4 条件：
+  - `(!isPersistableMediaUrl(current) && hasLocalMainRef && !panelMainHidden)`
+  - 语义：imagePreview 是失效 blob/data + 有 imageLocalRef（可 IDB 恢复）+ 主图格显示中（`panelMainSlotVisible=true`，运行失败回滚场景）→ 清空 `imagePreview=''` 让后续 `hydrateLocalMediaPreviews` 从 IDB 恢复原主图。
+  - `!panelMainHidden` 保护运行成功未 @主图场景（`panelMainSlotVisible=false` → `panelMainHidden=true` → 不触发，保留参考图 COS URL）。
+- **契约测试**：`scripts/run-error-hydrate-blob-recovery-test.ts`（5 场景 6 断言）：
+  - 场景1：运行失败回滚后刷新（blob 备份 + imageLocalRef）→ hydrate 清空让 IDB 恢复
+  - 场景2：运行成功未 @主图（参考 COS + panelMainSlotVisible:false）→ 不清空
+  - 场景3：运行成功 @主图（主图 COS + panelMainSlotVisible:true）→ 不清空（isPersistable=true）
+  - 场景4：无 imageLocalRef（blob + 无 IDB）→ 不清空（无 IDB 可恢复，避免丢图）
+  - 场景5：对照旧行为（修复前场景1 保持失效 blob → 主图丢失，防回退）
+  - 已注册 test-gate.mjs（L57）+ package.json（L73 `test:run-error-hydrate-blob-recovery`）。
+- **验证**：`npm run build` 成功；`npm run test:gate` 全部通过（50 项，含 §5.13 `20260713-export-json-main-image` 主图持久化契约未破坏）；`npm run test:chat-gate` 51/51 通过。
+- **风险评估**：中（涉及 §5.13 S 级 hydrate 逻辑）。新增条件只在"失效 blob + imageLocalRef + 主图格显示"时触发；运行成功的持久化 COS URL 不受影响（`isPersistableMediaUrl=true`→`!isPersistable=false`）；运行成功未 @主图不受影响（`panelMainHidden=true`→`!panelMainHidden=false`）。§5.13 跨机器导入契约验证通过。
+- **勿回退约束**：`shouldClearForLocalMainRestore` 的第 4 条件（`!isPersistableMediaUrl(current) && hasLocalMainRef && !panelMainHidden`）不得移除；运行失败刷新后必须从 imageLocalRef 恢复原主图，不得保持失效 blob。
+
+### 10.70 2026-07-30 修复 normalizeGraphNodesProjectAssetBinding 误将 imageLocalRef 视为项目资产绑定
+
+- **背景**：用户报告 Banana 节点**未运行**仅上传主图后刷新，blob 图片丢失。经排查，`normalizeGraphNodesProjectAssetBinding` 的 `hasBinding` 判断错误地将 `imageLocalRef`（本地 IndexedDB 媒体引用）视为项目资产绑定条件。
+- **根因**：`utils/normalizeTemplateNodeForSpawn.ts:58` 的 `hasBinding` 条件包含 `imageLocalRef.startsWith('flowgen-local:')`。当节点仅有 `imageLocalRef`（无 `projectAssetId`、无项目资产库 URL）时，`hasBinding=true` 会错误进入 `normalizeTemplateNodeDataForSpawn`，该函数在特定分支会 `delete next.imageLocalRef`，导致刷新后无法从 IndexedDB 恢复 blob 图片。
+- **修复**：
+  - `utils/normalizeTemplateNodeForSpawn.ts:55-59`：从 `hasBinding` 中移除 `imageLocalRef` 条件，仅保留 `projectAssetId` 和 `parseProjectAssetIdsFromMediaUrl(imagePreview)` 两个真正的项目资产绑定判断。
+  - 注释标记 `§10.70` 说明原因。
+- **全模型验证**：新增 `scripts/cross-model-no-run-refresh-blob-test.ts`，覆盖 9 个场景 × 10 个模型（含活跃模型 + 已下线旧模型 + MidJourney 文生节点 + MOV 视频节点 + OUTPUT 节点 + 可灵 Omni 多 tab），共 76 项断言：
+  - 场景 A：各模型仅主图 → 刷新 → `imageLocalRef` 保留 + `imagePreview` 清空待 IDB 恢复（10 模型 × 3 断言 = 30）
+  - 场景 B：各模型主图 + 参考图 → 刷新 → 所有 `localRefs` 保留（10 模型 × 3 断言 = 30）
+  - 场景 C：MOV 视频节点 → 刷新（2 断言）
+  - 场景 D：OUTPUT 节点有 COS URL → 不受影响（1 断言）
+  - 场景 E：项目资产绑定节点 → `imageLocalRef` 正确删除 + `projectAssetId` 保留（3 断言）
+  - 场景 F：MidJourney 文生节点（textGenNode）→ 刷新（2 断言）
+  - 场景 G：可灵3.0 Omni 多 tab 参考图 → 刷新（4 断言）
+  - 场景 H：无 `imageLocalRef` 节点 → 不误操作（2 断言）
+  - 场景 I：验证 `hasBinding` 不再包含 `imageLocalRef`（2 断言）
+- **验证**：`npm run build` 成功；`npm run test:gate` 47/47 通过；`npm run test:chat-gate` 51/51 通过；`npx tsx scripts/cross-model-no-run-refresh-blob-test.ts` 76/76 通过。
+- **风险评估**：低。移除的条件仅影响 `hasBinding` 判断；`normalizeTemplateNodeDataForSpawn` 本身在 `imagePreview` 为空时返回原始数据不变；项目资产绑定节点（有 `projectAssetId` 或项目资产 URL）仍会正常进入规范化流程。§5.13 S 级 hydrate 逻辑未修改。
+
+### 10.71 2026-07-30 修复 hydratePersistedRemotePreviews 冗余调用导致 blob 恢复后被再次清空
+
+- **背景**：§10.70 修复后，image2 用户仍反馈刷新后 blob 丢失。排查发现 `hydratePersistedRemotePreviews` 在 `useEffect` 中被冗余调用，会在 `hydrateLocalMediaPreviews` 从 IDB 恢复 blob URL 后再次清空 `imagePreview`，导致竞态窗口内 blob 丢失。
+- **根因**：`FlowEditor.tsx` 中 `hydratePersistedRemotePreviews` 被调用两次：
+  1. `schedulePostLoadInit` 的 `setTimeout` 回调中（与 `hydrateLocalMediaPreviews` 配对）
+  2. `useEffect` 中（`graphHydrationReady` 变为 true 时触发）
+  
+  第二次调用在 `hydrateLocalMediaPreviews` 恢复 blob 后执行 `hydrateGraphMediaFromPersisted`，该函数对 `isEphemeralMediaUrl(blob_url)` 为 true 的节点会触发 `shouldClearForLocalMainRestore` 条件，将 `imagePreview` 清空回 `''`。虽然第二次 `hydrateLocalMediaPreviews` 会再次恢复，但存在时序竞态。
+- **修复**：
+  - `components/FlowEditor.tsx:3447-3452`：从 `useEffect` 中移除冗余的 `hydratePersistedRemotePreviews()` 调用，仅保留 `hydrateLocalMediaPreviews()` 作为安全网。
+  - 注释标记 `§10.70` 说明原因。
+- **验证**：`npm run build` 成功；`npm run test:gate` 全部通过；`npm run test:chat-gate` 51/51 通过；`cross-model-no-run-refresh-blob-test.ts` 76/76 通过；`image2-no-run-blob-loss-deep-test.ts` 36/36 通过。
+- **风险评估**：低。`hydratePersistedRemotePreviews` 在初始加载流程（`hydrateGraphMediaFromPersisted` → `normalizeGraphNodesProjectAssetBinding`）和 `schedulePostLoadInit` 中均已执行，`useEffect` 中的调用完全冗余。移除不影响任何正常功能，仅消除 blob 恢复后的非预期清空。
+
+### 10.71 2026-07-30 修复 image2 中键拖入/链上拖入图片时未设置 imageLocalRef 导致刷新后 blob 丢失
+
+- **背景**：§10.70 修复后，用户仍反馈 image2 刷新后 blob 丢失，且中键拖图无法正常使用。排查发现 `applyInspectorReferenceFromUrlStringImpl` 中 image2 无主图时拖入参考区的分支（`isImage2 && !main`）仅设置了 `imagePreview`，**未触发 IndexedDB 存储**，也未设置 `imageLocalRef`。
+- **根因**：对比本地文件上传路径（`ingestInspectorReferenceLocalFilesImpl` → `flowgen:register-original-image` type=main → `attachLocalMainRef`），中键拖入/链上拖入路径缺少 `imageLocalRef` 的写入。结果是：
+  1. 图片在当前会话中短暂显示（data URL），但刷新后 `hydrateLocalMediaPreviews` 因 `imageLocalRef` 为空而无法从 IDB 恢复 blob。
+  2. 用户感知为"中键拖图进不去"——图片虽短暂出现在面板，但 `imageLocalRef` 缺失导致后续流程（如 `image2ShowMainInRefGrid` 依赖 `imageLocalRef`）无法正确识别主图状态。
+- **第一版修复（已废弃）**：`applyMain` 改为 `async`，在 `onUpdate` 前先 `await fetch` + IDB 备份。引入了异步延迟导致图片延迟出现，用户反馈"无法中键拖图进去"。
+- **最终修复**：
+  - `components/NodeInspector.tsx:3707-3750`：`applyMain` 保持同步，**先立即调用 `onUpdate` 显示图片**，再后台异步（`void (async () => {...})()`）执行 fetch → blob → File → dispatch `flowgen:register-original-image`（type=main）。
+  - 关键：`onUpdate` 不等待 IDB 备份，图片立即显示；IDB 备份在后台异步进行，不阻塞 UI。
+  - 对 https URL 跳过 IDB 备份（`isPersistableMediaUrl` 返回 true 时直接持久化）。
+  - 添加 try/catch 包裹，IDB 写入失败时仅 console.warn，不影响面板预览展示。
+  - 注释标记 `§10.71`。
+- **刷新恢复链路验证**：
+  1. 中键拖入 blob URL → `onUpdate` 设置 `imagePreview=data_url`（立即显示）+ 后台 `attachLocalMainRef` 设置 `imageLocalRef` + IDB 存 blob
+  2. 持久化：`persistSanitize` 剥离 `imagePreview`（data URL），保留 `imageLocalRef`
+  3. 刷新后 `hydrateNodeImagePreviewFromPersisted`：`imagePreview` 为空 + `imageLocalRef` 存在 → 清空 `imagePreview` 等待 IDB 恢复
+  4. `shouldPreferRunReferencePreviewOverLocalMain` = false（无 gp.referenceImages）→ 允许 IDB 恢复
+  5. `hydrateLocalMediaPreviews`：`getLocalMediaBlob(imageLocalRef)` → `URL.createObjectURL(blob)` → `imagePreview` = 新 blob URL
+  6. `shouldShowPanelMainImageSlot` = true（imagePreview 已恢复）→ 主图格显示
+- **验证**：`npm run build` 成功；`npm run test:gate` 全部通过；`npm run test:chat-gate` 全部通过；`npm run test:image2-panel-refs` 25/25 通过；`npm run test:image2-json-panel` 7/7 通过；`image2-middle-drag-blob-recovery-test.ts` 31/31 通过（覆盖 7 个场景：blob 拖入、持久化剥离、刷新恢复、https 拖入、参考槽逻辑、主图格显示、执行顺序）。
+- **风险评估**：低。纯新增分支，仅影响 image2 无主图时中键拖入/链上拖入场景。`flowgen:register-original-image` 事件处理在 FlowEditor 中已稳定运行，本地文件上传路径使用相同机制。不影响其他模型、不影响已有主图的 image2 节点、不影响 HTML5 左键拖放。`onUpdate` 同步执行确保图片立即显示，IDB 备份后台异步不阻塞 UI。
+
+### 10.73 2026-07-30 修复 attachLocalMainRef / hydrateLocalMediaPreviews / normalizeGraphNodesProjectAssetBinding 时序竞态导致刷新后 blob 丢失
+
+- **背景**：§10.71 + §10.72 修复后，用户仍反馈"拖图的解决了，但是刷新后 blob 图片丢失还是没有解决"。深入排查发现根因是 **React setNodes 异步调度导致的时序竞态**，之前的 §10.72 修复（清除 projectAssetId）虽然逻辑正确，但在运行时因时序问题失效。
+- **根因（时序竞态）**：
+  1. `onUpdate({ projectAssetId: undefined })` 调用 `setNodes`，但 React 的状态更新是**异步调度**的，不会立即生效。
+  2. `dispatchEvent(new CustomEvent('flowgen:register-original-image', ...))` 是**同步**的，立即触发事件监听器。
+  3. 事件监听器中 `attachLocalMainRef` 通过 `getNodes()` 读取状态，可能读到**旧的 projectAssetId / imagePreview（资产库 URL）**而跳过 IDB 备份。
+  4. `hydrateLocalMediaPreviews` 检查 `boundAsset`（projectAssetId），若残留则跳过 blob 恢复。
+  5. `normalizeGraphNodesProjectAssetBinding` 若 projectAssetId 残留，会调用 `normalizeTemplateNodeDataForSpawn` **删除 imageLocalRef** → 刷新后无法恢复。
+- **为什么之前的测试脚本通过了却没解决问题**：`image2-asset-binding-blob-loss-test.ts` 只测试了**同步数据状态**，假设 `onUpdate` 后 `getNodes()` 立即返回新值。实际上 `setNodes` 是异步的，`getNodes()` 可能读到旧值。
+- **修复方案**（4 处改动）：
+  1. **`components/FlowEditor.tsx` `attachLocalMainRef`（L2727-2737）**：移除 `projectAssetId` 与 `imagePreview` 资产库 URL 检查。调用方已通过 `dispatchEvent type=main` 明确表达备份意图，无需二次校验。资产库节点初始化不会触发该事件（L2996-3000 已有 projectAssetId 守卫）。
+  2. **`components/FlowEditor.tsx` `register-original-image` 事件处理（L4580-4586）**：移除 `skipLocal` 检查，直接调用 `attachLocalMainRef`。
+  3. **`components/FlowEditor.tsx` `hydrateLocalMediaPreviews`（L2468-2473, L2568, L2597）**：将 `boundAsset`（projectAssetId）检查改为 `isAssetBoundPreview`（`imagePreview` 是否资产库 URL）。`imagePreview` 是持久化后实际加载的值，不依赖运行时时序。
+  4. **`utils/normalizeTemplateNodeForSpawn.ts` `normalizeGraphNodesProjectAssetBinding`（L61-64）**：若 `imageLocalRef` 已存在则跳过 normalize，保护用户拖入的新图不被资产库 URL 覆盖。
+  5. **`components/NodeInspector.tsx` 本地文件上传路径（L4809-4821, L4157-4188）**：调换 `onUpdate` / `dispatchEvent` 顺序，先更新状态再触发事件（辅助优化）。
+- **验证**：
+  - `npx tsc --noEmit` 通过（无类型错误）
+  - `npm run build` 成功
+  - `npm run test:gate` 全部通过
+  - `npm run test:persist-sanitize` 通过
+  - `npm run test:image2-panel-refs` 25/25 通过
+  - `npm run test:image2-json-panel` 7/7 通过
+  - `image2-asset-binding-blob-loss-test.ts` 26/26 通过
+  - `image2-middle-drag-blob-recovery-test.ts` 31/31 通过
+  - `image2-timing-race-blob-loss-test.ts` 26/26 通过（新增，覆盖 6 个时序竞态场景）
+- **风险评估**：中。
+  - ** attachLocalMainRef 移除检查**：可能导致资产库节点在某些边缘场景被误备份（多一份 IDB 记录），但不影响显示（`hydrateLocalMediaPreviews` 会因 `isAssetBoundPreview=true` 跳过用 IDB 覆盖 imagePreview）。
+  - **hydrateLocalMediaPreviews 改用 isAssetBoundPreview**：当 imagePreview 为空（被 sanitize 剥离）时不会跳过恢复，行为正确。当 imagePreview 是资产库 URL 时跳过恢复，行为正确。
+  - **normalizeGraphNodesProjectAssetBinding 保护 imageLocalRef**：若用户已用本地图片替换主图（imageLocalRef 存在），刷新后不会被资产库 URL 覆盖。资产库节点未替换图片时（无 imageLocalRef）仍走正常 normalize 逻辑。
+  - **时序竞态最坏情况**：若 `onUpdate` 的 `setNodes` 未生效但 `attachLocalMainRef` 已执行（IDB 备份成功），刷新后 `imagePreview` 可能显示旧的资产库 URL（因为持久化时 imagePreview 还是旧值），但 `imageLocalRef` 已保留在 IDB 中。相比之前（图片完全丢失），这是改善。
+
+### 10.74 2026-07-30 修复 applyAssetToNodeMain 不触发 IDB 备份 + 全模型刷新 blob 持久化回归测试
+
+- **背景**：§10.73 修复 image2 面板内中键拖入/本地上传路径后，用户要求"每个模型的面板都刷新测试下，看是否有这样的情况发生"。排查发现 **`applyAssetToNodeMain`（FlowEditor.tsx node-main 区域中键拖入）** 这条路径在所有模型上共性地缺少 IDB 备份，会导致刷新后 blob 丢失。
+- **根因**：`components/FlowEditor.tsx:3894` 的 `applyAssetToNodeMain` 在拖入非持久化 URL（`blob:`/`data:`）时，仅通过 `setNodes` 设置 `imagePreview`，**未触发 `flowgen:register-original-image` 事件**，因此：
+  1. `imageLocalRef` 未设置 → IDB 无备份
+  2. 持久化时 `persistSanitize` 剥离 `blob:`/`data:` → `imagePreview=''`
+  3. 刷新后 `hydrateLocalMediaPreviews` 因 `imageLocalRef` 为空无法恢复 → 图片丢失
+  4. 影响所有模型（Nano Banana 2.0 / image 2 / 可灵3.0 Omni / 即梦3.0 Pro / seedance2.0 高质量+急速 / 可灵 2.5 Turbo / vidu 2.0 / seedance1.5-pro / MidJourney）
+- **修复**（`components/FlowEditor.tsx:3924-3949`）：
+  - 在 `applyAssetToNodeMain` 的 `setNodes` + `scheduleRemoteWorkspaceSave` 之后，新增异步 IDB 备份分支：
+    - 条件：`nextPreview && !isPersistableMediaUrl(nextPreview) && !isVid`（非持久化 URL 且非视频）
+    - 动作：`fetch(nextPreview)` → `blob` → `new File(...)` → `dispatchEvent('flowgen:register-original-image', { nodeId, file, type: 'main' })`
+    - 错误处理：`try/catch` 包裹，失败仅 `console.warn`，不阻塞 UI
+  - 注释标记 `§10.73` 说明：此修复覆盖所有模型 node-main 区域中键拖入场景；若 `normalizeTemplateNodeDataForSpawn` 已将 `imagePreview` 改为资产库 URL（`projectAssetId` 存在时），多备份一份 IDB 不影响显示（`hydrateLocalMediaPreviews` 会因 `isAssetBoundPreview=true` 跳过覆盖）。
+- **全模型回归测试**：新增 `scripts/all-models-refresh-blob-persistence-test.ts`，覆盖 **10 个模型 × 9 个场景（A-I）共 238 项断言**：
+  - 场景 A：各模型中键拖图到 node-main（blob: URL）→ persist → 刷新 → IDB 恢复（10 模型 × 4 断言 = 40）
+  - 场景 B：各模型本地上传主图（data: URL）→ persist → 刷新 → IDB 恢复（10 模型 × 5 断言 = 50）
+  - 场景 C：各模型时序竞态 — projectAssetId 残留 + imageLocalRef 已设置 → normalize 保护（10 模型 × 3 断言 = 30）
+  - 场景 D：各模型主图 + 参考图（referenceImageLocalRefs）→ persist → 刷新 → localRefs 全保留（10 模型 × 3 断言 = 30）
+  - 场景 E：可灵3.0 Omni 三 tab 参考图（multi/instruction/video）→ persist → 刷新 → localRefs 全保留（4 断言）
+  - 场景 F：MOV 视频节点（seedance2.0）未运行 → 刷新 → imageLocalRef 保留（2 断言）
+  - 场景 G：MidJourney 文生节点（textGenNode）→ 刷新 → imageLocalRef 保留（2 断言）
+  - 场景 H：各模型资产库节点 + 中键拖入新图（projectAssetId 已清除）→ 刷新 → 新图恢复（10 模型 × 7 断言 = 70）
+  - 场景 I：各模型已运行成功（outputUrl=COS）→ 刷新 → 主图保留 COS URL（10 模型 × 1 断言 = 10）
+- **同步修正 cross-model-no-run-refresh-blob-test 场景 E**：原断言期望"资产绑定时 imageLocalRef 被删除"，与 §10.73 修复（保护 imageLocalRef）冲突。已更新为验证新行为：imageLocalRef 受保护（无害残留）+ isAssetBoundPreview=true → 显示正确。测试从 75/1 改为 77/0 通过。
+- **test-gate 注册**：将 4 个 blob 持久化测试注册到 `scripts/test-gate.mjs` + `package.json`，防回归：
+  - `test:all-models-refresh-blob-persistence`（238 项，新增）
+  - `test:cross-model-no-run-refresh-blob`（77 项，§10.70 已有但未注册）
+  - `test:image2-timing-race-blob-loss`（26 项，§10.73 已有但未注册）
+  - `test:image2-asset-binding-blob-loss`（26 项，§10.72 已有但未注册）
+- **验证**：4 个测试全通过（238 + 77 + 26 + 26 = 367 项断言）；`npm run test:gate` 全部通过。
+- **风险评估**：低。
+  - `applyAssetToNodeMain` 新增的 IDB 备份分支是纯增量逻辑，仅在 `!isPersistableMediaUrl(nextPreview) && !isVid` 时触发；持久化 URL（https/资产库 URL）和视频不受影响。
+  - 资产库节点拖入时若 `normalizeTemplateNodeDataForSpawn` 已将 `imagePreview` 改为资产库 URL，多备份一份 IDB 不影响显示（`isAssetBoundPreview=true` 跳过覆盖）。
+  - cross-model 场景 E 断言更新仅反映 §10.73 已生效的行为，不改业务逻辑。
+- **勿回退约束**：
+  - `applyAssetToNodeMain` 中的 `if (nextPreview && !isPersistableMediaUrl(nextPreview) && !isVid)` IDB 备份分支不得移除，否则所有模型 node-main 中键拖入刷新后 blob 丢失。
+  - `all-models-refresh-blob-persistence-test.ts` 必须保持在 test-gate 中注册，防止任一模型的刷新持久化回归。
+
+### 10.74.1 2026-07-30 修复 applyAssetToNodeMain 中 normalizeTemplateNodeDataForSpawn 覆盖非持久化 URL 的 imagePreview
+
+- **背景**：§10.74 修复后用户反馈"image2又无法拖图片了，刷新后还是会丢图"。排查发现 `applyAssetToNodeMain` 调用 `normalizeTemplateNodeDataForSpawn` 时，对从资产库创建的节点（`n.data.projectAssetId` 存在），会把用户拖入的 blob URL **改回资产库 fileUrl**，导致"无法拖图"+ "刷新后丢图"。
+- **根因**：`components/FlowEditor.tsx:3910` 的 `applyAssetToNodeMain` 中：
+  ```typescript
+  normalizeTemplateNodeDataForSpawn({ ...n.data, imagePreview: blobUrl, ... }, serverProjectId)
+  ```
+  - `n.data.projectAssetId` 存在（资产库创建）+ `serverProjectId` 存在 → `pid && aid` = true
+  - `normalizeTemplateNodeDataForSpawn` 第一个分支：`imagePreview = canonicalProjectAssetFileUrl(pid, aid)`（资产库 URL）+ `delete next.imageLocalRef`
+  - 用户拖入的 blob URL 被资产库旧图覆盖 → "无法拖图"
+  - 刷新后 `isAssetBoundPreview=true`（imagePreview 是资产库 URL）→ `hydrateLocalMediaPreviews` 跳过 IDB 恢复 → "刷新后丢图"
+- **修复**（`components/FlowEditor.tsx:3910-3928`）：
+  - 拖入非持久化 URL（`!isPersistableMediaUrl(nextPreview)`）时清除 `projectAssetId: undefined`
+  - 资产库拖入（`fromAssetLibrary && d.assetId`）仍保留 `projectAssetId` 走正常规范化
+  - 持久化 URL（https）保留 `n.data.projectAssetId`
+  ```typescript
+  const isNonPersistedDrop = !isPersistableMediaUrl(nextPreview);
+  ...(isNonPersistedDrop
+    ? { projectAssetId: undefined }
+    : fromAssetLibrary && d.assetId
+      ? { projectAssetId: d.assetId }
+      : {}),
+  ```
+- **回归测试**：新增 `scripts/node-main-drag-normalize-override-test.ts`（34 项断言）：
+  - 场景1：资产库节点 + blob URL → imagePreview 不被覆盖（修复后）
+  - 场景2：对照组（修复前）→ imagePreview 被改回资产库 URL（确认 bug 存在）
+  - 场景3：资产库节点 + data URL → 不被覆盖
+  - 场景4：资产库拖入（fromAssetLibrary=true）→ 正常 normalize
+  - 场景5：普通节点（无 projectAssetId）→ 原本正常
+  - 场景6：持久化 https URL → projectAssetId 保留
+  - 场景7：全 10 模型验证 → imagePreview 不被覆盖
+- **验证**：`test:node-main-drag-normalize-override` 34/34 通过；`npm run build` 成功；服务已重启。
+- **风险评估**：低。纯增量条件判断，仅在非持久化 URL 时清除 projectAssetId；资产库拖入和持久化 URL 不受影响。
+- **勿回退约束**：`isNonPersistedDrop` 条件不得移除，否则资产库节点中键拖入新图会被旧资产图覆盖。
+
+### 10.75 2026-07-30 修复 attachLocalReferenceRefs 中 projectAssetId 守卫导致资产库节点参考图无法备份到 IDB
+
+- **背景**：§10.70–§10.74.1 连续五轮修复均集中在**主图**（`imageLocalRef`）的 IDB 备份链路，用户反馈"参考图丢失了"始终未解决。最终通过 TRAE-debugger 运行时插桩定位到**参考图**（`referenceImageLocalRefs`）走的是另一条完全独立的备份函数 `attachLocalReferenceRefs`，其中存在与 `attachLocalMainRef` 同款的 `projectAssetId` 守卫，从未被前五轮修复触及。
+- **根因**（`components/FlowEditor.tsx` `attachLocalReferenceRefs`）：
+  ```typescript
+  if (existingData?.projectAssetId) return [];   // ← 此行导致资产库创建的节点跳过参考图 IDB 备份
+  ```
+  - 用户从资产库创建 image2（或任意模型）节点 → 节点自带 `projectAssetId`
+  - 用户在面板参考图区拖入新的 blob 参考图 → 参考图仅写入内存 `referenceImages` 数组
+  - `attachLocalReferenceRefs` 因 `projectAssetId` 存在直接 `return []` → **参考图从未写入 IDB**
+  - 刷新后内存清空 → 参考图 blob URL 失效 → 参考图丢失
+- **为何前五轮修改无效**：
+  | 轮次 | 修改位置 | 失效原因 |
+  |------|---------|---------|
+  | §10.70 | `normalizeGraphNodesProjectAssetBinding` | 只保护主图 `imageLocalRef`，未触及参考图 |
+  | §10.71 | `applyMain` 异步化 / 移除冗余 hydrate | 主图链路，参考图独立路径 |
+  | §10.72 | `attachLocalMainRef` 移除 `projectAssetId` 检查 | 主图函数，非参考图函数 `attachLocalReferenceRefs` |
+  | §10.73 | `applyAssetToNodeMain` 加 IDB 备份 | 仅覆盖 node-main 区域（主图），不覆盖面板参考图区 |
+  | §10.74.1 | `normalizeTemplateNodeDataForSpawn` 清理 `projectAssetId` | 仅拖入瞬间，资产库节点本身仍带 `projectAssetId` |
+  - 核心盲点：主图与参考图是两套并行的备份函数，`projectAssetId` 守卫在两处各有一份，前五轮只改了主图那份。
+- **修复**（`components/FlowEditor.tsx` `attachLocalReferenceRefs`）：
+  - 移除 `if (existingData?.projectAssetId) return [];` 守卫
+  - 与 §10.73 `attachLocalMainRef` 修复保持一致原理
+  ```typescript
+  // §10.75：移除 projectAssetId 检查 — 与 attachLocalMainRef §10.73 同理。
+  // 资产库创建的节点也允许用户拖入新的 blob 参考图，须备份到 IDB。
+  // registerEphemeralPanelRefToLocalStore 已通过 isPersistableMediaUrl 过滤持久化 URL，
+  // 此处无需二次守卫。误备份仅多一份 IDB 记录，不影响资产库 URL 显示。
+  ```
+- **安全性论证**：
+  - `registerEphemeralPanelRefToLocalStore` 内部已通过 `isPersistableMediaUrl(u)` 过滤 https 等持久化 URL，资产库 fileUrl 不会被重复备份
+  - 即使误备份一份 IDB 记录，`hydratePanelReferenceUrlsFromLocalRefs` 仅在 `needsHydrateFromLocalRef(cur)` 为 true（非持久化 URL）时才用 IDB 恢复，资产库 URL 显示不受影响
+  - 与 §10.73 主图修复同理，已验证安全
+- **并行备份函数排查**（建议执行结果）：FlowEditor.tsx 共 3 个并行 IDB 备份函数：
+  | 函数 | 行号 | `projectAssetId` 守卫 | 状态 |
+  |------|------|----------------------|------|
+  | `attachLocalMainRef`（主图） | 2726 | §10.73 已移除 | ✅ |
+  | `attachLocalFrameRef`（首尾帧） | 2768 | **从未有此守卫** | ✅ 安全 |
+  | `attachLocalReferenceRefs`（参考图 / Omni 多 tab） | 2803 | §10.75 已移除 | ✅ |
+  - 结论：无残留守卫。首尾帧备份函数本就没有 `projectAssetId` 守卫；主图与参考图两处同款守卫均已移除。Omni 三 tab（multi/instruction/video）走 `attachLocalReferenceRefs` 同一函数，一并修复。
+- **回归测试**：新增 `scripts/attach-local-reference-refs-backup-test.ts`（62 项断言，7 场景）：
+  - 场景1：旧逻辑对照 — 资产库节点 + 旧守卫 → `referenceImageLocalRefs` 为空 → `panelRefsPendingLocalHydrate=false` → 刷新后丢失
+  - 场景2：修复后 — 守卫移除 → localRef 写入 → 刷新后（blob 被剥离为空）`pending=true` → 可恢复
+  - 场景3：持久化链路 — `referenceImageLocalRefs` 保留，`referenceImages` blob 被剥离
+  - 场景4：持久化 URL（https / 资产库 fileUrl）不触发误备份（`isPersistableMediaUrl` 二次过滤）
+  - 场景5：可灵3.0 Omni 三 tab — `projectAssetId` 存在时可备份
+  - 场景6：全 10 模型 — `projectAssetId` 存在不阻断参考图备份
+  - 场景7：首尾帧一致性 — `attachLocalFrameRef` 从未有守卫，参考图移除后行为对齐
+  - 关键测试函数：`panelRefsPendingLocalHydrate`（纯函数，不依赖 IDB mock）— localRef 是否被保留决定刷新后能否恢复
+  - 边界发现：`needsHydrateFromLocalRef` 对 `blob:` 返回 **false**（内存中可用，防 Omni 多图闪动），仅空 URL（持久化剥离后）返回 true；故 pending 断言须在「刷新后状态（空 referenceImages）」上做，而非 blob 还在内存时
+- **门禁注册**：`test:attach-local-reference-refs-backup` 已注册至 `package.json` 与 `scripts/test-gate.mjs`
+- **验证**：用户确认"修复成功"；`test:attach-local-reference-refs-backup` 62/62 通过；`test:gate` 全绿。
+- **风险评估**：低。移除一行守卫，下游已有 `isPersistableMediaUrl` 二次过滤；不影响资产库 URL 显示。
+- **勿回退约束**：`attachLocalReferenceRefs` 不得重新加入 `projectAssetId` 守卫，否则资产库节点参考图将再次无法备份到 IDB。与 §10.73 `attachLocalMainRef` 守卫保持同步约束。
 
 ---
 
@@ -3015,6 +3682,474 @@ npm run test:llm
 - **文件**：`utils/nodeDetailsPreview.ts`（`buildOmniPanelSourceForNodeDetails` L1990-2018）
 - **已验证**：`npm run test:gate` 16/16 全部通过；`npm run build` 成功；服务已重启 http://localhost:3001/。
 - **风险**：低；仅影响 gp 已有参考图的可灵3.0 Omni 输出节点（MOV/OUTPUT），processor 节点和其他模型不受影响。`referenceImages` 和 `referenceImageLabels` 的通用合并不受限制。
+
+### 11.60 2026-07-23 画布空白页提示文案调整
+
+- **背景**：用户反馈画布空状态（无节点时）提示仅为「拖入图片 / Drop Images」，未体现右键创建节点能力，需同步更新提示。
+- **变更**：`components/FlowEditor.tsx` 空状态覆盖层（`nodes.length === 0`）文案调整：
+  - 中文主标题：`拖入图片` → `请拖入图片或者右键创建节点`
+  - 英文副标题：`Drop Images` → `Drop images or right-click to create node`
+- **文件**：`components/FlowEditor.tsx`（空状态提示 L15442-L15452）
+- **已验证**：`npm run test:gate` 全部通过；`npm run build` 成功；服务已重启 http://localhost:3001/。
+- **风险**：极低；纯 UI 文案展示变更，未改动拖拽、右键菜单、节点创建等业务逻辑，未触碰 §5.8–§5.13 S 级模块。
+
+### 11.61 2026-07-24 MidJourney 文生图面板重构：单模型 + 风格族 + 折叠参考图/高级参数 + 中文画质
+
+- **背景**：Text Node 中文生图模型下拉原先同时存在 `MidJourney (真实感强)` 与 `Niji (卡通动漫)` 两个选项，用户要求合并为单一 `MidJourney` 模型，并在面板内通过「风格族」区分两套参数体系。
+- **变更**：
+  1. **types.ts**：
+     - `MODEL_MIDJOURNEY` 由 `'MidJourney (真实感强)'` 改为 `'MidJourney'`；保留旧名常量 `MODEL_MIDJOURNEY_REALISTIC`、`MODEL_NIJI` 仅用于向后兼容。
+     - 新增 `MjFamily = 'realistic' | 'cartoon'` 与 `MJ_FAMILY_OPTIONS`（面板内切换：真实感强 / 卡通动漫）。
+     - 新增 5 组下拉选项常量：`MJ_STYLE_OPTIONS`（29 项风格）、`MJ_ANGLE_OPTIONS`（视角）、`MJ_CAMERA_OPTIONS`（人物镜头）、`MJ_LIGHT_OPTIONS`（灯光）、`MJ_ART_OPTIONS`（艺术程度）。
+     - `MJ_QUALITY_OPTIONS` 改为 `{name,value}` 结构，UI 显示中文（一般/清晰/高清/超高清），API 仍透传数值。
+     - 版本常量按风格族拆分：`MJ_VERSION_OPTIONS_REALISTIC = [' --v 7',' --v 6.1',' --v 6']`、`MJ_VERSION_OPTIONS_CARTOON = [' --niji6',' --niji5']`；面板显示为 `v7/v6.1/v6` 与 `niji6/niji5`。
+     - `GenerationParams` / `NodeData` / `modelConfigs['MidJourney']` 新增字段：`mjFamily`、`mjStyle`、`mjAngle`、`mjCamera`、`mjLight`、`mjArt`。
+  2. **components/NodeInspector.tsx**：
+     - 风格族切换按钮组位于素材区顶部，选择后自动校正 `mjVersion` 到对应风格族默认版本。
+     - 参考图区外包折叠面板，默认收起；根据 `mjFamily` 动态显示：
+       - `realistic`：风格一致性图（sref）+ 参照万物图（oref）
+       - `cartoon`：风格一致性图（sref）+ 角色一致性图（cref）
+     - 风格由自由文本输入改为 `MJ_STYLE_OPTIONS` 下拉选择。
+     - 高级参数区默认折叠，展开后包含视角/人物镜头/灯光/艺术程度四个下拉。
+     - 画质下拉改为中文显示。
+     - `handleModelChange` 中 MJ 配置统一保存到 `modelConfigs.MidJourney`，恢复时兼容旧 persisted 键。
+     - 新增 useEffect：旧 persisted 节点（`MidJourney (真实感强)` / `Niji (卡通动漫)`）自动迁移为 `selectedModel='MidJourney'` + 对应 `mjFamily`。
+  3. **components/FlowEditor.tsx**：
+     - `syncModelConfigFromNodeData` MJ 分支统一写入 `modelConfigs.MidJourney`，并推断 `mjFamily`。
+     - 运行分支读取 `mjFamily`、`mjAngle`、`mjCamera`、`mjLight`、`mjArt`，透传给 `createMjImagineTask`。
+     - Node Details `Used Parameters` MJ 分支新增 `Family`、`Style`、`Angle`、`Camera`、`Light`、`Art` 展示；Version 显示去掉前导 `--`。
+  4. **services/aitop.ts**：
+     - `MjImagineTaskOptions` 新增 `mjAngle`/`mjCamera`/`mjLight`/`mjArt`。
+     - `createMjImagineTask` payload 中按非空透传 `angle`/`camera`/`light`/`art`。
+  5. **scripts/text-gen-node-contract-test.ts**：
+     - 白名单长度由 6 改为 5，移除 `Niji` 独立模型断言。
+     - 更新 NodeInspector / aitop 源码契约，覆盖风格族、折叠区、中文画质、高级参数透传。
+- **已验证**：`npx tsx scripts/text-gen-node-contract-test.ts` 47/47 通过；`npm run test:gate` 全部通过；`npm run build` 成功；服务已重启 http://localhost:3001/；`curl http://localhost:3001/` 返回 200。
+- **风险**：中低；主要影响 Text Node 的 MidJourney 面板形态与 API 参数透传。旧 persisted 节点通过 `isLegacyMidJourneyFamilyModel` + 自动迁移 effect 保持兼容，已生成输出与历史记录不受影响。`isNijiModel` 仍保留但已不再被业务代码引用，仅作类型库历史函数。
+- **待用户最终确认**：
+  - 浏览器实测：Text Node 模型下拉仅显示 `MidJourney`，面板内风格族、折叠参考图、风格下拉、高级参数折叠、中文画质是否符合预期。
+  - 真实生成实测：选择真实感强/卡通动漫、不同版本、高级参数、参考图后，API 是否正常返回图片。
+- **2026-07-24 补充**：画面比例默认值改为 `16:9`，画质默认值改为 `高清`（value=`1`）；MidJourney 生成图片后 OUTPUT 节点默认模型改为 `seedance2.0 (高质量版)`（`spawnOutputNode.ts` `resolveSpawnOutputDefaultModel` 新增 MidJourney 分支，便于图生视频链路）。
+- **2026-07-24 补充**：MidJourney 参考图上传区支持拖图（`NodeInspector.tsx` 新增 `handleMjRefDrop` + `getMjRefSlots`）：本地左键拖入文件 → 填充首个空槽位；画布中键拖图 → 拉取 URL 转 COS 上传；单个槽位支持独立拖放替换；容器 `data-flowgen-media-drop="1"` + `data-flowgen-drop-zone="mj-reference"` 与画布拖放桥接。
+
+### 11.62 2026-07-25 MidJourney gp 快照/恢复补全 + 恢复轮询超时放宽 + Inspector 渲染性能优化
+
+- **背景**：全量代码审查发现 MidJourney 链路三处隐藏缺陷及一处性能问题，均在保证 S 级模块不动的前提下最小化修复。
+- **变更**：
+  1. **utils/nodeDetailsPreview.ts**（修复：gp 快照缺 MJ 字段）：`applyRunPanelFieldsToGenerationParams` 新增 `isMidJourneyFamilyModel` 分支，运行完成时将 `mjVersion`/`mjRatio`（默认 `1:1`）/`mjQuality`/`mjMode`（`RELAX` 兜底 `FAST`）写入 `generationParams`，并同步 `aspectRatio=mjRatio`，保证 OUTPUT 节点 Node Details 能还原 MJ 面板参数。
+  2. **utils/runRecovery.ts**（修复：刷新恢复 gp 不回填 mj 字段）：`mergeRecoveryGenerationParamsFromRunNode` 新增 MidJourney 分支，从面板态回填 `mjFamily`/`mjVersion`/`mjRatio`/`mjQuality`/`mjMode` 及 `aspectRatio`，避免刷新后恢复 spawn 的 OUTPUT 节点 Node Details 缺参数。
+  3. **utils/aitopTaskRecovery.ts**（修复：恢复轮询提前超时）：`defaultPollConfigForModel` 新增 `MidJourney`/`Niji` 分支（`maxAttempts:300 × intervalMs:4000 = 20min`）；原默认 `150×2s=5min` 对 MJ 生图（常 2~3 分钟，高峰更久）刷新恢复场景不足，易误报失败。
+  4. **components/NodeInspector.tsx + components/FlowEditor.tsx**（性能：面板卡顿优化）：`NodeInspector` 默认导出改为 `React.memo(NodeInspector)`；FlowEditor 渲染处原先内联的 `onUpdate`/`onRun` 改为 `useCallback` 稳定回调（`handleInspectorUpdate`/`handleInspectorRun`，插入位置在 `handleNodeRun` 定义之后避免 TDZ）。无关节点进度 tick 刷新 nodes 数组时，若选中节点 data 未变则 Inspector 整体跳过重渲染。语义安全：`updateNodeDataById`/`handleNodeRun` 本身均为 useCallback，`handleNodeRun` 依赖变化时 memo 仍会正常重渲染，无 stale closure 风险。
+- **已验证**：`npm run test:gate`（80+8+9+16+47 全绿）、`npm run test:chat-gate`（44+16+24+13+19+48 全绿）、`npm run build` 成功（tsc 无错），服务已重启 http://localhost:3001/。
+- **风险**：低。1~3 为纯新增分支，仅影响 MidJourney/Niji 家族；4 为渲染优化，`data`/`projectAsset*` prop 引用变化时仍正常重渲染，业务行为不变。
+- **待用户最终确认**：
+  - MidJourney 生图运行完成后，OUTPUT 节点 Node Details 的 Version/Ratio/Quality/Mode 展示是否正确。
+  - MidJourney 生图中刷新页面，恢复轮询是否不再 5 分钟误超时，且恢复后 Details 参数完整。
+  - 多节点画布运行期间，右侧属性面板操作是否更顺滑。
+
+### 11.63 2026-07-27 全面网页版测试（账号 liangyu）
+
+- **测试范围**：登录、LLM 对话、MidJourney 节点、刷新恢复、控制台/网络错误扫描、右键菜单代码审查。
+- **已验证功能**：
+  1. 登录《AI技术测试》项目成功，画布加载正常。
+  2. LLM 对话：联网时间查询准确、上下文保持、身份披露合规、浅思考推理链展示正常。
+  3. MidJourney 节点：Node Details 完整显示 MODEL/TASK_ID/GENERATED_AT/COUNT/FAMILY/VERSION/ASPECT_RATIO/QUALITY/MODE。
+  4. 刷新恢复：taskId=1704094 持久化成功，恢复后输出正常，参数完整保留。
+  5. 控制台错误：仅视频资源 `net::ERR_ABORTED`（正常网络问题），无代码级错误。
+  6. 网络请求：API 正常（workspace 保存、图片加载），仅视频代理偶发中止。
+  7. 右键菜单代码审查：`onPaneContextMenu`/`onNodeContextMenu`/`onSelectionContextMenu` 实现正确，节点创建位置使用 `menu.flowPosition` 精确计算。
+- **发现的问题**：
+  - 视频资源代理加载偶发 `net::ERR_ABORTED`（COS 视频文件较大或网络波动导致，不影响核心功能）。
+- **风险**：低。所有核心功能正常，无阻塞性 bug。
+- **交付状态**：可交付。
+
+### 11.64 2026-07-31 可灵3.0 Omni 多图 Node Details 参考图修复（参照 Seedance 2.0 模式）
+
+- **现象**：`E:/问题/0731/omin3.json` — 可灵3.0 Omni 多图 tab 的 OUTPUT 节点（node_3）和 MOV 节点（node_1）的 Node Details 参考图显示的是上游 Nano Banana 的参考图（大牙、原始丛林小路），而非 Omni API 实际使用的参考图（熊大、主图）。
+- **根因**：Seedance 2.0 参考生有 `repairSeedanceReferenceGenerationParamsFromPanel` 修复函数，在 workspace 加载时从面板数据修复 `generationParams.referenceImages`。Omni 缺少对应的修复函数，导致 `generationParams.referenceImages` 残留上游节点旧值。
+- **修复**：
+  1. `utils/referencedMediaRun.ts`：新增 `repairOmniMultiGenerationParamsFromPanel` 函数，从面板 `klingOmniMultiReferenceImages` 修复 `generationParams.referenceImages`（过滤 blob/data URL，仅比较 COS URL）
+  2. `utils/runRecovery.ts`：新增 `applyWorkspaceOmniMultiGpRepair` 函数，在 `prepareNodesAfterWorkspaceLoad` 中调用，修复节点 gp 和 generatedThumbnails 的 gp
+- **文件**：
+  - `utils/referencedMediaRun.ts`（新增 `repairOmniMultiGenerationParamsFromPanel` 函数，约 30 行）
+  - `utils/runRecovery.ts`（新增 `applyWorkspaceOmniMultiGpRepair` 函数 + 调用点，约 80 行）
+- **风险**：低；仅修复 gp 中错误的参考图数据，不改变面板交互逻辑；参照 Seedance 2.0 已验证模式；`test:gate` 全量通过；未触碰 §5.8–§5.13 S 级模块
+- **对比验证**：`E:/问题/0731/seedance2.0.json` 每个节点 gp.referenceImages 均为该节点自身 API 调用时的参考图，与上游无关；修复后 Omni 行为与此对齐
+
+### 11.65 2026-07-31 Omni 多图中间节点 Node Details 显示全部面板图片（而非仅 @ 引用图）
+
+- **现象**：`E:/问题/0731/omin中间节点.json` — Output Picture Node（node_2）Node Details 显示了面板上全部 4 张图片（主图 + 3 张面板参考图），而非仅显示创意描述中 @ 引用的 2 张图片（@主图 + @资产:白泽）
+- **根因**：`buildOmniMultiTabDetailsReferencePreview` 中 `preferPanel` 决策使用 `activeSlotRefs`（过滤掉 blob/data URL 后只剩 1 个非临时槽），导致 `panelExceedsPromptRefs`（1 ≤ 2）误判为 false，面板路径被采用。面板路径调用 `buildReferenceImageDetailItemsFromPanel` 遍历全部 `klingOmniMultiReferenceImages`（3 张），加上主图共 4 张，未过滤未被 @ 引用的图片
+- **修复**：在 `preferPanel` 面板路径中，构建 items 后新增过滤逻辑：当 `dedupedPanel.length > promptImageCount`（面板项数超过创意描述 @ 引用数）时，用 `snapRefs`（generationParams.referenceImages）的 URL 集合过滤掉未被 API 实际使用的多余图片
+- **文件**：`utils/nodeDetailsPreview.ts`（`buildOmniMultiTabDetailsReferencePreview` 函数 preferPanel 代码块，新增约 10 行）
+- **风险**：低；仅在面板项数超过 prompt @ 引用数时触发过滤，不影响面板项数等于或少于 @ 引用数的正常路径；`snapKeys.size > 0` 守卫防止空快照误过滤；`test:gate` 全量通过（298 vitest + 全量脚本测试 0 失败）；未触碰 §5.8–§5.13 S 级模块
+
+### 11.66 2026-07-31 Omni instruction/video tab 中间节点 Node Details 显示全部面板图片且标签全相同
+
+- **现象**：`E:/问题/0731/omin中间节点2.json` — Output Mov Node（instruction tab）Node Details 显示 3 张 Reference Images，且全部标签都是"鸱吻"（应该只显示 1 张 @资产:鸱吻）
+- **根因 1**：`buildOmniInstructionVideoTabDetailsReferencePreview` 第 1339 行使用 `slotRefs.length`（过滤 blob/data 后）判断是否超过 prompt @ 引用数，与 §11.65 的 multi tab 同根因：`slotRefs` 过滤了 blob 导致计数偏小（1），而实际 `panelPreview` 有 3 个 items（含 blob），误判为未超过
+- **根因 2**：`applyOmniAssetLabelsToDetailsReferencePreview` 第 1380 行兜底 `assetLabels[0]` 在 `assetLabels` 仅 1 个标签时，将所有 items 标签都替换为同一标签
+- **修复**：
+  1. 将 `omniPanelFilledCountExceedsPromptImageRefs` 的参数从 `slotRefs.length`（过滤后）改为 `panelPreview.referenceImages.length`（实际展示数），确保正确检测面板项数超过 @ 引用数
+  2. 移除 `applyOmniAssetLabelsToDetailsReferencePreview` 中 `assetLabels[0]` 兜底逻辑，改为保留原始 `it.label`（`assetLabels[i]?.trim() || it.label`），避免未匹配项被错误覆盖为同一标签
+- **文件**：`utils/nodeDetailsPreview.ts`（`buildOmniInstructionVideoTabDetailsReferencePreview` 第 1339 行 + `applyOmniAssetLabelsToDetailsReferencePreview` 第 1384 行）
+- **风险**：低；修改 1 与 §11.65 修复方案一致，修改 2 仅移除危险的兜底赋值，`assetLabels[i]` 存在时正常覆盖；`test:gate` 全量通过；未触碰 §5.8–§5.13 S 级模块
+
+### 11.67 2026-07-31 Omni instruction/video tab MOV 节点 Reference Videos 缺失主视频
+
+- **现象**：`E:/问题/0731/omin中间节点2.json` — Output Mov Node（instruction tab）创意描述引用了 `@主视频`，但 Node Details 的 Reference Videos 为空；`E:/问题/0731/seedance倒数第二个节点.json`、`E:/问题/0731/seedance倒数第二个节点2.json` — Seedance 2.0 参考生 Output Mov Node 同样问题
+- **根因**：**两层过滤**，Seedance 比 Omni 多一层上游 scrub：
+  1. `mergeReferenceMovsSources` 第 13902-13904 行：`seedanceReferenceMovsForOutputDetails(g?.referenceMovs, outputResultUrlForRefMovs)` 把 `gp.referenceMovs` 中与 `gp.outputUrl` 相同 URL 的参考视频 scrub 掉（因为 Seedance 参考生 gp.outputUrl 恰好等于参考视频 URL），返回空数组 → `mergedRefMovsRaw` 为空 → `baseRefMovs` 收不到任何参考视频
+  2. `baseRefMovs` 第 14130 行 `isOutputNode` 检查 + 第 14136 行 Omni 检查 + fallback 第 14206 行 `isGeneratedResultVideo` 三重过滤（Omni 受此影响）
+- **修复**（两处）：
+  - `mergeReferenceMovsSources` 第 13902-13904 行：移除 `outputResultUrlForRefMovs` 参数，`seedanceReferenceMovsForOutputDetails(g?.referenceMovs)` 不再 scrub 合法的参考视频（`gp.referenceMovs` 本身就是输入参考视频，无需用 outputUrl 过滤）
+  - `baseRefMovs` 第 14130-14143 行：Omni instruction/video + Seedance 参考生 MOV/OUTPUT 节点的参考视频不因 URL 与 outputUrl 相同而被过滤 → 添加 `!(isOmniModel && ...)` + `!isSeedanceRefOutput` 守卫
+- **文件**：`components/FlowEditor.tsx`（`mergeReferenceMovsSources` 第 13902-13904 行 + `baseRefMovs` 第 14111-14142 行）
+- **风险**：低；`gp.referenceMovs` 是生成时使用的参考视频，本身不含输出结果，移除 scrub 不会误显示生成结果；`test:gate` 全量通过；未触碰 §5.8–§5.13 S 级模块
+
+### 11.68 2026-07-31 修复 outputNode 切换模型时主图被旧快照覆盖
+
+- **现象**：`E:/问题/0731/问题.json` — 最后一个 Output Picture Node 当前运行的是 `image 2`，生成结果主图为丛林小女孩图；切换到 `Nano Banana 2.0` 后，面板主图却显示为上游资产图“夏茉”；切回 `image 2` 又显示正常。
+- **根因**：outputNode / movNode 的 `modelConfigs` 会继承上游 processorNode 的各模型快照。`Nano Banana 2.0` 快照里保存的是上游资产绑定时的主图（`/flowgen-api/projects/14/assets/.../file`）。`NodeInspector.tsx` 的 `handleModelChange` 在切换模型时，对 Nano Banana / image2 等模型会调用对应 `*MainPatchOnModelSwitch` 从 `modelConfigs` 恢复快照，导致 outputNode 主图被旧快照覆盖。
+- **修复**：
+  - `utils/modelSwitchPanelIsolation.ts`：新增 `getRunResultMainPreviewUrl(gp)` 与 `preserveRunResultMainPreview(nodeType, gp)` 纯函数。
+    - `getRunResultMainPreviewUrl`：从 `generationParams.outputUrl` 或 `outputUrls[0]` 提取运行结果主图/主视频 URL。
+    - `preserveRunResultMainPreview`：仅当节点类型为 `OUTPUT` 或 `MOV` 且存在运行结果 URL 时，返回 `{ imagePreview: runResultUrl, panelMainImageUrl: undefined, panelMainSlotVisible: undefined, imageLocalRef: undefined }`；否则返回 `null`。
+  - `components/NodeInspector.tsx`：`handleModelChange` 在保存当前模型快照、组装完 `updateData` 后，若 `preserveRunResultMainPreview` 返回非空，则 `Object.assign(updateData, runResultPreviewPatch)`，强制保持运行结果主图。
+- **设计约束**：
+  - 仅影响**显示层**（`imagePreview` / `panelMainImageUrl` / `panelMainSlotVisible` / `imageLocalRef`），不动 `prompt`、参考图、模型参数等运行配置。
+  - 不影响 processorNode / inputNode 的正常模型切换快照恢复行为。
+  - 视频 outputNode 的运行结果 URL（如 `.mp4`）切换到图片模型时，主图格会因 `isLikelyMainVideoUrl` 隐藏，与现有行为一致。
+- **回归测试**：新增 `src/test/utils/modelSwitchPreserveRunResult.test.ts`（13 项断言）：
+  - `getRunResultMainPreviewUrl`：outputUrl 优先、outputUrls[0] 兜底、空值返回 undefined。
+  - `preserveRunResultMainPreview`：processorNode 返回 null；outputNode/movNode 无运行结果返回 null；outputNode/movNode 有运行结果时正确保护主图；模拟 `E:/问题/0731/问题.json` 场景。
+- **验证**：`npm run test:gate` 全绿；`npm run build` 成功。
+- **风险**：低；改动集中在 Inspector 模型切换的显示层补丁，未修改 S 级数据结构或核心运行流程。潜在影响：若用户期望 outputNode 切换模型后显示目标模型的旧快照主图（非运行结果），此行为会改变；但 outputNode 语义为“运行结果节点”，保持运行结果图符合 §5.1 三态分离与 §10.3 设计。
+- **勿回退约束**：outputNode / movNode 在 `handleModelChange` 中必须优先保持 `generationParams` 的运行结果主图，禁止允许 `modelConfigs` 旧快照覆盖运行结果主图。
+
+### 11.69 2026-07-31 Seedance 参考生 Node Details 参考图少主图（gp.referenceImages 空槽补回）
+
+- **现象**：`E:/问题/0731/seedance缺主图.json` — 后两个节点（Output Picture Node + Output Mov Node，Seedance 2.0 参考生）Node Details 的 Reference Images 缺少主图，prompt 中有 `@主图` 但只显示 1 张参考图（祭司老人）
+- **根因**：主图是 blob URL，未持久化到 `seedanceTabConfigs.reference.referenceImages` 和 `gp.referenceImages`，导致 `gp.referenceImages[0]` 为空。`buildSeedanceReferenceDetailsFromSnapshot` 的 compact 步骤过滤空 URL 后只剩 1 个 URL，prompt 有 2 个 ref（@主图 + @资产:祭司老人），主图无法展示
+- **数据链**：`data.referenceImages[0]` = blob:... → `seedanceTabConfigs.reference.referenceImages[0]` = "" → `gp.referenceImages[0]` = "" → compact 后仅 1 URL
+- **修复**（两处）：
+  - `components/FlowEditor.tsx` 第 14765-14774 行：`snapRefsRaw` → `supplementedRefs` 补充逻辑 — `gp.referenceImages` 的空槽用 `data.referenceImages` 对应槽位的面板 URL 补回
+  - `utils/nodeDetailsPreview.ts` `buildSeedanceReferenceDetailsFromSnapshot` 第 623-627 行：compacted 标签重映射 — 首项（主图位）标签为通用名（如"图片1"）且 prompt 含 `@主图` 时，将标签重映射为"主图"，防止后续 `expectedLabels` 过滤因标签不匹配而误删主图
+- **文件**：`components/FlowEditor.tsx`（`supplementedRefs` 补充逻辑，约 10 行）+ `utils/nodeDetailsPreview.ts`（标签重映射，约 5 行）
+- **风险**：低；仅补充空槽，不覆盖已有 URL；`hasAnyRef` 判断基于补充后的数组；`test:gate` 全量通过；未触碰 §5.8–§5.13 S 级模块
+
+### 11.70 2026-07-31 Seedance 参考生 MOV 节点 Reference Videos 标签显示「视频1」而非「主视频」
+
+- **现象**：`E:/问题/0731/seedance倒数第二个节点3.json` — 倒数第二个 Output Mov Node（Seedance 2.0 参考生）创意描述引用了 `@主视频`，但 Node Details 的 Reference Videos 标签显示「视频1」而非「主视频」
+- **根因**：`resolveSeedanceReferenceMainVideoUrl` 中 `imagePreview`（生成结果视频）先于 `referenceMovs`（参考视频）被检查。MOV 输出节点的 `imagePreview` 为生成的 mp4 视频，函数优先返回 `imagePreview` 作为 `mainVideoUrl`，导致 `referenceMovs[0]` 不匹配，被 `buildPromptMediaRefLabels` 降级为 `@视频1`
+- **修复**：`utils/promptMediaRefs.ts` `resolveSeedanceReferenceMainVideoUrl`：将 `referenceMovs` 的 `soleMov` 检查提前到 `imagePreview` 之前。保留 `outputUrl`/`prev` 匹配 gate：仅当 `soleMov` 与 `outputUrl` 或 `imagePreview` 为同一视频时才确认为主视频。无 `soleMov` 时回退到 `imagePreview`
+- **文件**：`utils/promptMediaRefs.ts`（`resolveSeedanceReferenceMainVideoUrl` 函数，调序 + gate 保留，约 5 行净变更）
+- **风险**：低；仅调序不删 gate，非主视频参考视频仍标注为 `@视频1`（`seedanceMainVideoLabel.test.ts` 全部通过）；`test:gate` 全量通过；未触碰 §5.8–§5.13 S 级模块
+
+### 11.72 2026-08-03 Seedance 参考生 Node Details 参考视频角标「主视频→视频1」+ 索引错位（§11.70 展示层补漏）
+
+- **现象**：用户反馈 Seedance 2.0 参考生视频，当参考元素含「主视频」时，Node Details 的 Reference Videos 把主视频显示成「视频1」；进一步核查发现非主视频也全部错位（主视频→视频1、视频1→视频2、视频2→视频3）。面板侧 `NodeInspector.tsx:6152` 已正确用 `isSeedanceReferenceMovMainVideo` 标注「主视频」，Node Details 与面板不一致。
+- **根因（双重）**：
+  1. **主视频标签缺失**：`utils/nodeDetailsPreview.ts` `buildReferenceVideoDetailItems` 第 102-106 行的「主视频」赋值分支只在可灵 Omni `instruction`/`video` tab 下生效（`ctx.klingOmniTab === 'instruction' || 'video'`），Seedance 参考生 `klingOmniTab` 默认 `'multi'`，永远不进该分支，主视频走 else 被打成「视频N」。
+  2. **索引错位**：`referenceMovs` 运行时含主视频 URL（`collectReferencedMediaFromPrompt` 收集 `@主视频`，`mergeSeedancePanelReferenceMovsAfterUpload` 写入 `referenceMovs[0]`，与 `imagePreview` 同源双写）。但 `buildPromptMediaRefLabels` 编号时跳过主视频（`promptMediaRefs.ts` 范式），导致 `urlsInOrder`（含主视频）比 `numberedLabels`（过滤掉 mainVideo）多一项，`ordIdx` 与 `numberedLabels` 索引错位。
+- **与 §11.70 的关系**：§11.70 修了标签生成层（`resolveSeedanceReferenceMainVideoUrl` 调序），但展示层 `buildReferenceVideoDetailItems` 因 `numberedLabels = filter(kind==='video')` 把 mainVideo 项过滤掉、且「主视频」字面量只在 Omni 分支硬编码，导致 Seedance 参考生仍显示「视频1」。本节是 §11.70 的展示层补漏。
+- **修复**：`utils/nodeDetailsPreview.ts` `buildReferenceVideoDetailItems`：在 Omni `if` 分支与 `else` 之间插入 `else if (ctx.isSeedance20 && ctx.seedanceMode === 'reference')` 分支。主视频用 `isSeedanceReferenceMovMainVideo(panelSource, url)` 判定标「主视频」；非主视频用「排除主视频后的序号」`视频${movIdx - prevMainCount + 1}` 编号，彻底规避 `urlsInOrder` 索引错位。预计算 `movIsMain` 数组避免重复调用。**不动 `referenceVideoUrlsInLabelOrder`**（其默认分支仍含主视频），避免影响 `@视频N` prompt 解析层与运行时上传逻辑。
+- **可灵 Omni 现状核查**（用户额外要求）：`instruction`/`video` tab 正确（已有 `isOmniTabVideoMainVideoReference` 检查 + `urlsInOrder` 排除主视频，`referenceVideoDetail.test.ts` + node-details §11p/§11q 回归通过）；`multi` tab 无主视频概念，按槽位编号正确。
+- **文件**：`utils/nodeDetailsPreview.ts`（import 增 `isSeedanceReferenceMovMainVideo` + `buildReferenceVideoDetailItems` 新增 `else if` 分支，约 20 行净变更）；`src/test/utils/seedanceMainVideoLabel.test.ts`（新增 7 个门禁场景：单主视频 / 主视频+视频1+视频2 / 无主视频 / 主视频居中 / MOV poster / 非参考生模式不误判 / 字段保留）
+- **验证**：`npx vitest run` 全量 317 通过（含新增 7 + Omni `referenceVideoDetail`/`omniMainVideoLabel` 回归）；`npm run test:node-details` 244 通过 0 失败（含 §11p Omni 主视频 / §11q Omni 视频1 回归）；`npm run build` 通过；服务 3001 端口 HTTP 200。
+- **风险**：低。①可灵 Omni 由前置 `if` 分支处理，不进新分支；②image2/Nano `referenceMovs` 为空被函数入口挡住；③Seedance 参考生原走 else 显示「视频1/视频N」，现主视频显示「主视频」+ 非主视频编号正确（与面板 `NodeInspector.tsx:6152` 一致）；④不动 `referenceVideoUrlsInLabelOrder`，`@视频N` prompt 解析层与运行时上传逻辑零影响；⑤`buildReferenceVideoDetailItems` 未被 skill.md 标记为 S 级（§5.8.5 S 级范围明确限定为 Nano/image2 gp 空恢复三个函数），可安全修改。
+- **未触碰的潜在问题（供后续迭代）**：`NodeInspector.tsx:6154` 面板侧非主视频用 `视频${vi+1}`（index-based），当 `referenceMovs` 含主视频时面板也会编号偏移（vid1 标「视频2」）。本次未改面板侧（用户未反馈面板错位，且改动面板风险更大）。`referenceVideoUrlsInLabelOrder` 默认分支不过滤主视频，导致 `@视频N` prompt 解析时 `@视频1` 指向主视频 URL（运行时上传仍按 referenceMovs 顺序，结果正确，但语义上 `@视频1` 应指向 vid1）。这两点建议后续单独评估。
+- **0724 备份版本核查**：用户最初要求「参考 D:\aaa\20260724 版本恢复」。经逐字节对比，`buildReferenceVideoDetailItems` 在 0724 与当前版本完全一致——**此 bug 在 0724 同样存在，回退无法解决**，需新增修复（本节）。0724 之后的 §10.68-§10.78 / §11.65-§11.70 共 22 处均为 bug 修复，整体回退会重新引入这些 bug，未采纳。
+
+### 11.73 2026-08-03 Seedance 参考生刷新后 Node Details 主图 COS URL 被空槽覆盖丢失（gp 回填修复）
+
+- **现象**：用户反馈 Seedance 2.0 参考生 OUTPUT 节点，刷新后面板主图不丢失，但 Node Details 的 Reference Images 中主图消失。仅影响 Seedance 2.0 参考生模式，其他模型不受影响。
+- **根因**：`utils/referencedMediaRun.ts` `repairSeedanceReferenceGenerationParamsFromPanel` 在刷新后将面板数据同步到 gp 时，直接使用面板 `referenceImages` 覆盖 gp 的 `referenceImages`。刷新后面板主图 blob URL 被 `persistSanitize` 剥离为空槽 `''`，空槽覆盖 gp 已有的主图 COS URL，导致 Node Details 从 gp 读取时主图丢失。
+- **修复**：`repairSeedanceReferenceGenerationParamsFromPanel` 合并面板与 gp 时，对空槽位回填 gp 已有的 URL：
+  ```typescript
+  const prevRefArr = (prev.referenceImages || []) as string[];
+  const mergedRefs = panelRefs.map((u, i) => {
+    const v = String(u || '').trim();
+    if (v) return v;
+    return String(prevRefArr[i] || '').trim();
+  });
+  ```
+  逻辑：面板非空槽 → 用面板值（用户可能替换了图片）；面板空槽 → 回填 gp 对应槽位的 URL（保护已有 COS URL 不被空槽覆盖）。空槽对应 gp 也为空时保持空（不凭空捏造）。URL 集合匹配时仍早退 undefined。
+- **文件**：`utils/referencedMediaRun.ts`（`repairSeedanceReferenceGenerationParamsFromPanel` 函数，约 8 行净变更）；`src/test/utils/referencedMediaRun.test.ts`（新增 8 个门禁场景：面板主图空槽+gp 含主图 / 面板全非空覆盖 / 面板全空早退 / URL 集合匹配早退 / 非 reference 模式早退 / 非 Seedance 模型早退 / 多空槽全回填 / 空槽对应 gp 也为空）
+- **验证**：`npx vitest run` 全量 325 通过（含新增 8 场景）；`npm run test:gate` 全量通过；`npm run test:node-details` 244 通过；`npm run build` 通过；服务 3001 HTTP 200；浏览器实测刷新后 Reference Images 无丢失（Omni Output 节点「大牙-有牙」「原始丛林小路」、Seedance 节点「大牙-有牙」均保留）。
+- **风险**：低。①仅影响 Seedance 2.0 参考生模式（`isSeedance20ReferenceMode` 守卫），其他模型不进此函数；②回填仅在面板空槽时触发，非空槽保持面板值不变；③URL 集合已匹配时早退，不额外触发写操作；④gp 槽位超出面板长度时 `prevRefArr[i]` 为 undefined，`String(undefined)` = `''`，安全。
+
+### 11.74 2026-08-04 Node Details 参考图片地址未转为 aitop100 COS 路径（`resolveProjectAssetUrlForPromptToken` 修复）
+
+- **现象**：`E:/问题/8月4日/没转aitop100路径.json` — Nano Banana 2.0 和 image 2 节点的 Node Details 参考图片（如「卷卷」「原始丛林小路」）显示的是资产库代理路径（`/flowgen-api/projects/14/assets/xxx/file`），而不是 aitop100 COS 地址（`https://aitop100app-1251510006.cos.ap-shanghai.myqcloud.com/...`）。
+- **根因**：`utils/promptMediaRefs.ts` `resolveProjectAssetUrlForPromptToken` 第 2612-2616 行，当面板槽 URL 为 aitop100 COS 地址时，调用 `projectAssetMediaPairKey(panel)` 提取 project/asset ID——但 COS URL 不含 `/flowgen-api/` 格式的路径，`projectAssetMediaPairKey` 始终返回 `null`。导致 `libKey && panelKey && libKey === panelKey` 条件永远为 `false`，函数永远返回 `lib`（资产库代理路径），丢弃了 COS URL。
+- **数据链路**：`FlowEditor.tsx` → `buildStillImageGenNodeDetailsReferencePreview` → `pickStillImageRecoveryApiReferenceImages` → `collectReferencedMediaFromPrompt` → `resolveSeedancePromptTokenMedia` → `resolveProjectAssetUrlForPromptToken(panelUrl, libUrl)`。当 `snapRefs`（gp.referenceImages）为空时（Nano Banana 2.0 / image 2 常见），走此恢复链路，COS URL 被替换为库路径。
+- **修复**：`resolveProjectAssetUrlForPromptToken` 中，面板 URL 已是 aitop100 COS 地址时直接返回 `panel`，不再尝试与 `lib` 做 assetId 比对后替换：
+  ```typescript
+  // 修复前
+  if (/aitop100app-1251510006/i.test(panel)) {
+    const libKey = projectAssetMediaPairKey(lib);
+    const panelKey = projectAssetMediaPairKey(panel);
+    if (libKey && panelKey && libKey === panelKey) return panel;
+    return lib;  // 永远走到这里
+  }
+  // 修复后
+  if (/aitop100app-1251510006/i.test(panel)) {
+    return panel;  // 直接返回 COS URL
+  }
+  ```
+- **文件**：`utils/promptMediaRefs.ts`（`resolveProjectAssetUrlForPromptToken` 函数，约 5 行净变更）；`scripts/panel-ref-media-simulation-test.ts`（更新 5 个测试用例预期，从期望库 URL 改为期望 COS URL）
+- **验证**：`npm run build` 通过；`npm run test:gate` 全量通过（vitest 325 + node-details 244 + panel-refs 633 + 其他全部通过）；服务 3001 HTTP 200。
+- **风险**：低。①仅影响 `@资产:xxx` token 解析，不影响 `@主图`/`@图片N`/`@首帧图`/`@尾帧图` 等 token；②blob/data URL 分支不受影响（仍返回 lib URL，因为 blob 是临时的）；③面板 URL 已是 aitop100 COS 时，COS URL 本身就是稳定可用的远程地址，无需替换；④该函数同时被运行时上传逻辑调用，COS URL 可直接用于上传，无副作用；⑤未触碰 §5.8–§5.13 S 级模块。
+
+### 11.75 2026-08-04 Seedance 参考生刷新后 `repairSeedanceReferenceGenerationParamsFromPanel` 因 `seedanceReferenceSnapshotUrlsMatch` 提前退出导致空槽不被回填
+
+- **现象**：`E:/问题/8月4日/seedance问题.json` — Seedance 2.0 参考生 OUTPUT 节点和 MOV 节点刷新后 Node Details 主图丢失。面板 `referenceImages` 含空槽（blob 被 sanitize），gp 已有正确 COS URL，但空槽未被回填。
+- **根因**：`repairSeedanceReferenceGenerationParamsFromPanel` 第 1313 行 `seedanceReferenceSnapshotUrlsMatch(prevRefs, panelRefs)` 用 `isComparableUrl` 过滤仅比较 `https?://` URL 集合。当面板非空 URL 与 gp 非空 URL 集合一致时（如面板 `["", cosUrl, ""]` vs gp `[cosUrl]`），集合匹配 → 提前返回 `undefined` → §11.73 的 mergedRefs 回填逻辑从未执行 → 空槽永不被回填。同时 gp 标签为空时也无法同步面板标签。
+- **修复**：删除 `seedanceReferenceSnapshotUrlsMatch` 提前退出，改为先计算 mergedRefs（面板空槽回填 gp URL），再与 gp 原值逐元素比较。仅当 `mergedRefs` 与 gp `referenceImages` 完全一致且标签也一致时才返回 `undefined`（无变更），否则返回修复后的 gp。同时将标签同步纳入比较和修复范围。
+- **文件**：`utils/referencedMediaRun.ts`（`repairSeedanceReferenceGenerationParamsFromPanel` 函数，约 15 行净变更）；`src/test/utils/referencedMediaRun.test.ts`（更新场景1 和场景8 预期）
+- **验证**：`npx vitest run` 325 通过；`npm run test:gate` 全量通过；`npm run build` 通过；服务 3001 HTTP 200。
+- **风险**：低。①仅影响 Seedance 2.0 参考生模式；②mergedRefs 与 gp 一致时仍返回 undefined（无变更优化保留）；③标签同步仅在面板有标签时生效，不会凭空覆盖 gp 标签。
+
+### 11.76 2026-08-04 可灵3.0 Omni 中间节点刷新后 Node Details 主图丢失（`repairOmniMultiGenerationParamsFromPanel` 同源 §11.75 缺陷）
+
+- **现象**：`E:/问题/8月4日/可灵.json` — 可灵3.0 Omni multi tab 中间节点（outputNode）刷新后 Node Details 主图丢失，最后节点（movNode）正常。面板 `klingOmniMultiReferenceImages` 含空槽（blob 被 sanitize），gp 已有正确的主图 COS URL，但被空槽覆盖。
+- **根因（与 §11.75 完全同源）**：`repairOmniMultiGenerationParamsFromPanel` 使用 `seedanceReferenceSnapshotUrlsMatch` 做集合比较。当面板有 3 槽（`["", cosUrl, ""]`）而 gp 有 2 槽（`[mainCos, cosUrl]`）时，集合比较因大小不同（2 ≠ 1）返回 false → 不提前退出 → 但旧逻辑直接 `referenceImages: [...panelRefs]` 把面板空槽写入 gp，导致 gp 原有的主图 COS URL 被覆盖为 `""`。最后节点（movNode）无 `klingOmniMultiReferenceImages` 面板数据，不受此函数影响，故正常。
+- **修复**：删除 `seedanceReferenceSnapshotUrlsMatch` 调用，改为先计算 `mergedRefs`（面板非空槽用面板值，空槽回填 gp 对应位置 URL），再与 gp 原值逐元素比较。仅当 `mergedRefs` 与 gp `referenceImages` 完全一致且标签也一致时才返回 `undefined`（无变更），否则返回 `mergedRefs` 修复后的 gp。与 §11.75 Seedance 修复完全一致的范式。
+- **文件**：`utils/referencedMediaRun.ts`（`repairOmniMultiGenerationParamsFromPanel` 函数，约 15 行净变更）；`src/test/utils/referencedMediaRun.test.ts`（新增 8 个测试用例）
+- **验证**：`npm run test:gate` 全量通过（333 vitest + 245 node-details 全部通过）；`npm run build` 通过。
+- **风险**：低。①仅影响可灵3.0 Omni multi tab 刷新后 gp 修复逻辑；②面板全空时仍早退（`!panelRefs.some` 守卫保留）；③mergedRefs 与 gp 一致时仍返回 undefined（无变更优化保留）；④非 multi tab / 非可灵3.0 Omni 模型早退不变；⑤`seedanceReferenceSnapshotUrlsMatch` 函数本身保留（可能被其他路径使用），仅 Omni 修复路径不再调用。
+
+### 11.77 2026-08-04 Seedance 刷新后 Node Details 主图丢失（`resolveSeedancePromptTokenMedia` 使用 `imagePreview` 作为 `@主图` URL 导致持久化错误）— **已废弃，见 §11.78**
+
+- **现象**：`E:/问题/8月4日/seedance没主图.json` — Seedance 2.0 参考生节点重新生成后，刷新页面 Node Details 主图丢失。
+- **原修复（已废弃）**：从 `data.imagePreview` 回填主图。**问题**：`imagePreview` 是生成输出（如 `imagesGenerations/c198bcfe-...png`）而非主参考图，回填后 Node Details 显示的是生成结果而非主参考图。
+- **废弃原因**：见 §11.78 正确根因与修复。
+
+### 11.78 2026-08-04 Seedance 2.0 参考生重新生成后刷新 Node Details 主图丢失（`resolveSeedancePromptTokenMedia` 根因修复）
+
+- **现象**：`E:/问题/8月4日/seedance没主图.json` — Seedance 2.0 参考生节点重新生成后，刷新页面 Node Details 主图丢失。`gp.referenceImages[0]` 为空字符串，`panel.referenceImages[0]` 为 blob URL（sanitize 后变空）。
+- **根因（三层链路）**：
+  1. **`resolveSeedancePromptTokenMedia`**（`promptMediaRefs.ts:2671`）：`@主图` token 解析时使用 `data.imagePreview` 作为 URL。但重新生成时 `imagePreview` 已是上一次生成的输出图（如 `imagesGenerations/xxx.png`），而非主参考图。
+  2. **`seedanceApiRefImages`**（`FlowEditor.tsx:10105`）：当 `referenceImagesForApi` 为空且 `uploadedRefOnlyImages` 为空时，fallback 到 `mergedPanelRefs`（含 blob URL）。持久化后 blob URL 被 sanitize 为 `""`。
+  3. **§11.77 错误修复**：从 `imagePreview` 回填主图，但 `imagePreview` 是生成输出，回填后 Node Details 显示的是生成结果而非主参考图。
+- **修复（两处）**：
+  1. **`resolveSeedancePromptTokenMedia`**（`promptMediaRefs.ts`）：Seedance 2.0 参考生模式下，`@主图` 优先使用面板参考图第一槽（`referenceImages[0]`）作为 URL，该槽在上传后会被替换为 COS URL。非 Seedance 模型保持原有 `imagePreview` 行为不变。
+  2. **`seedanceApiRefImages` fallback**（`FlowEditor.tsx`）：当回退到 `mergedPanelRefs` 时，若首个槽位为 blob URL 或空字符串，用 `uploadedMainImageUrl`（已上传的 COS URL）替换，防止 blob URL 写入 gp。
+  3. **`repairSeedanceReferenceGenerationParamsFromPanel`**（`referencedMediaRun.ts`）：移除 §11.77 的 `imagePreview` 回填逻辑（`imagePreview` 是生成输出而非主参考图），改为仅过滤 `blob:`/`data:` 临时 URL + 从 gp 回填已有 COS URL。
+- **文件**：`utils/promptMediaRefs.ts`（`resolveSeedancePromptTokenMedia`，约 10 行）；`components/FlowEditor.tsx`（`seedanceApiRefImages` fallback，约 10 行）；`utils/referencedMediaRun.ts`（`repairSeedanceReferenceGenerationParamsFromPanel`，移除 §11.77 回填）；`src/test/utils/referencedMediaRun.test.ts`（§11.78 测试替换 §11.77）
+- **验证**：`npm run test:gate` 全量通过（62 通过，0 失败）；`npm run build` 通过。
+- **风险**：低。①`resolveSeedancePromptTokenMedia` 修复仅在 Seedance 2.0 参考生模式生效（`ctx.isSeedance20 && ctx.seedanceMode === 'reference'`），其他模型行为不变；②`seedanceApiRefImages` fallback 修复仅在 `uploadedMainImageUrl` 存在时替换首个 blob 槽；③`repairSeedanceReferenceGenerationParamsFromPanel` 移除 `imagePreview` 回填后，旧数据（gp 主图槽为空）无法自动恢复——需重新生成一次才能正确写入 COS URL。
+
+### 11.78b 2026-08-04 repairOmniMulti / repairSeedance mergedRefs 过滤 blob:/data: 临时 URL
+
+- **现象**：`E:/问题/8月4日/可灵还是有问题.json` — 可灵3.0 Omni 最终节点（movNode）刷新后 Node Details 参考图标签错乱（`['图片1','祭司老人','图片3']` 而非 `['主图','祭司老人']`）。根因链路：用户运行后面板含 blob URL → `repairOmniMultiGenerationParamsFromPanel` 把 blob URL 写回 `generationParams.referenceImages` → §11.65 过滤时主图（https COS）被 snapKeys 误过滤。
+- **根因**：`repairOmniMultiGenerationParamsFromPanel` 和 `repairSeedanceReferenceGenerationParamsFromPanel` 的 `mergedRefs` 计算中，面板非空槽直接用面板值（含 `blob:`/`data:` 临时 URL），未过滤临时协议。blob URL 刷新后即失效，写回 gp 会污染持久化数据，导致下游 §11.65 / Details 过滤逻辑错乱。
+- **修复**：两个 repair 函数的 `mergedRefs` 计算中，面板值若为 `blob:`/`data:` 协议，跳过并回填 gp 对应槽位 URL（与 §11.77 imagePreview 回填逻辑一致）：
+  ```typescript
+  const mergedRefs = panelRefs.map((u, i) => {
+    const v = String(u || '').trim();
+    if (v && !/^(blob|data):/i.test(v)) return v;  // §11.78 过滤临时 URL
+    const fromGp = String(prevRefArr[i] || '').trim();
+    if (fromGp) return fromGp;
+    // 首槽回填 imagePreview（§11.77 逻辑保留）
+    ...
+    return '';
+  });
+  ```
+- **文件**：`utils/referencedMediaRun.ts`（`repairOmniMultiGenerationParamsFromPanel` + `repairSeedanceReferenceGenerationParamsFromPanel`，约 6 行净变更）；`src/test/utils/kling-omni-blob-repro.test.ts`（场景A-D 验证 blob 不污染 gp）
+- **验证**：`npx vitest run src/test/utils/kling-omni-blob-repro.test.ts` 7 通过；`npm run test:gate` 全量通过（47 文件 / 344 测试 + ALL PASSED）。
+- **风险**：低。①仅过滤 `blob:`/`data:` 协议，不影响 `https://` COS URL；②面板值为临时 URL 时回填 gp 已有 URL，gp 也为空时保持空槽（不凭空生成）；③与 §11.77 imagePreview 回填逻辑一致，范式统一。
+
+### 11.79 2026-08-04 §11.65 snapKeys 排除 blob:/data: 临时 URL（Node Details 中间节点少图）
+
+- **现象**：`E:/问题/8月4日/可灵还是有问题.json` — 可灵3.0 Omni 节点 Node Details 参考图中持久化 COS URL 被 §11.65 过滤逻辑误删。当 `snapRefs` 含 blob URL（gp 被污染或刷新前状态）时，`normalizeDetailImageUrlKey` 将 blob URL 归一化为非空 key（如 `blob:http://localhost:3001/abc`），混入 `snapKeys`。`dedupedPanel` 中的 COS URL key 与 blob key 不匹配，被误过滤。
+- **根因**：`nodeDetailsPreview.ts` §11.65 的 `snapKeys = new Set(snapRefs.map(normalizeDetailImageUrlKey).filter(Boolean))` 未排除 `blob:`/`data:` URL。blob URL 刷新后重新生成（值不同），导致新旧 blob key 不匹配，连带误过滤同槽位的 COS URL。
+- **修复**：`snapKeys` 构建时过滤 `blob:`/`data:` URL；`dedupedPanel` 过滤时 blob 项直接保留（不参与 snapKeys 匹配）：
+  ```typescript
+  const snapKeys = new Set(
+    snapRefs.filter((u) => !/^(blob|data):/i.test(u))
+      .map(normalizeDetailImageUrlKey).filter(Boolean)
+  );
+  if (snapKeys.size > 0) {
+    dedupedPanel = dedupedPanel.filter((item) => {
+      if (/^(blob|data):/i.test(item.url)) return true;  // blob 项直接保留
+      const key = normalizeDetailImageUrlKey(item.url);
+      return key && snapKeys.has(key);
+    });
+  }
+  ```
+- **文件**：`utils/nodeDetailsPreview.ts`（§11.65 块，约 10 行净变更）；`src/test/utils/kling-omni-blob-repro.test.ts`（场景G 验证 snapRefs 只含 blob 时 COS 参考图不被误过滤）
+- **验证**：`npm run test:gate` 全量通过（47 文件 / 344 测试 + ALL PASSED）。
+- **风险**：低。①snapKeys 为空（全 blob）时不触发过滤，dedupedPanel 全保留（更安全）；②blob 项直接保留避免误过滤，COS 项继续按 snapKeys 匹配；③仅影响 §11.65 过滤路径，其他路径不变。
+
+### 11.80 2026-08-04 image 2 中间节点 Node Details 少图（pickStillImageRecovery 无 projectAssets 时用 referenceImageLabels 匹配 + 标签展开顺序修复）
+
+- **现象**：`E:/问题/8月4日/可灵还是有问题.json` — image 2 中间节点（processorNode）刷新后 Node Details 参考图全部丢失。节点 `prompt = '@资产:大牙-有牙出现在@资产:原始丛林小路中'`，面板 `referenceImages = [blob, cosJungle, cosTooth]`、`referenceImageLabels = ['图片1','原始丛林小路','大牙-有牙']`，但 `generationParams.referenceImages` 为 undefined（中间节点未持久化 gp）。
+- **根因（双层）**：
+  1. **`matchAllPromptMediaTokens` 无法识别 @资产:xxx**：当 `projectAssets` 为空（资产库未加载/中间节点恢复路径）时，`matchLongestProjectAssetKey` 直接返回 null，`matchAllPromptMediaTokens` 跳过 @资产: token（不加入 matches）→ `collectReferencedMediaFromPrompt` 的 `plan.images` 为空 → `pickStillImageRecoveryApiReferenceImages` 返回 null → Node Details 少图。
+  2. **`buildStillImageGenNodeDetailsReferencePreview` 标签展开顺序错误**：`buildImageGenOutputReferenceDetailsFromSnapshot({ snapshotLabels: recovered.referenceImageLabels, ...snapOpts })` 中 `snapOpts.snapshotLabels`（=input.snapLabels，常为 undefined）覆盖了 `recovered.referenceImageLabels`，导致 @资产:名称 标签丢失，退化为通用名"图片n"。
+- **修复**：
+  1. `pickStillImageRecoveryApiReferenceImages`（`utils/referencedMediaRun.ts`）：当 `projectAssets` 为空且 prompt 含 `@资产:` 时，从 `data.referenceImageLabels` + `data.referenceImages` 构造 fallback `projectAssets`（slug=name=label，排除"图片n"通用名），让 `matchLongestProjectAssetKey` 能按标签精确匹配 @资产:名称边界（避免 greedy 正则吞正文）。
+  2. `buildStillImageGenNodeDetailsReferencePreview`（`utils/nodeDetailsPreview.ts`）：调整对象展开顺序，`recovered.referenceImageLabels` 优先于 `snapOpts.snapshotLabels`：
+     ```typescript
+     return buildImageGenOutputReferenceDetailsFromSnapshot({
+       ...snapOpts,
+       snapshotRefs: recovered.referenceImages,
+       snapshotLabels: recovered.referenceImageLabels ?? snapOpts.snapshotLabels,
+     });
+     ```
+- **文件**：`utils/referencedMediaRun.ts`（`pickStillImageRecoveryApiReferenceImages`，约 20 行净变更）；`utils/nodeDetailsPreview.ts`（`buildStillImageGenNodeDetailsReferencePreview`，约 5 行净变更）；`src/test/utils/kling-omni-blob-repro.test.ts`（场景E/F 验证 image 2 中间节点 projectAssets 为空/undefined 时返回 2 张 COS URL + 正确标签）
+- **验证**：`npx vitest run src/test/utils/kling-omni-blob-repro.test.ts` 7 通过；`npm run test:gate` 全量通过（47 文件 / 344 测试 + ALL PASSED）。
+- **风险**：低。①fallback projectAssets 仅在 `projectAssets` 为空且 prompt 含 `@资产:` 时构造，不影响已加载资产库的正常路径；②fallback 排除"图片n"通用名，仅用具体资产名匹配；③标签展开顺序修复仅影响 `buildStillImageGenNodeDetailsReferencePreview` 的 recovered 分支（snapRefs 为空时），snapRefs 非空时走 snapshot 分支不变；④`recovered.referenceImageLabels` 为 undefined 时回退 `snapOpts.snapshotLabels`，行为兼容。
+
+### 11.81 2026-08-04 Omni multi Node Details 过滤 blob:/data: 临时 URL（`可灵中间节点.json`）
+
+- **现象**：`E:/问题/8月4日/可灵中间节点.json` — 可灵3.0 Omni 中间节点（outputNode）Node Details 仍保留 `blob:`（如 `Generated_259.png`）。节点 `klingOmniMultiReferenceImages = [blob, cosRef, blob]`（槽0、槽2 为 blob），`generationParams.referenceImages` 为正确的 COS URL，但 Details 展示层把面板 blob 槽残留显示出来。
+- **根因（双层）**：
+  1. **`filterItem` 默认值不过滤 blob**：`buildOmniMultiTabDetailsReferencePreview` 的默认 `filterItem` 仅 `Boolean(it.url) && !movUrlSet.has(it.url)`，未排除 `blob:`/`data:`。FlowEditor 调用时未传自定义 filterItem，故面板 blob 槽进入 Details。
+  2. **§11.79 的 blob 保留逻辑错误**：§11.79 在 §11.65 过滤的 `dedupedPanel.filter` 中写了 `if (/^(blob|data):/i.test(item.url)) return true;`（blob 项直接保留），反而把 blob 项保留下来。
+- **修复**：
+  1. `buildOmniMultiTabDetailsReferencePreview` 默认 `filterItem` 增加 `!/^(blob|data):/i.test(it.url)` 过滤（所有出口分支共用，含 fallback preview）。
+  2. §11.65 过滤的 `dedupedPanel.filter` 中 blob 项改为 `return false`（排除），与 §11.79 防 COS 误过滤的意图一致（blob 是无效临时 URL，不应展示）。
+- **文件**：`utils/nodeDetailsPreview.ts`（`buildOmniMultiTabDetailsReferencePreview` 默认 filterItem + §11.65 过滤块，约 8 行净变更）；`src/test/utils/omniMultiDetails.test.ts`（新增 §11.81 场景测试：面板含 blob 槽时 Details 过滤 blob，仅保留 COS 参考图）
+- **验证**：`npx vitest run src/test/utils/omniMultiDetails.test.ts` 11 通过；`npm run test:gate` 全量通过（47 文件 / 345 测试 + ALL PASSED）；`npm run build` 通过；服务 3001 HTTP 200。
+- **风险**：低。①仅过滤 `blob:`/`data:` 协议，不影响 `https://` COS URL；②所有出口分支共用同一 filterItem，行为一致；③§11.65 过滤 blob 项改为排除后，snapKeys 为空（全 blob）时仍不触发过滤（保留 COS 参考图），§11.79 防误过滤的意图保持；④不影响已加载资产库的正常路径与 S 级稳定模块。
+
+### 11.71 2026-07-31 Seedance 参考生面板主图预览不显示
+
+- **现象**：`E:/问题/0731/seedance面板缺主图.json` — Seedance 2.0 参考生 Output Picture Node 面板主图预览区域不显示主图，Node Details 能显示（§11.69），但刷新后 Node Details 也丢失
+- **根因**：`nodeModelUsesPanelMainImageRestore` 仅支持 Nano Banana 2.0 / image 2 / 可灵3.0 Omni，不包括 Seedance 2.0。运行后 `panelMainSlotVisible` 被设为 `false`，重新选中节点时主图恢复逻辑（`useLayoutEffect` → `buildPanelMainImageRestorePatchForEditing`）因模型不在白名单中而跳过，导致主图预览永久隐藏
+- **修复**：`utils/referencedMediaRun.ts` `nodeModelUsesPanelMainImageRestore`：添加 `seedance2.0 (高质量版)` 和 `seedance2.0 (急速版)` 到白名单
+- **文件**：`utils/referencedMediaRun.ts`（`nodeModelUsesPanelMainImageRestore` 函数，约 1 行）
+- **风险**：低；仅恢复主图预览可见性（`panelMainSlotVisible: undefined`），不改变图片内容；`shouldRestorePanelMainImageSlotForEditing` 仅在 prompt 含 `@主图` 时返回 true；`test:gate` 全量通过；未触碰 §5.8–§5.13 S 级模块
+
+### 11.71 2026-07-31 MiniMap 点击节点居中视口（z-index + 事件冒泡双修复）
+
+- **现象**：点击 MiniMap 上某个高亮节点，主画布完全不移动（点击无反应）。
+- **根因（双层，主因为 z-index）**：
+  1. **主因：z-index 配置错误导致点击被 `.react-flow__pane` 拦截**。`index.css` 曾把 `.react-flow__panel.react-flow__minimap` 的 z-index 设为 **3**（注释意图"低于 renderer(4) 故节点叠在上面"）。但 React Flow 的 Panel/MiniMap 是 `.react-flow__renderer`（z-index 4）的**兄弟元素**而非子元素（二者同处 `.react-flow` 层叠上下文，z-index 直接互比）。z-index 3 < renderer 4 → 整个 renderer（含 `.react-flow__pane` z-index 1）盖在 minimap 之上 → 点击 minimap 区域时 `elementFromPoint` 返回 pane，minimap 的 `<svg onClick>` / `<rect onClick>` **永不触发**。
+  2. **次因：事件冒泡**。即使点击到达 svg，节点 `<rect>` 的 onClick 与父级 `<svg>` 的 onClick 共存，React 合成事件冒泡 → 点击节点时连续触发两次 `centerViewportAt`：先居中到节点中心，再被 svg 级 click 覆盖为"跳到点击位置（节点边缘）"。
+- **修复**：
+  1. `index.css`：minimap z-index 3 → **5**（= React Flow 默认值，= Controls 同级，> renderer 4），minimap 在 pane 之上，点击可达 svg。
+  2. `components/flowgen/FlowgenMiniMap.tsx`：`onSvgNodeClick` 开头新增 `event.stopPropagation()`，阻断冒泡到 svg 级 click，确保点击节点只执行"居中到节点中心"。
+- **文件**：`index.css`（第32-42行，z-index 3→5 + 注释更新）；`components/flowgen/FlowgenMiniMap.tsx`（onSvgNodeClick，1 行 stopPropagation + 2 行注释）
+- **验证**：浏览器实测（http://localhost:3001/#/workspace/14）—— 对 minimap 内节点 rect 派发 click，控制台确认 `onSvgNodeClick fired {nodeFound: true}` + `centerViewportAt {hasD3Zoom: true, hasD3Selection: true}`，主画布视口移动并居中到该节点。`npm run test:gate` 全量通过（0 失败）；`npm run build` 通过；服务在 3001 端口正常启动（HTTP 200）。
+- **风险**：低。z-index 3→5 会让 minimap 不再被节点视觉叠盖（minimap 会遮挡经过右下角 150×150 区域的节点），但点击导航功能优先于视觉叠层。stopPropagation 仅阻节点点击冒泡，空白处 `onSvgClick` 行为不变，`pannable`/`zoomable` 拖拽缩放不受影响。未触碰 §5.8–§5.13 S 级模块。
+- **设计教训（重要）**：React Flow 的 Panel/MiniMap/Controls 是 `.react-flow__renderer` 的**兄弟元素**（在 `.react-flow` 下，与 renderer 平级），不是 renderer 的子元素。调节 Panel 与节点/pane 的视觉层叠关系，必须调 Panel 与 renderer 这对兄弟的 z-index，而非 Panel 内部。z-index 3 < renderer 4 会导致 pane 随 renderer 盖住 Panel，拦截所有交互——这是"点击无反应"的隐蔽根因。
+
+### 11.82 2026-08-05 可灵3.0 Omni 中间节点 Node Details 少图/标签错误（`可灵3.0.json`）
+
+- **现象**：`E:/问题/8月5日/可灵3.0.json` — 可灵3.0 Omni 工作流中，processorNode（node_17）的 Node Details 仅显示 1 张参考图，标签错误（正确应为 2 张：`图片2` + `大牙`）。`klingOmniMultiReferenceImages = [blob0, cosPic2, cosMain, blob3]`，prompt 含 `@资产:大牙出现在@图片2中`，但 Details 只展示 1 张。
+- **根因（三层）**：
+  1. **`effectiveProjectAssets` 缺失**：`projectAssets` 为空（资产库未加载/中间节点恢复），prompt 含 `@资产:` 前缀时 `matchAllPromptMediaTokens` 无法解析 `@资产:` 边界（`matchLongestProjectAssetKey` 返回 null），导致 `countUniquePromptImageRefTokens` 少算、`preferPanel` 误判为 false。
+  2. **`needsSnapSlotIndex` 使用 `panelSnapRefs.length` 而非 `activeSlotRefs.length`**：`panelSnapRefs` 可能因 `imagePreview` 去重/ blob 过滤而欠计（实际有效 COS 槽 2 个但 `panelSnapRefs` 只计 1 个），导致 `needsSnapSlotIndex=true` → `preferPanel=false` → 走 snap 路径少图。
+  3. **`buildOmniMultiPanelSnapshotRefsForPrompt` 未预过滤 blob URL**：面板快照引用含 blob 临时 URL，后续 `sanitizeDetailsReferenceImageUrls` 过滤后导致 panelSnapRefs 项数减少，加剧问题 2。
+- **修复（四处）**：
+  1. **`effectiveProjectAssets` fallback**：当 `projectAssets` 为空且 prompt 含 `@资产:` 时，用面板 `referenceImageLabels` + `klingOmniMultiReferenceImages` 构造 fallback projectAssets（仅具体资产名，排除"图片n"泛化名，排除 blob/data URL）。
+  2. **`needsSnapSlotIndex` 改用 `activeSlotRefs.length`**：`activeSlotRefs` 反映面板实际有效持久化槽数（过滤空槽/blob 后），与 `snapRefs.length` 比较，避免因 `panelSnapRefs` 欠计导致误判。
+  3. **`buildOmniMultiPanelSnapshotRefsForPrompt` 预过滤 blob/data URL**：在构建 panelSnapRefs 时即排除 blob/data 临时 URL，确保 panelSnapRefs 计数准确。
+  4. **面板路径参考图顺序按 prompt @ 引用顺序重排**：`preferPanel` 路径中，面板槽位顺序（如 `图片2→大牙`）可能与 API/gp 顺序（`大牙→图片2`）不一致，导致前节点 Node Details 顺序与后节点不同。在返回前按 `inferSeedanceReferenceDetailLabelsFromPrompt` 推断的标签顺序重排，与 `buildSeedanceReferenceDetailsFromSnapshot` 的 `preferPromptLabels` 逻辑对齐。
+- **文件**：`utils/nodeDetailsPreview.ts`（`buildOmniMultiTabDetailsReferencePreview`，约 60 行净变更）；`src/test/utils/omniMultiDetails.test.ts`（新增 §11.82 测试用例 + 更新标签顺序断言）；`scripts/2026070802-kling-omni-panel-verify-test.ts`（更新测试断言：修复后错误 gp 标签不再出现错位图片3）
+- **验证**：`npm run test:gate` 全量通过（62 通过，0 失败）；`npm run build` 通过；服务 3001 端口 HTTP 200。
+- **风险**：低。①`effectiveProjectAssets` fallback 仅在 `projectAssets` 为空且 prompt 含 `@资产:` 时构造，不影响已加载资产库的正常路径；②fallback 排除 blob/data URL 和泛化名"图片n"，仅保留具体资产名；③`needsSnapSlotIndex` 改用 `activeSlotRefs.length` 仅影响面板/快照偏好决策，不改变其他逻辑；④`buildOmniMultiPanelSnapshotRefsForPrompt` 预过滤 blob 不改动后续过滤逻辑，仅提前排除无效 URL；⑤顺序重排仅在标签集一致时执行（`panelLabelSet === inferredLabelSet`），标签集不一致时跳过，不影响已有行为。
+- **门禁强化**：新增 3 个 vitest 用例覆盖 §11.82 关键决策点：①`needsSnapSlotIndex` 修复验证（panel 2 槽但 imagePreview 去重 → preferPanel 仍为 true）；②`effectiveProjectAssets` fallback 边界（prompt 无 `@资产:` 时不构造）；③顺序重排跳过（标签集不一致时保持原顺序）。同时修复 `seedanceReferenceDetails.test.ts` 场景1/7 的 prompt 标签匹配问题（`@主图` → `@资产:大牙`），确保 §11.85 代理路径 URL 转换测试数据与 `preferPromptLabels` 逻辑一致。
+
+### 11.83 2026-08-05 Seedance 2.0 参考生视频点击运行后属性面板主图消失 + Node Details 引用标签混乱（参考可灵多图参考修复）
+
+- **现象**：`E:/问题/8月5日/seedance.json` — Seedance 2.0 参考生视频节点点击运行时：
+  1. 属性面板主图格消失（`panelMainSlotVisible: false`）；
+  2. Node Details 中 Reference Images 标签混乱：gp 中 `@主图` 显示为泛化名"主图"，而非面板自定义标签"大牙"。
+- **根因（双层，参考可灵多图对比分析）**：
+  1. **主图消失**：`seedanceHideMainSlotForCompactRefs`（`FlowEditor.tsx:10144`）和 `hideMainForCompact`（`FlowEditor.tsx:11442`）在 `seedanceApiRefLabels` 含"主图"或 prompt 含 `@主图` 时，强制将 `panelMainSlotVisible` 覆盖为 `false`。而可灵 Omni 的多图参考使用 `buildPanelImagePreviewPatchAfterRun` 返回 `panelMainSlotVisible: true`（当 `@主图` 被引用时），不隐藏主图格。
+  2. **标签混乱**：`buildSeedanceReferenceApiLabelsFromPlan` 使用 plan 的泛化标签（如 `@主图` → "主图"），未考虑面板槽位的自定义标签（如"大牙"）。可灵 Omni 的 `buildOmniMultiGenerationParamsLabels` 通过 URL 匹配将 API 顺序图片映射到面板实际标签。
+- **修复（三处）**：
+  1. **移除 `seedanceHideMainSlotForCompactRefs`**（`FlowEditor.tsx`）：删除变量定义（~4行）及 `runCaptureForGp` 中的覆盖逻辑（~5行），改为仅用 `seedancePreviewPatch.panelMainSlotVisible`（`buildPanelImagePreviewPatchAfterRun` 控制：`@主图` 时 → `true`，未引用时 → `false`）。
+  2. **移除 `hideMainForCompact`**（`FlowEditor.tsx`）：删除变量定义（~3行）及面板写回中的覆盖逻辑（~1行），改为仅用 `panelMainVisible`（来自 `runCaptureForGp`）。
+  3. **增强 `buildSeedanceReferenceApiLabelsFromPlan`**（`referencedMediaRun.ts`）：新增可选参数 `panelLabels?: string[]`。当 plan entry 有 `refImageSlotIndex` 或 token 属于 `MAIN_IMAGE_REF_TOKENS` 时，优先使用面板槽位标签（如"大牙"），仅当面板标签为泛化名（`/^图片\d+$/`）时才回退到 plan 标签。
+  4. **传递 `mergedPanelLabels`**（`FlowEditor.tsx`）：调用 `buildSeedanceReferenceApiLabelsFromPlan` 时传入 `mergedPanelLabels`（面板槽位顺序标签）。
+- **文件**：`components/FlowEditor.tsx`（删除 ~13 行，新增 ~2 行注释）；`utils/referencedMediaRun.ts`（`buildSeedanceReferenceApiLabelsFromPlan`，约 10 行净变更）；`src/test/utils/referencedMediaRun.test.ts`（新增 §11.79 测试组，4 个测试用例）
+- **验证**：`npm run test:gate` 全量通过（62 通过，0 失败）；`npm run build` 通过；服务 3001 端口 HTTP 200。
+- **风险**：低。①主图格可见性现在由 `buildPanelImagePreviewPatchAfterRun` 统一控制，与可灵 Omni 行为一致；②`panelLabels` 为可选参数，不传时保持向后兼容；③仅当面板标签为非泛化名（如"大牙"）时才替换 plan 标签，泛化名（如"主图"）仍沿用 plan 原有逻辑；④仅影响 Seedance 2.0 参考生模式，其他模型不受影响。
+
+### 11.84 2026-08-05 Seedance 2.0 回退 §11.78 `@主图` 解析变更 —— 恢复使用 `imagePreview`（对齐 banana/可灵 Omni）
+
+- **现象**：`E:/问题/8月5日/seedance2.json` — Seedance 2.0 参考生视频运行后，`@主图` 引用了错误的图片（面板槽0 blob URL 而非 `imagePreview` 的 COS URL）。
+- **根因**：§11.78 修复将 `resolveSeedancePromptTokenMedia` 中 `@主图` 的 URL 来源从 `data.imagePreview` 改为 `data.referenceImages[0]`。但 `referenceImages[0]` 是面板参考图槽位，不一定是主图。banana、可灵 Omni 等所有其他模型的 `@主图` 均使用 `imagePreview`。§11.78 的修改方向错误——正确的修复应在 `seedanceApiRefImages` 构建层面处理 blob URL 回退，而非修改 `@主图` 的解析来源。
+- **修复**：回退 `promptMediaRefs.ts:2671-2676` 中 `resolveSeedancePromptTokenMedia` 的 `@主图` 解析逻辑，从 `referenceImages[0]` 优先恢复为直接使用 `data.imagePreview?.trim()`，与 banana、可灵 Omni 多图参考行为一致。
+- **文件**：`utils/promptMediaRefs.ts`（1 行净变更：删除 §11.78 特殊逻辑，恢复直接使用 `imagePreview`）
+- **验证**：`npm run test:gate` 全量通过（62 通过，0 失败）；`npm run build` 通过；服务 3001 端口 HTTP 200。
+- **风险**：低。①`@主图` 恢复使用 `imagePreview` 与所有其他模型（banana、可灵 Omni、即梦等）行为一致；②`imagePreview` 可能是 blob（待上传）或 COS URL（生成输出），两种场景均正确；③FlowEditor.tsx 中 §11.78 的 `seedanceApiRefImages` fallback 修复（`uploadedMainImageUrl` 替换 blob URL）和 `referencedMediaRun.ts` 中 §11.78 的 blob/data 过滤修复均保留，确保 blob URL 不会写入 gp。
+
+### 11.85 2026-08-05 Seedance 2.0 输出节点 Node Details Reference Videos 主视频标签显示为「视频1」而非「主视频」
+
+- **现象**：`E:/问题/8月5日/seedance3.json` — Seedance 2.0 参考生视频，最后一个输出节点（MOV）的 Node Details Reference Videos 标签显示为「视频1」，但前面连接的节点显示为「主视频」，不一致。
+- **根因**：`resolveSeedanceReferenceMainVideoUrl` 中 `soleMov`（唯一参考视频 URL）的匹配门禁要求 `soleMov` 与 `outputUrl` 或 `imagePreview` 为同一视频。输出节点的 `imagePreview`/`outputUrl` 是生成结果视频 URL，与上游传入的参考视频 URL 不同，门禁失败后 fallback 到 `imagePreview`（生成结果），导致 `isSeedanceReferenceMovMainVideo` 返回 false，标签变为「视频1」。
+- **修复**：在 `resolveSeedanceReferenceMainVideoUrl` 中，当 `soleMov` 是有效视频 URL 且 prompt 明确包含 `@主视频` 时，即使不匹配 `outputUrl`/`imagePreview`，也返回 `soleMov` 作为主视频 URL。新增的 `promptMentionsMainVideoForNodeData` 守卫确保仅当用户明确在 prompt 中写了 `@主视频` 时才触发，避免误判。
+- **文件**：`utils/promptMediaRefs.ts`（`resolveSeedanceReferenceMainVideoUrl`，新增 4 行注释 + 1 行守卫代码）
+- **验证**：`npm run test:gate` 全量通过（62 通过，0 失败）；`npm run build` 通过；服务 3001 端口 HTTP 200。
+- **风险**：低。①仅新增 `promptMentionsMainVideoForNodeData` 守卫，不改变原有匹配门禁逻辑；②仅当 `soleMov` 为有效视频 URL 且 prompt 明确包含 `@主视频` 时才触发，双重条件限制防止误判；③`imagePreview` 为图片时 `isLikelyMainVideoUrl(prev)` 返回 false，不会进入此分支；④仅影响 Seedance 2.0 参考生输出节点，其他模型不受影响。
+
+### 11.86 2026-08-05 Seedance 2.0 Node Details 参考图片 URL 未转换为 aitop100 COS 地址
+
+- **现象**：`E:/问题/8月5日/seedance4.json` — Node Details 中 Reference Images 的 URL 显示为代理路径 `/flowgen-api/projects/14/assets/.../file`，而非 aitop100 COS 地址。
+- **根因**：`buildSeedanceReferenceDetailsFromSnapshot` 在构建 `compacted` 时直接使用 `generationParams.referenceImages` 中的原始 URL，未将代理路径转换为 COS URL。`sanitizeDetailsReferenceImageUrls` 仅过滤 blob/data/视频/重复，不做代理路径→COS URL 转换。
+- **修复**：在 `buildSeedanceReferenceDetailsFromSnapshot` 中，`pa` 声明后新增 §11.85 逻辑：遍历 `compacted`，对 URL 为代理路径（`parseProjectAssetIdsFromMediaUrl` 返回非空）且标签为命名资产（非泛化名）的条目，从 `projectAssets` 中按标签名查找对应的 COS URL 并替换。
+- **文件**：`utils/nodeDetailsPreview.ts`（`buildSeedanceReferenceDetailsFromSnapshot`，新增约 15 行）
+- **验证**：`npm run test:gate` 全量通过（62 通过，0 失败）；`npm run build` 通过；服务 3001 端口 HTTP 200。
+- **风险**：低。①仅当 URL 为代理路径（`parseProjectAssetIdsFromMediaUrl` 返回非空）且标签为命名资产时触发，双重守卫防止误转换；②仅替换 URL 不同的情况（`lib !== item.url`），相同 URL 不做无意义替换；③不影响 `sanitizeDetailsReferenceImageUrls` 及其他过滤逻辑；④`buildSeedanceReferenceDetailsFromSnapshot` 被 `buildImageGenOutputReferenceDetailsFromSnapshot` 等函数共用，覆盖所有模型。
+
+### 11.87 2026-08-05 门禁测试体系整理 —— 全量通过（382 tests / 47 files）
+
+- **目的**：整理门禁测试覆盖清单，确保后续修改不会破坏已测试稳定的功能。
+- **当前状态**：`npm run test:gate` 全量通过（382 通过，0 失败），覆盖 47 个 vitest 测试文件 + 48 个集成脚本。
+- **vitest 单元测试覆盖矩阵（47 files / 382 tests）**：
+
+| 分类 | 文件数 | 测试数 | 覆盖场景 |
+|------|--------|--------|----------|
+| Node Details & 参考素材 | 7 | 57 | Seedance 参考详情(11)、Omni 多标签详情(15)、Seedance 主视频标签(16)、参考视频详情(2)、Omni 主视频标签(3)、Seedance 图片帧(3)、Omni blob 复现(7) |
+| 面板交互 & 拖拽 | 19 | 100 | 中键拖拽(5+12+3)、Inspector 拖入(8+1+2+5+1+4)、Omni 去重(5)、面板槽位(2+3+9)、stale 标签(7)、Backdrop(7)、token 解析(5)、键盘导航(10)、画布选区(2)、小地图(11) |
+| 模型切换 & 状态保持 | 4 | 24 | Nano 切换(5)、Seedance 切换(4)、运行结果保持(10)、Omni tab 隔离(5) |
+| 持久化 & 刷新恢复 | 5 | 115 | 运行恢复(30)、参考媒体运行(50)、节点预览 hydrate(6)、面板参考本地引用(19)、任务恢复(10) |
+| API 服务 | 2 | 27 | AiTop 服务(24)、Flowgen API(3) |
+| 其他 | 10 | 59 | prompt 重跑(8)、JSON 保存(7)、下载文件名(9)、输出 URL(11)、聊天日志(4)、生成节点(4)、节点工具(3)、生成计数(4)、资产 URL(3)、类型(4) |
+
+- **关键防回归测试（按 § 编号）**：
+  - §11.71：Seedance 参考生视频角标（主视频/视频1/视频2 索引不错位）— `seedanceMainVideoLabel.test.ts`
+  - §11.79：blob/data URL 写入 gp 后 snapKeys 排除防误过滤 — `kling-omni-blob-repro.test.ts`
+  - §11.80：image2 中间节点 gp 空 Details recovery（@资产 兜底识别）— `kling-omni-blob-repro.test.ts`
+  - §11.81：面板含 blob 槽时 Details 过滤 blob 仅保留 COS — `omniMultiDetails.test.ts`
+  - §11.82：`@资产:大牙` + `@图片2` 标签顺序按 prompt 引用排列 — `omniMultiDetails.test.ts`
+  - §11.82：`needsSnapSlotIndex` 改用 `activeSlotRefs.length` — `omniMultiDetails.test.ts`
+  - §11.82：`effectiveProjectAssets` fallback 边界 — `omniMultiDetails.test.ts`
+  - §11.83：Seedance 参考生运行后主图消失 + 标签混乱 — `referencedMediaRun.test.ts`
+  - §11.84：Seedance `@主图` 恢复使用 `imagePreview` — `promptMediaRefs` 行级回归
+  - §11.85：Seedance 输出节点 `@主视频` 标签（imagePreview≠参考视频）— `seedanceMainVideoLabel.test.ts`
+  - §11.86：Seedance 代理路径 → COS URL 转换（命名资产标签）— `seedanceReferenceDetails.test.ts`
+
+- **集成脚本门禁（48 步）**：`scripts/test-gate.mjs` 在 vitest 之后依次运行，覆盖面板引用、Node Details 模拟、跨模型契约、导出 JSON、刷新恢复等场景。
+
+- **如何新增门禁**：
+  1. 每个 bug 修复后，在对应 `src/test/utils/*.test.ts` 文件中新增 1+ 条 vitest 用例
+  2. 用例命名格式：`§11.XX 场景描述`，便于追踪
+  3. 对于需要真实数据 JSON 的复杂场景，在 `scripts/fixtures/` 放 fixture 文件，编写 tsx 集成脚本
+  4. 集成脚本命名格式：`test:YYYYMMDD-功能描述`，在 `test-gate.mjs` 中注册
+
+### 11.88 2026-08-05 可灵3.0 Omni 视频参考面板标签与图片错位 + 刷新后丢图（参照 Seedance 方案）
+
+- **现象**：`E:/问题/8月5日/可灵3.0面板.json` — 可灵3.0 Omni 视频参考 tab 中，标签为「鸱吻」的参考格显示的是马的 blob 图片；刷新后鸱吻图片消失。
+- **根因**：
+  1. Omni 视频/指令参考格渲染时直接显示 `klingOmniVideoReferenceImages` 原始 blob URL，未像 Seedance/标准多图参考那样按 `referenceImageLabels[slotIndex]` 调用 `resolvePanelReferenceSlotDisplayUrl` 做资产库映射，导致标签与图片各走各的。
+  2. `FlowEditor.tsx` 保存可灵3.0 Omni 的 `modelConfigs` 时，只保存了 `klingOmni*ReferenceImages` 和 `klingOmni*ReferenceElementIds`，未保存对应的 `localRefs`；而 `NodeInspector.tsx` 切回 Omni 时从 `omniConfig` 读 `localRefs`，读不到就强制设为空数组，导致 IndexedDB 备份指针被清空，刷新后 blob 失效无法恢复。
+- **修复**：
+  1. `utils/referenceImageSlotLabels.ts`：新增 `resolveNamedAssetUrlByLabel(label, projectAssets)`，按标签查找命名资产库 URL，泛称标签返回 undefined；不依赖 `projectAssetPairKey`，兼容 COS 资产库地址。
+  2. `components/NodeInspector.tsx`（Omni 参考格渲染 L5760 附近）：遍历 `klingOmniActiveRefImages`，对每个非视频 URL 按标签调用 `resolveNamedAssetUrlByLabel` 做资产库映射；若原 URL 为空但标签是命名资产，则兜底取资产库 URL 显示。
+  3. `components/FlowEditor.tsx`（保存 Omni `modelConfigs` L7311-7363）：参照 Seedance/Nano/image2，加入 `referenceImageLocalRefs`、`klingOmniMultiReferenceLocalRefs`、`klingOmniInstructionReferenceLocalRefs`、`klingOmniVideoReferenceLocalRefs`。
+  4. `components/NodeInspector.tsx`（读取 `omniConfig.localRefs` L3368-3384）：`modelConfigs` 中无对应 `localRefs` 时保留节点顶层值，不再强制清空为 `[]`。
+- **文件**：`components/NodeInspector.tsx`、`components/FlowEditor.tsx`、`utils/referenceImageSlotLabels.ts`
+- **门禁测试**：新增 `src/test/utils/omniPanelReferenceDisplay.test.ts`（7 tests），覆盖 `resolveNamedAssetUrlByLabel` 的命名资产匹配、泛称过滤、空值/空资产集边界。
+- **验证**：`npm run test:gate` 全量通过（62 通过，0 失败）；`npm run build` 通过。
+- **风险**：低。①仅影响 Omni 面板参考格的显示 URL 解析，不动运行/上传/API 逻辑；②仅新增 `modelConfigs` 字段保存，不改变已有数据结构读取；③兜底逻辑仅在「URL 为空 + 标签为命名资产」时触发，条件严格。
 
 ## 12. 附加文档索引
 

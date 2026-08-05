@@ -1,7 +1,7 @@
 import type { NodeData } from '../types';
-import { isImage2Model, isNanoBanana2Model } from '../types';
+import { isImage2Model, isMidJourneyFamilyModel, isNanoBanana2Model } from '../types';
 
-/** 生图 OUTPUT 继承源模型；其它图节点默认可灵 2.5 便于图生视频链路 */
+/** 生图 OUTPUT 继承源模型；MidJourney 生图默认 seedance2.0 便于图生视频；其它图节点默认可灵 2.5 便于图生视频链路 */
 export function resolveSpawnOutputDefaultModel(params: {
   isVideoModel: boolean;
   currentModelName: string;
@@ -10,7 +10,10 @@ export function resolveSpawnOutputDefaultModel(params: {
   if (isVideoModel) return currentModelName;
   const isStillImageGen =
     isImage2Model(currentModelName) || isNanoBanana2Model(currentModelName);
-  return isStillImageGen ? currentModelName : '可灵 2.5 Turbo';
+  if (isStillImageGen) return currentModelName;
+  // MidJourney 生图：默认 seedance2.0，方便用户将生成的图片直接用于视频生成
+  if (isMidJourneyFamilyModel(currentModelName)) return 'seedance2.0 (高质量版)';
+  return '可灵 2.5 Turbo';
 }
 
 const KELING_OUTPUT_STRIP_KEYS: Array<keyof NodeData> = [

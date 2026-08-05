@@ -199,10 +199,12 @@ const detailsBroken = buildOmniMultiTabDetailsReferencePreview({
   prompt,
   movUrlSet: new Set(),
 });
-ok(
-  '错误 gp 标签时 Details 出现错位图片3',
-  detailsBroken.referenceImageDetailItems.some((i) => i.label === '图片3')
-);
+// §11.82 修复后：brokenGpLabels 含 图片3 但 prompt 仅 @图片1+@图片4，
+	// Details 不应出现错位图片3（修复前会因 panelSnapRefs 欠计 + blob 未预过滤导致误判）
+	ok(
+	  '§11.82 修复后：错误 gp 标签时 Details 不再出现错位图片3',
+	  !detailsBroken.referenceImageDetailItems.some((i) => i.label === '图片3')
+	);
 
 console.log('\n=== buildOmniMultiGenerationParamsLabels（API 顺序）===\n');
 const uploadedByToken = new Map<string, string>([

@@ -561,7 +561,7 @@ export const PANEL_MAIN_IMAGE_SLOT_SCENARIOS: PanelMainImageSlotScenario[] = [
 /** Nano / image2 / 可灵3.0 Omni：旧版运行后曾隐藏主图格；重新选中节点时按需恢复（legacy panelMainSlotVisible=false） */
 export function nodeModelUsesPanelMainImageRestore(model: string | undefined): boolean {
   const m = String(model || '').trim();
-  return isNanoBanana2Model(m) || isImage2Model(m) || m === '可灵3.0 Omni';
+  return isNanoBanana2Model(m) || isImage2Model(m) || m === '可灵3.0 Omni' || m === 'seedance2.0 (高质量版)' || m === 'seedance2.0 (急速版)';
 }
 
 /** 重新选中节点编辑：恢复运行后隐藏的主图格与备份主图（仅当创意描述仍 @主图/@主体 或尚无图片类 @ 时） */
@@ -651,11 +651,27 @@ export function pickStillImageRecoveryApiReferenceImages(
   const d = data as NodeData;
   const prompt = getNodeInspectorPromptText(d).trim();
   if (!prompt) return null;
+  // §11.80 修复：projectAssets 为空（资产库未加载 / 中间节点刷新恢复）时，
+  //   matchAllPromptMediaTokens 无法识别 @资产:xxx（matchLongestProjectAssetKey 直接返回 null），
+  //   导致 plan.images 为空、Node Details 少图。
+  //   此时用 referenceImageLabels + 持久化面板槽构造 fallback projectAssets（slug=name=label），
+  //   让 matchLongestProjectAssetKey 能按标签精确匹配 @资产:名称 边界（避免 greedy 吞正文）。
+  let effectiveAssets = projectAssets;
+  if (!effectiveAssets?.length && prompt.includes('@资产:')) {
+    const panelLabels = (d.referenceImageLabels || []).map((l) => String(l || '').trim());
+    const panelUrls = (d.referenceImages || []).map((u) => String(u || '').trim());
+    if (panelLabels.some((l) => l && !/^图片\d+$/.test(l))) {
+      effectiveAssets = panelLabels.flatMap<ProjectAssetLabelRow>((label, i) => {
+        if (!label || /^图片\d+$/.test(label)) return [];
+        return [{ slug: label, name: label, url: panelUrls[i] || undefined }];
+      });
+    }
+  }
   const ctx = {
     ...buildPromptMediaRefContextFromNode(d),
-    ...(projectAssets?.length ? { projectAssets } : {}),
+    ...(effectiveAssets?.length ? { projectAssets: effectiveAssets } : {}),
   };
-  const plan = collectReferencedMediaFromPrompt(prompt, d, ctx, new Map(), projectAssets);
+  const plan = collectReferencedMediaFromPrompt(prompt, d, ctx, new Map(), effectiveAssets);
   if (!plan.images.length) return null;
   const panelRefs = d.referenceImages || [];
   const images: string[] = [];
@@ -1123,7 +1139,9 @@ export function buildSeedanceReferenceImagesApiPayload(
 /** 与 buildSeedanceReferenceImagesApiPayload 顺序一致，供 Node Details / generationParams 标注 */
 export function buildSeedanceReferenceApiLabelsFromPlan(
   planImages: ReferencedCollectedImageRef[],
-  uploadedByToken: Map<string, string>
+  uploadedByToken: Map<string, string>,
+  /** §11.79: 面板槽位标签（按槽位顺序），用于对齐 Node Details 标签与面板显示 */
+  panelLabels?: string[]
 ): string[] {
   const out: string[] = [];
   const seen = new Set<string>();
@@ -1133,6 +1151,17 @@ export function buildSeedanceReferenceApiLabelsFromPlan(
     const key = normalizePanelReferenceUrlKey(up);
     if (seen.has(key)) continue;
     seen.add(key);
+    // §11.79: 优先使用面板槽位标签，参考可灵多图参考——当面板有自定义标签（如"大牙"）时，
+    // 避免 gp 中显示泛化标签（如"主图"），使 Node Details 与属性面板标签一致。
+    const slotIdx =
+      entry.refImageSlotIndex ??
+      (MAIN_IMAGE_REF_TOKENS.has(entry.token) ? 0 : undefined);
+    const panelLabel =
+      slotIdx != null && slotIdx >= 0 && panelLabels?.[slotIdx]?.trim();
+    if (panelLabel && !/^图片\d+$/.test(panelLabel)) {
+      out.push(panelLabel);
+      continue;
+    }
     const fromPlan = entry.label?.trim();
     if (fromPlan) {
       out.push(fromPlan);
@@ -1307,20 +1336,99 @@ export function repairSeedanceReferenceGenerationParamsFromPanel(
   if (!panelRefs.length) return undefined;
 
   const prev = (data.generationParams || {}) as GenerationParams;
-  const prevRefs = (prev.referenceImages || [])
-    .map((u) => String(u || '').trim())
-    .filter(Boolean);
-  if (seedanceReferenceSnapshotUrlsMatch(prevRefs, panelRefs)) return undefined;
+
+  // §11.75: 先计算 mergedRefs（面板空槽回填 gp URL），再决定是否需写回。
+  // 仅在 mergedRefs 与 gp 完全一致且标签也未变时才返回 undefined（无变更）。
+  // 覆盖了 §11.73 未处理的场景：面板非空 URL 与 gp 相同但有空槽需回填时，
+  // 旧的 seedanceReferenceSnapshotUrlsMatch 会因集合匹配而提前退出，导致空槽永不被回填。
+  const prevRefArr = (prev.referenceImages || []) as string[];
+  // §11.78: blob:/data: 为浏览器临时 URL，刷新后即失效，不应写回 gp（gp 应只含持久化 https URL）；
+  //          与 repairOmniMultiGenerationParamsFromPanel 保持一致，防止 Node Details 参考图错乱。
+  //          注意：不适用 imagePreview 回填主图（imagePreview 是生成输出而非主参考图，§11.77 已废弃）。
+  //          主图 COS URL 应在运行时由 resolveSeedancePromptTokenMedia + seedanceApiRefImages 正确写入 gp。
+  const mergedRefs = panelRefs.map((u, i) => {
+    const v = String(u || '').trim();
+    if (v && !/^(blob|data):/i.test(v)) return v;
+    const fromGp = String(prevRefArr[i] || '').trim();
+    if (fromGp) return fromGp;
+    return '';
+  });
+  const prevLabels = (prev.referenceImageLabels || []) as string[];
+  const mergedLabels = panelLabels?.some((l) => String(l || '').trim())
+    ? panelLabels
+    : prevLabels;
+  if (
+    mergedRefs.length === prevRefArr.length &&
+    mergedRefs.every((u, i) => u === String(prevRefArr[i] || '')) &&
+    mergedLabels.length === prevLabels.length &&
+    mergedLabels.every((l, i) => l === String(prevLabels[i] || ''))
+  ) {
+    return undefined;
+  }
 
   return {
     ...prev,
     model,
     seedanceGenerationMode: 'reference',
-    referenceImages: [...panelRefs],
-    referenceImageLabels: panelLabels?.some((l) => String(l || '').trim())
-      ? [...panelLabels]
-      : undefined,
+    referenceImages: mergedRefs,
+    referenceImageLabels: mergedLabels,
   };
+}
+
+/**
+ * 可灵3.0 Omni 多图 tab：面板 klingOmniMultiReferenceImages 已与 API 对齐，
+ * 但 generationParams 仍残留上游节点旧参考图时，从面板数据写回 generationParams。
+ * 参照 Seedance 2.0 参考生的 repairSeedanceReferenceGenerationParamsFromPanel 模式。
+ */
+export function repairOmniMultiGenerationParamsFromPanel(
+  data: Partial<NodeData>
+): GenerationParams | undefined {
+  const model = String(data.selectedModel || data.generationParams?.model || '').trim();
+  if (model !== '可灵3.0 Omni') return undefined;
+  const tab = (data.klingOmniTab || data.generationParams?.klingOmniTab || 'multi') as string;
+  if (tab !== 'multi') return undefined;
+
+  // §11.76: 面板多图参考（含槽位结构和空槽），先计算 mergedRefs（面板空槽回填 gp URL），
+	// 再决定是否需写回。仅在 mergedRefs 与 gp 完全一致且标签也未变时才返回 undefined（无变更）。
+	// 覆盖了旧的 seedanceReferenceSnapshotUrlsMatch 集合比较问题：
+	// 面板非空 URL 与 gp 相同但有空槽需回填时，集合匹配会提前退出，导致空槽永不被回填。
+	// §11.78: blob:/data: 为浏览器临时 URL，刷新后即失效，不应写回 gp（gp 应只含持久化 https URL）；
+	//          否则后续 Node Details §11.65 过滤时 snapKeys 会包含 blob UUID，
+	//          误删主图等持久化 https URL，导致参考图标签错乱/主图丢失（可灵还是有问题.json）。
+	const panelRefs = (data.klingOmniMultiReferenceImages || [])
+		.map((u) => String(u || '').trim());
+	if (!panelRefs.some((u) => u)) return undefined;
+
+	const prev = (data.generationParams || {}) as GenerationParams;
+	const prevRefArr = (prev.referenceImages || []) as string[];
+	const mergedRefs = panelRefs.map((u, i) => {
+		const v = String(u || '').trim();
+		// §11.78: 跳过 blob:/data: 临时 URL，回退 gp 原值，保证 gp 持久化
+		if (v && !/^(blob|data):/i.test(v)) return v;
+		return String(prevRefArr[i] || '').trim();
+	});
+
+	const panelLabels = data.referenceImageLabels;
+	const prevLabels = (prev.referenceImageLabels || []) as string[];
+	const mergedLabels = panelLabels?.some((l) => String(l || '').trim())
+		? panelLabels
+		: prevLabels;
+
+	if (
+		mergedRefs.length === prevRefArr.length &&
+		mergedRefs.every((u, i) => u === String(prevRefArr[i] || '')) &&
+		mergedLabels.length === prevLabels.length &&
+		mergedLabels.every((l, i) => l === String(prevLabels[i] || ''))
+	) {
+		return undefined;
+	}
+
+	return {
+		...prev,
+		model,
+		referenceImages: mergedRefs,
+		referenceImageLabels: mergedLabels,
+	};
 }
 
 /** 紧凑 API 参考图已含「主图」标签时，隐藏独立主图格，避免面板双主图 */

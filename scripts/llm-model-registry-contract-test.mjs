@@ -103,6 +103,11 @@ ok('sendByModel isAitopLlmUiModel', /isAitopLlmUiModel\(modelId\)/.test(chatSrc)
 ok('sendByModel handleAitopLlmSend', /handleAitopLlmSend\(modelId/.test(chatSrc));
 ok('Qwen 联网 UI disabled', /isQwenChatUiModel\(selectedModel\)[\s\S]{0,200}disabled/.test(chatSrc));
 
+// 能力矩阵契约
+ok('注册表含 capabilities', /capabilities:\s*\{/.test(registrySrc));
+ok('Gemini 能力矩阵完整', /uiId:\s*'gemini-3-pro'[\s\S]{0,400}capabilities:\s*\{\s*webSearch:\s*(true|false)[\s\S]{0,120}thinking:/.test(registrySrc));
+ok('ChatPanel 引用 getAitopModelCapabilities', /getAitopModelCapabilities/.test(chatSrc));
+
 const qwenName = chatSrc.match(/QWEN_API_CONFIG[\s\S]*?MODEL_NAME:\s*'([^']+)'/);
 ok('QWEN MODEL_NAME', Boolean(qwenName?.[1]?.includes('Qwen')));
 

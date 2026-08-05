@@ -1891,12 +1891,12 @@ console.log(
     '解析优先资产库',
     resolveProjectAssetUrlForPromptToken(wrongLocal, libStreet) === libStreet
   );
+  // §11.74 aitop COS URL 直接返回，不再替换为资产库代理路径
+  const cosUrl =
+    'https://aitop100app-1251510006.cos.ap-shanghai.myqcloud.com/openApi/297409/567b17e9-c640-4c3d-a198-da6837842a20.png';
   ok(
-    '槽内 aitop COS 仍用资产库',
-    resolveProjectAssetUrlForPromptToken(
-      'https://aitop100app-1251510006.cos.ap-shanghai.myqcloud.com/openApi/297409/567b17e9-c640-4c3d-a198-da6837842a20.png',
-      libStreet
-    ) === libStreet
+    '槽内 aitop COS 保留原地址',
+    resolveProjectAssetUrlForPromptToken(cosUrl, libStreet) === cosUrl
   );
   ok(
     '同 assetId 仍可用槽内 URL',
@@ -3460,10 +3460,11 @@ console.log('\n=== 38. 9999.json：错槽标签 + 资产库解析时勿用槽位
     projectAssetSlugToUrl: slugMap,
   });
   const xiamo = enriched.find((e) => e.token.includes('夏茉'));
-  ok('9999：夏茉 解析为资产库 URL', xiamo?.url === xiamoLib, xiamo?.url);
+  // §11.74 面板槽为 aitop COS 时保留原地址，不再替换为资产库代理路径
+  ok('9999：夏茉 解析为 COS URL', xiamo?.url === wrongCos, xiamo?.url);
   ok(
-    '9999：错槽 COS 与解析 URL 冲突 → 跳过槽位 File',
-    slotOriginalFileConflictsWithPlanEntry(xiamo!, wrongCos),
+    '9999：同槽 COS 与自身一致不冲突',
+    !slotOriginalFileConflictsWithPlanEntry(xiamo!, wrongCos),
     String(xiamo?.refImageSlotIndex)
   );
   ok(
@@ -3731,7 +3732,8 @@ console.log('\n=== 41d. sc007：@萧逍 勿因 COS 误对齐到 @图片3 槽 ===
   const img3 = enriched.find((e) => e.token === '@图片3');
   ok('sc007：@萧逍 槽=1 非图片3槽', xiao?.refImageSlotIndex === 1, String(xiao?.refImageSlotIndex));
   ok('sc007：@图片3 槽=3', img3?.refImageSlotIndex === 3, String(img3?.refImageSlotIndex));
-  ok('sc007：plan 萧逍=库图', xiao?.url === xiaoLib, xiao?.url);
+  // §11.74 面板槽为 aitop COS 时保留原地址
+  ok('sc007：plan 萧逍=COS', xiao?.url === xiaoCos, xiao?.url);
   const uploaded = new Map<string, string>([
     ['@资产:鸱吻', chiwenCos],
     ['@图片3', img3Cos],
@@ -3799,7 +3801,8 @@ console.log('\n=== 41c. sc009：夏茉槽水墨 COS + 槽位 File 仍上传库�
     projectAssetSlugToUrl: slugMap,
   });
   const xiamoPlan = plan.images.find((e) => e.token === '@资产:夏茉');
-  ok('sc009：collect plan.url=夏茉库', xiamoPlan?.url === xiamoLib, xiamoPlan?.url);
+  // §11.74 面板槽为 aitop COS 时保留原地址
+  ok('sc009：collect plan.url=夏茉COS', xiamoPlan?.url === inkCos, xiamoPlan?.url);
   const xiamo = enriched.find((e) => e.token === '@资产:夏茉')!;
   const uploadCtx = {
     originals: {

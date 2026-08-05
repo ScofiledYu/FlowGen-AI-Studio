@@ -1,6 +1,6 @@
 import React, { memo, useState, useCallback, useRef, useEffect, useMemo } from 'react';
 import { Handle, Position, NodeProps, useReactFlow, useStore, useStoreApi } from 'reactflow';
-import { Image as ImageIcon, GripHorizontal, AlertCircle, Loader2, PlayCircle, Film, Maximize2, Upload, Download, FileText, Layers, Ratio, Monitor, Pause, Folder, ChevronRight, FolderOpen, Clock } from 'lucide-react';
+import { Image as ImageIcon, GripHorizontal, AlertCircle, Loader2, PlayCircle, Film, Maximize2, Upload, Download, FileText, Layers, Ratio, Monitor, Pause, Folder, ChevronRight, FolderOpen, Clock, Type } from 'lucide-react';
 import { NodeType, GenerationParams } from '../../types';
 import { FLOW_MAX_THUMBNAILS_PER_NODE } from '../../utils/flowLimits';
 import { prepareCanvasNodeImagePreview } from '../../utils/imageCompress';
@@ -337,13 +337,18 @@ const CustomNode = ({ id, data, type, selected }: NodeProps) => {
   );
 
   const canPickLocalMedia = isInput || isProcessor || isOutput || isMov;
-  const showEmptyPickLocal = !data.imagePreview && canPickLocalMedia && data.status !== 'running';
+  /** Text Node（文生节点）：纯文本生成，画布空态不提供本地文件选择 */
+  const isTextGenNode = Boolean(data.textGenNode);
+  const showEmptyPickLocal = !data.imagePreview && canPickLocalMedia && data.status !== 'running' && !isTextGenNode;
   const storyboardShotPreviewText = (data.storyboardShotPreviewText || '').trim();
 
   const onDrop = useCallback((event: React.DragEvent) => {
     event.preventDefault();
     event.stopPropagation(); // Prevent creating a new node on canvas
     setIsDragOver(false);
+
+    // Text Node（文生节点）：不接收任何拖入媒体，保持纯文生语义
+    if (isTextGenNode) return;
 
     let newImage = '';
     let newName = '';
@@ -392,7 +397,7 @@ const CustomNode = ({ id, data, type, selected }: NodeProps) => {
           .then(apply)
           .catch(() => apply(newImage));
     }
-  }, [id, setNodes, applyLocalMediaFile]);
+  }, [id, setNodes, applyLocalMediaFile, isTextGenNode]);
 
   const handleDownload = useCallback(async (e: React.MouseEvent) => {
     e.stopPropagation();
@@ -1244,8 +1249,17 @@ const CustomNode = ({ id, data, type, selected }: NodeProps) => {
                   onClick={(e) => e.stopPropagation()}
                 />
               )}
-              <ImageIcon size={20} />
-              <span className="text-[8px] uppercase tracking-wider font-semibold">Empty</span>
+              {isTextGenNode ? (
+                <>
+                  <Type size={20} className="text-purple-400/70" />
+                  <span className="text-[8px] uppercase tracking-wider font-semibold text-purple-300/60">Text to Media</span>
+                </>
+              ) : (
+                <>
+                  <ImageIcon size={20} />
+                  <span className="text-[8px] uppercase tracking-wider font-semibold">Empty</span>
+                </>
+              )}
               {showEmptyPickLocal && (
                 <button
                   type="button"

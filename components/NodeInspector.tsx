@@ -185,11 +185,30 @@ import { ChevronDown, Image as ImageIcon, Plus, Type, Sparkles, X, Settings2, Pl
 import {
   MODEL_IMAGE_2,
   MODEL_NANO_BANANA_2,
+  MODEL_MIDJOURNEY,
+  MODEL_NIJI,
+  MJ_DEFAULT_VERSION_REALISTIC,
+  MJ_DEFAULT_VERSION_CARTOON,
+  MJ_QUALITY_OPTIONS,
+  MJ_RATIO_OPTIONS,
+  MJ_VERSION_OPTIONS_REALISTIC,
+  MJ_VERSION_OPTIONS_CARTOON,
+  MJ_FAMILY_OPTIONS,
+  MJ_STYLE_OPTIONS,
+  MJ_ANGLE_OPTIONS,
+  MJ_CAMERA_OPTIONS,
+  MJ_LIGHT_OPTIONS,
+  MJ_ART_OPTIONS,
+  MjFamily,
   NodeData,
   NodeType,
   INSPECTOR_SELECTABLE_MODELS,
+  TEXT_GEN_NODE_MODELS,
   isDeprecatedInspectorModel,
   isImage2Model,
+  isMidJourneyFamilyModel,
+  isMidJourneyModel,
+  isLegacyMidJourneyFamilyModel,
   isNanoBanana2Model,
 } from '../types';
 import {
@@ -216,7 +235,10 @@ import {
   removeImage2PanelReferenceAtDisplaySlot,
   IMAGE2_MAX_PANEL_SLOTS,
 } from '../utils/image2PanelRefs';
-import { nanoBananaMainPatchOnModelSwitch } from '../utils/modelSwitchPanelIsolation';
+import {
+  nanoBananaMainPatchOnModelSwitch,
+  preserveRunResultMainPreview,
+} from '../utils/modelSwitchPanelIsolation';
 import {
   applyKlingOmniActiveTabLivePanel,
   buildKlingOmniTabSwitchPatch,
@@ -335,6 +357,7 @@ import {
   syncGenericReferenceImageLabelsToSlotOrdinals,
   resolveFirstLastFramePanelDisplayLabel,
   resolveMainImagePanelDisplayLabel,
+  resolveNamedAssetUrlByLabel,
   resolvePanelReferenceSlotDisplayUrl,
   resolvePanelRefLabelForInspectorDrop,
   resolveReferenceSlotDisplayLabel,
@@ -909,6 +932,11 @@ function NodeInspector({
     COSTUME: '服饰',
   };
   const [runningByNode, setRunningByNode] = useState<Record<string, boolean>>({});
+  /** MidJourney/Niji：sref/cref/oref 参考图上传中标记（防止重复上传 + 槽位 loading 展示） */
+  const [mjRefUploading, setMjRefUploading] = useState<Record<string, boolean>>({});
+  const [mjRefImagesOpen, setMjRefImagesOpen] = useState(data.mjRefImagesOpen ?? false);
+  const [mjRefDragOver, setMjRefDragOver] = useState(false);
+  const [mjAdvancedOpen, setMjAdvancedOpen] = useState(data.mjAdvancedOpen ?? false);
   const [isDragOverRefs, setIsDragOverRefs] = useState(false);
   const [seedanceRefDropOver, setSeedanceRefDropOver] = useState(false);
   const [videoPlayingMap, setVideoPlayingMap] = useState<Record<string, boolean>>({});
@@ -1163,6 +1191,8 @@ function NodeInspector({
   const isSeedance20HighQuality = data.selectedModel === 'seedance2.0 (高质量版)';
   const isSeedance = isSeedance15 || isSeedance20;
   const seedanceMode = data.seedanceGenerationMode || 'text';
+  /** Text Node（文生节点）：纯文生图/文生视频；面板隐藏媒体区、模型限定白名单、seedance2.0 仅文生 tab */
+  const isTextGenNode = Boolean(data.textGenNode);
 
   const applyFirstFrameUpdate = useCallback(
     (img?: string, meta?: { displayName?: string }) => {
@@ -1576,7 +1606,26 @@ function NodeInspector({
   /** 仅 Nano Banana 2.0 走多图参考/拖入规则（勿把「非视频模型」都当 Nano） */
   const isNano = isNanoBanana2Model(data.selectedModel);
   const isImage2 = isImage2Model(data.selectedModel);
+  /** MidJourney 家族文生（真实感强 / Niji 卡通动漫），Text Node 专属 */
+  const isMidJourney = isMidJourneyFamilyModel(data.selectedModel);
+  // 兼容旧 persisted 节点：旧名 'MidJourney (真实感强)' 归为 realistic，'Niji (卡通动漫)' 归为 cartoon
+  const mjFamily: MjFamily =
+    data.mjFamily || (data.selectedModel === MODEL_NIJI ? 'cartoon' : 'realistic');
+  const isNiji = mjFamily === 'cartoon';
   const maxStandardRefImages = isImage2 ? IMAGE2_MAX_API_IMAGES : 14;
+
+  // 旧 persisted 节点迁移：'MidJourney (真实感强)' / 'Niji (卡通动漫)' 自动合并为 'MidJourney' + mjFamily
+  useEffect(() => {
+    if (!isLegacyMidJourneyFamilyModel(data.selectedModel)) return;
+    const inferredFamily: MjFamily = data.selectedModel === MODEL_NIJI ? 'cartoon' : 'realistic';
+    onUpdate({
+      selectedModel: MODEL_MIDJOURNEY,
+      mjFamily: data.mjFamily || inferredFamily,
+      mjVersion:
+        data.mjVersion ||
+        (inferredFamily === 'cartoon' ? MJ_DEFAULT_VERSION_CARTOON : MJ_DEFAULT_VERSION_REALISTIC),
+    });
+  }, [data.selectedModel]);
 
   /** 面板侧栏展示用参考图：OUTPUT/MOV 继承的参考已在 spawn 与加载时清空，
    *  运行时直接用 data.referenceImages（用户可手动拖入 / @引用），不再强制清空； */
@@ -1876,10 +1925,10 @@ function NodeInspector({
     [data, promptMediaRefContext]
   );
 
-  /** @ 下拉仅面板已拖入素材；项目库全量用「扫描 @素材」 */
+  /** @ 下拉仅面板已拖入素材；项目库全量用「扫描 @素材」；Text Node（文生节点）无素材，禁用 @ 引用 */
   const promptMentionItems = useMemo(
-    () => buildInspectorPromptMentionItems(data, promptMediaRefContext),
-    [data, promptMediaRefContext]
+    () => (isTextGenNode ? [] : buildInspectorPromptMentionItems(data, promptMediaRefContext)),
+    [data, promptMediaRefContext, isTextGenNode]
   );
 
   const mainImageSlotCaption = useMemo(() => {
@@ -1939,6 +1988,9 @@ function NodeInspector({
   const lastFrameFromUrlRef = useRef<
     (url: string, kind?: 'image' | 'video', meta?: { assetName?: string; fromCanvasNode?: boolean }) => Promise<void>
   >(async () => {});
+  const mjRefFromUrlRef = useRef<
+    (url: string, kind?: 'image' | 'video') => Promise<void>
+  >(async () => {});
 
   const flMediaCaptions = useMemo(
     () => ({
@@ -1970,8 +2022,8 @@ function NodeInspector({
 
   useEffect(() => {
     const onWin = (ev: Event) => {
-      const d = (ev as CustomEvent<FlowgenMediaUrlDropDetail>).detail;
-      if (!d?.targetNodeId) return;
+    const d = (ev as CustomEvent<FlowgenMediaUrlDropDetail>).detail;
+    if (!d?.targetNodeId) return;
       if (d.targetNodeId !== nodeId) return;
       const fromCanvasNode = isCanvasNodeMediaDragSource(d.sourceNodeId);
       if (d.dropZone === 'reference') {
@@ -2037,6 +2089,8 @@ function NodeInspector({
           assetName: fromCanvasNode ? undefined : d.assetName,
           fromCanvasNode,
         });
+      } else if (d.dropZone === 'mj-reference') {
+        void mjRefFromUrlRef.current(d.url, d.kind);
       }
     };
     window.addEventListener(FLOWGEN_MEDIA_URL_DROP, onWin);
@@ -2521,6 +2575,8 @@ function NodeInspector({
   };
 
   const switchSeedance20Tab = (target: 'text' | 'image' | 'reference') => {
+    // Text Node（文生节点）：seedance2.0 仅文生视频 tab
+    if (isTextGenNode && target !== 'text') return;
     const tabs = snapshotSeedanceTabConfigsWithLivePanel(data, getInspectorPromptValue());
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const next = (tabs[target] || {}) as any;
@@ -2839,6 +2895,10 @@ function NodeInspector({
     const isSwitchingModel = oldModel && oldModel !== model;
     
     if (isSwitchingModel) {
+      // outputNode / movNode 是运行结果节点，切换模型时主图应固定显示运行结果，
+      // 避免被 modelConfigs 中其他模型继承自上游的旧快照覆盖（如 Nano Banana 显示上游资产图）。
+      const runResultPreviewPatch = preserveRunResultMainPreview(nodeType, data.generationParams);
+
       // 保存当前模型的配置
       const currentModelConfigs = { ...(data.modelConfigs || {}) };
       
@@ -2888,6 +2948,28 @@ function NodeInspector({
           image2ImageSize: data.image2ImageSize,
           image2Quality: data.image2Quality,
           image2QualityLevel: data.image2QualityLevel,
+        };
+      } else if (isMidJourneyFamilyModel(oldModel)) {
+        // 保存 MidJourney 文生配置（Text Node 专属；sref/cref/oref 已是 COS URL）
+        // 统一使用 modelConfigs.MidJourney 存储，不再按旧模型名分键
+        currentModelConfigs.MidJourney = {
+          prompt: data.prompt,
+          negativePrompt: data.negativePrompt,
+          numberOfImages: data.numberOfImages,
+          mjFamily: data.mjFamily ||
+            (oldModel === MODEL_NIJI ? 'cartoon' : oldModel === MODEL_MIDJOURNEY ? 'realistic' : undefined),
+          mjVersion: data.mjVersion,
+          mjStyle: data.mjStyle,
+          mjRatio: data.mjRatio,
+          mjQuality: data.mjQuality,
+          mjMode: data.mjMode,
+          mjAngle: data.mjAngle,
+          mjCamera: data.mjCamera,
+          mjLight: data.mjLight,
+          mjArt: data.mjArt,
+          mjSrefUrl: data.mjSrefUrl,
+          mjCrefUrl: data.mjCrefUrl,
+          mjOrefUrl: data.mjOrefUrl,
         };
       } else if (oldModel === '可灵 2.5 Turbo') {
         // 保存可灵的配置
@@ -3051,6 +3133,21 @@ function NodeInspector({
         updateData.image2Quality = undefined;
         updateData.image2QualityLevel = undefined;
       }
+      if (!isMidJourneyFamilyModel(model)) {
+        updateData.mjFamily = undefined;
+        updateData.mjVersion = undefined;
+        updateData.mjStyle = undefined;
+        updateData.mjRatio = undefined;
+        updateData.mjQuality = undefined;
+        updateData.mjMode = undefined;
+        updateData.mjAngle = undefined;
+        updateData.mjCamera = undefined;
+        updateData.mjLight = undefined;
+        updateData.mjArt = undefined;
+        updateData.mjSrefUrl = undefined;
+        updateData.mjCrefUrl = undefined;
+        updateData.mjOrefUrl = undefined;
+      }
 
       // 根据新模型类型，设置相应的属性
       if (model === MODEL_NANO_BANANA_2) {
@@ -3147,6 +3244,49 @@ function NodeInspector({
         });
         updateData.referenceImages = img2Compact.referenceImages;
         updateData.referenceImageLabels = img2Compact.referenceImageLabels;
+      } else if (isMidJourneyFamilyModel(model)) {
+        // 恢复 MidJourney 文生配置；首次选中给默认版本/比例/计费模式
+        // 兼容旧 persisted：优先读新键 MidJourney，否则回退到旧键 'MidJourney (真实感强)' / 'Niji (卡通动漫)'
+        const mjCfgUnified = (currentModelConfigs.MidJourney || {}) as NonNullable<NodeData['modelConfigs']>['MidJourney'];
+        const mjCfgLegacy = ((currentModelConfigs as Record<string, unknown>)[model as string] || {}) as NonNullable<NodeData['modelConfigs']>['MidJourney'];
+        const mjCfg = { ...mjCfgLegacy, ...mjCfgUnified };
+        const inferredFamily: MjFamily =
+          mjCfg.mjFamily ||
+          (model === MODEL_NIJI ? 'cartoon' : model === MODEL_MIDJOURNEY ? 'realistic' : 'realistic');
+        updateData.prompt = mjCfg.prompt ?? '';
+        updateData.negativePrompt = mjCfg.negativePrompt ?? '';
+        updateData.numberOfImages = mjCfg.numberOfImages || '1张';
+        updateData.mjFamily = inferredFamily;
+        updateData.mjVersion =
+          mjCfg.mjVersion ||
+          (inferredFamily === 'cartoon' ? MJ_DEFAULT_VERSION_CARTOON : MJ_DEFAULT_VERSION_REALISTIC);
+        updateData.mjStyle = mjCfg.mjStyle;
+        updateData.mjRatio = mjCfg.mjRatio || '16:9';
+        updateData.mjQuality = mjCfg.mjQuality || '1';
+        updateData.mjMode = mjCfg.mjMode === 'RELAX' ? 'RELAX' : 'FAST';
+        updateData.mjAngle = mjCfg.mjAngle;
+        updateData.mjCamera = mjCfg.mjCamera;
+        updateData.mjLight = mjCfg.mjLight;
+        updateData.mjArt = mjCfg.mjArt;
+        updateData.mjSrefUrl = mjCfg.mjSrefUrl;
+        updateData.mjCrefUrl = mjCfg.mjCrefUrl;
+        updateData.mjOrefUrl = mjCfg.mjOrefUrl;
+        // MJ 文生不用画面比例/清晰度/参考图槽等其它模型字段
+        updateData.aspectRatio = undefined;
+        updateData.resolution = undefined;
+        updateData.referenceImages = undefined;
+        updateData.referenceImageLabels = undefined;
+        updateData.referenceImageLocalRefs = undefined;
+        updateData.imagePreview = undefined;
+        updateData.panelMainImageUrl = undefined;
+        updateData.panelMainSlotVisible = undefined;
+        updateData.firstFrameImage = undefined;
+        updateData.lastFrameImage = undefined;
+        updateData.firstFrameImageUrl = undefined;
+        updateData.lastFrameImageUrl = undefined;
+        updateData.quality = undefined;
+        updateData.duration = undefined;
+        updateData.creativityLevel = undefined;
       } else if (model === '可灵 2.5 Turbo') {
         // 加载可灵的配置
         const kelingConfig = currentModelConfigs['可灵 2.5 Turbo'] || {};
@@ -3225,22 +3365,23 @@ function NodeInspector({
         updateData.klingOmniInstructionReferenceElementIds = omniConfig.klingOmniInstructionReferenceElementIds;
         updateData.klingOmniVideoReferenceElementIds = omniConfig.klingOmniVideoReferenceElementIds;
         Object.assign(updateData, clearInheritedPanelRefsOnFrameModelSwitch());
+        // 参照 Seedance/Nano/image2：modelConfigs 中无 localRefs 时保留当前顶层值，避免误清 IndexedDB 备份指针。
         updateData.referenceImageLocalRefs =
           omniConfig.referenceImageLocalRefs != null
             ? [...omniConfig.referenceImageLocalRefs]
-            : [];
+            : data.referenceImageLocalRefs ?? [];
         updateData.klingOmniMultiReferenceLocalRefs =
           omniConfig.klingOmniMultiReferenceLocalRefs != null
             ? [...omniConfig.klingOmniMultiReferenceLocalRefs]
-            : [];
+            : data.klingOmniMultiReferenceLocalRefs ?? [];
         updateData.klingOmniInstructionReferenceLocalRefs =
           omniConfig.klingOmniInstructionReferenceLocalRefs != null
             ? [...omniConfig.klingOmniInstructionReferenceLocalRefs]
-            : [];
+            : data.klingOmniInstructionReferenceLocalRefs ?? [];
         updateData.klingOmniVideoReferenceLocalRefs =
           omniConfig.klingOmniVideoReferenceLocalRefs != null
             ? [...omniConfig.klingOmniVideoReferenceLocalRefs]
-            : [];
+            : data.klingOmniVideoReferenceLocalRefs ?? [];
         applyKlingOmniActiveTabLivePanel(updateData, omniConfig, data);
       } else if (model === '即梦3.0 Pro') {
         const jimengConfig = currentModelConfigs['即梦3.0 Pro'] || {};
@@ -3341,7 +3482,9 @@ function NodeInspector({
         updateData.seedanceGenerationMode =
           model === 'seedance1.5-pro'
             ? 'image'
-            : (seedanceConfig.seedanceGenerationMode || (hasMainImage ? 'reference' : 'text'));
+            : isTextGenNode
+              ? 'text'
+              : (seedanceConfig.seedanceGenerationMode || (hasMainImage ? 'reference' : 'text'));
         updateData.seedanceTabConfigs = seedanceConfig.seedanceTabConfigs || {};
         /** 仅「参考生视频」tab 使用顶层 reference*；图/文 tab 与 switchSeedance20Tab 一致，避免脏参考图在图生视频下出现「图片1」 */
         if (updateData.seedanceGenerationMode === 'reference') {
@@ -3382,6 +3525,12 @@ function NodeInspector({
       // 切模型恢复：有 localRef 的槽剥离可能已 revoke 的 blob，强制 IDB 重 hydrate
       Object.assign(updateData, stripRestoredNodeMediaForLocalRefHydrate(updateData));
 
+      // 运行结果节点：切换模型后保持运行结果主图，不被 modelConfigs 中其他模型的旧快照覆盖。
+      // 仅做显示层保护，不影响 prompt / 参考图 / 模型参数等运行配置。
+      if (runResultPreviewPatch) {
+        Object.assign(updateData, runResultPreviewPatch);
+      }
+
       // 更新节点数据
       onUpdate(updateData);
     } else {
@@ -3418,7 +3567,7 @@ function NodeInspector({
           seedanceFixedCamera: false,
           seedanceReferenceRatioMode: 'force',
           seedanceReferenceWebSearch: false,
-          seedanceGenerationMode: model === 'seedance1.5-pro' ? 'image' : 'reference',
+          seedanceGenerationMode: model === 'seedance1.5-pro' ? 'image' : isTextGenNode ? 'text' : 'reference',
           seedanceTabConfigs: {},
           referenceImages: [],
           referenceMovs: [],
@@ -3579,12 +3728,39 @@ function NodeInspector({
             opts?.assetName?.trim() ||
             projectAssetDisplayNameFromUrl(img, projectAssetLabelRows) ||
             '';
+          // §10.71：先立即显示图片（onUpdate 同步执行），再后台异步备份到 IndexedDB
+          // §10.72：清除 projectAssetId — 若节点从资产库创建，projectAssetId 会导致
+          // attachLocalMainRef 跳过 IDB 备份 + hydrateLocalMediaPreviews 跳过 blob 恢复
           onUpdate({
             imagePreview: img,
             panelMainSlotVisible: undefined,
             panelMainImageUrl: undefined,
+            projectAssetId: undefined,
             ...(name ? { imageName: name } : {}),
           });
+          // §10.71：中键拖入 / 链上拖入时，后台异步将原始图片存入 IndexedDB 并设置 imageLocalRef，
+          // 确保刷新后可从 IDB 恢复 blob 图片（对齐本地文件上传路径 flowgen:register-original-image type=main）
+          // 不阻塞 onUpdate，避免中键拖图后图片延迟出现
+          if (!isPersistableMediaUrl(internalCandidate)) {
+            void (async () => {
+              try {
+                const res = await fetch(internalCandidate);
+                const blob = await res.blob();
+                const file = new File(
+                  [blob],
+                  `main-image.${blob.type?.includes('png') ? 'png' : 'jpg'}`,
+                  { type: blob.type || 'image/jpeg' }
+                );
+                window.dispatchEvent(
+                  new CustomEvent('flowgen:register-original-image', {
+                    detail: { nodeId, file, type: 'main' },
+                  })
+                );
+              } catch (e) {
+                console.warn('[flowgen] image2 main image IDB backup failed', e);
+              }
+            })();
+          }
         };
         void normalizeInspectorIngestImageUrl(internalCandidate).then(applyMain);
         return;
@@ -3917,91 +4093,6 @@ function NodeInspector({
     }
   };
 
-  const omniReferenceLocalRefField = (): PanelReferenceLocalRefField => {
-    if (klingOmniTab === 'instruction') return 'klingOmniInstructionReferenceLocalRefs';
-    if (klingOmniTab === 'video') return 'klingOmniVideoReferenceLocalRefs';
-    return 'klingOmniMultiReferenceLocalRefs';
-  };
-
-  type ReferenceAppendRegistration = {
-    localRefField: PanelReferenceLocalRefField;
-    localRefs?: string[];
-  };
-
-  const withReferenceLocalRefsInPatch = (
-    patch: Partial<NodeData>,
-    registered?: ReferenceAppendRegistration
-  ): Partial<NodeData> => {
-    if (!registered?.localRefs?.length) return patch;
-    return { ...patch, [registered.localRefField]: registered.localRefs };
-  };
-
-  const dispatchReferenceAppendFiles = async (
-    files: File[],
-    startIndex: number,
-    localRefField: PanelReferenceLocalRefField = 'referenceImageLocalRefs'
-  ): Promise<ReferenceAppendRegistration> => {
-    // 生成一个唯一的 ack ID 用于确认 IndexedDB 写入完成
-    const ackId = `${nodeId}_${Date.now()}_${Math.random().toString(36).slice(2)}`;
-    
-    // 创建一个 Promise 来等待 IndexedDB 写入完成
-    const waitForRegistration = new Promise<ReferenceAppendRegistration>((resolve) => {
-      const handler = (e: Event) => {
-        const d = (e as CustomEvent<{ ackId: string; localRefField?: PanelReferenceLocalRefField; localRefs?: string[] }>).detail;
-        if (d?.ackId === ackId) {
-          window.removeEventListener('flowgen:reference-files-registered', handler);
-          resolve({
-            localRefField: d.localRefField || localRefField,
-            localRefs: d.localRefs,
-          });
-        }
-      };
-      // 5 秒超时，防止无限等待
-      setTimeout(() => {
-        window.removeEventListener('flowgen:reference-files-registered', handler);
-        resolve({ localRefField });
-      }, 5000);
-      window.addEventListener('flowgen:reference-files-registered', handler);
-    });
-
-    window.dispatchEvent(
-      new CustomEvent('flowgen:register-original-image', {
-        detail: {
-          nodeId,
-          referenceAppend: files,
-          referenceAppendStartIndex: startIndex,
-          referenceLocalRefField: localRefField,
-          referenceAppendAckId: ackId,
-        },
-      })
-    );
-
-    // 等待 IndexedDB 写入完成
-    return waitForRegistration;
-  };
-
-  /** 画布/资产库 URL 拖入参考槽：blob/data 须备份到 IndexedDB，刷新后靠 referenceImageLocalRefs 恢复 */
-  const registerEphemeralPanelRefToLocalStore = async (
-    sourceUrl: string,
-    slotIndex: number,
-    localRefField: PanelReferenceLocalRefField = 'referenceImageLocalRefs'
-  ): Promise<ReferenceAppendRegistration | undefined> => {
-    const u = String(sourceUrl || '').trim();
-    if (!u || isPersistableMediaUrl(u)) return undefined;
-    try {
-      const res = await fetch(u);
-      const blob = await res.blob();
-      const ext = blob.type?.includes('png') ? 'png' : 'jpg';
-      const file = new File([blob], `panel-ref-${slotIndex}.${ext}`, {
-        type: blob.type || 'image/jpeg',
-      });
-      return dispatchReferenceAppendFiles([file], slotIndex, localRefField);
-    } catch (e) {
-      console.warn('[flowgen] panel reference IDB backup failed', e);
-      return undefined;
-    }
-  };
-
   const ingestInspectorReferenceLocalFiles = async (files: File[]) =>
     enqueueInspectorReferenceDrop(() => ingestInspectorReferenceLocalFilesImpl(files));
 
@@ -4085,18 +4176,17 @@ function NodeInspector({
       if (needsMain) {
         const first = imageFiles[0];
         const rest = imageFiles.slice(1);
-        window.dispatchEvent(
-          new CustomEvent('flowgen:register-original-image', {
-            detail: { nodeId, file: first, type: 'main' },
-          })
-        );
         const mainUrl = await compressImageForPreview(first).catch(() => '');
         if (!mainUrl) return;
         const patch: Partial<NodeData> = {
           imagePreview: mainUrl,
           panelMainSlotVisible: undefined,
           panelMainImageUrl: undefined,
+          projectAssetId: undefined, // §10.72：清除资产绑定，确保 IDB 备份不被跳过
         };
+        // §10.73：先 onUpdate 替换 imagePreview（使其不再是资产库 URL），再 dispatchEvent
+        // 触发 IDB 备份。旧顺序（先 dispatchEvent 后 onUpdate）会导致 attachLocalMainRef
+        // 通过 getNodes() 读到旧的资产库 imagePreview 而误判跳过备份。
         if (rest.length > 0) {
           const registered = await dispatchReferenceAppendFiles(rest, 0);
           const refUrls = await compressImagesInBatches(rest, { batchSize: 2 });
@@ -4104,6 +4194,11 @@ function NodeInspector({
         } else {
           onUpdate(patch);
         }
+        window.dispatchEvent(
+          new CustomEvent('flowgen:register-original-image', {
+            detail: { nodeId, file: first, type: 'main' },
+          })
+        );
         return;
       }
       const latestAfterMain = nodeDataRef.current;
@@ -4730,14 +4825,17 @@ function NodeInspector({
     if (slotIdx < 0 || slotIdx >= IMAGE2_MAX_PANEL_SLOTS) return;
     const needsMain = !image2ShowMainInRefGrid;
     if (needsMain && slotIdx === 0) {
-      window.dispatchEvent(
-        new CustomEvent('flowgen:register-original-image', {
-          detail: { nodeId, file, type: 'main' },
-        })
-      );
-      void compressImageForPreview(file).then((mainUrl) =>
-        onUpdate({ imagePreview: mainUrl, panelMainSlotVisible: undefined, panelMainImageUrl: undefined })
-      );
+      // §10.73：先 onUpdate 清除 projectAssetId（让 attachLocalMainRef 的 imagePreview 检查不再命中资产库 URL），
+      // 再 dispatchEvent 触发 IDB 备份。旧顺序（先 dispatchEvent 后 onUpdate）会导致 attachLocalMainRef
+      // 通过 getNodes() 读到旧的资产库 imagePreview 而误判跳过备份。
+      void compressImageForPreview(file).then((mainUrl) => {
+        onUpdate({ imagePreview: mainUrl, panelMainSlotVisible: undefined, panelMainImageUrl: undefined, projectAssetId: undefined });
+        window.dispatchEvent(
+          new CustomEvent('flowgen:register-original-image', {
+            detail: { nodeId, file, type: 'main' },
+          })
+        );
+      });
       return;
     }
     const refSlot = image2ShowMainInRefGrid ? slotIdx - 1 : slotIdx;
@@ -4753,6 +4851,118 @@ function NodeInspector({
         registered
       )
     );
+  };
+
+  /** MidJourney/Niji：sref/cref/oref 参考图上传。面板即转 COS URL，运行时零上传链路 */
+  const handleMjReferenceFile = async (kind: 'sref' | 'cref' | 'oref', file: File | undefined) => {
+    if (!isMidJourney || !file) return;
+    if (!file.type.startsWith('image/') && !/\.(jpe?g|png|webp|gif)$/i.test(file.name)) return;
+    if (file.size > 10 * 1024 * 1024) {
+      alert('单张图片不超过 10MB');
+      return;
+    }
+    const field = kind === 'sref' ? 'mjSrefUrl' : kind === 'cref' ? 'mjCrefUrl' : 'mjOrefUrl';
+    // 本地即时预览（blob:），上传成功后替换为 COS URL
+    const previewUrl = URL.createObjectURL(file);
+    onUpdate({ [field]: previewUrl } as Partial<NodeData>);
+    setMjRefUploading((prev) => ({ ...prev, [kind]: true }));
+    try {
+      const cosUrl = await uploadImage(previewUrl);
+      if (!cosUrl) throw new Error('上传失败：未返回图片地址');
+      onUpdate({ [field]: cosUrl } as Partial<NodeData>);
+    } catch (e) {
+      const raw = e instanceof Error ? e.message : String(e);
+      alert(raw.replace(/\*\*/g, ''));
+      onUpdate({ [field]: undefined } as Partial<NodeData>);
+    } finally {
+      setMjRefUploading((prev) => ({ ...prev, [kind]: false }));
+      URL.revokeObjectURL(previewUrl);
+    }
+  };
+
+  /** 获取当前风格族对应的参考图槽位列表 */
+  const getMjRefSlots = (): Array<{ kind: 'sref' | 'cref' | 'oref'; url?: string }> => {
+    return mjFamily === 'cartoon'
+      ? [{ kind: 'sref' as const, url: data.mjSrefUrl }, { kind: 'cref' as const, url: data.mjCrefUrl }]
+      : [{ kind: 'sref' as const, url: data.mjSrefUrl }, { kind: 'oref' as const, url: data.mjOrefUrl }];
+  };
+
+  /** 画布中键拖入 MJ 参考图区：https:// 直接赋值，blob:/相对路径 用 normalizeInspectorIngestImageUrl 转 data URL 后上传 COS */
+  mjRefFromUrlRef.current = async (url: string, kind?: 'image' | 'video') => {
+    if (!url || kind === 'video') return;
+    const slots = getMjRefSlots();
+    const emptySlot = slots.find((s) => !s.url);
+    if (!emptySlot) return;
+
+    if (/^https?:\/\//i.test(url)) {
+      // COS 外链直接赋值，无需重传
+      onUpdate(
+        (emptySlot.kind === 'sref'
+          ? { mjSrefUrl: url }
+          : emptySlot.kind === 'cref'
+            ? { mjCrefUrl: url }
+            : { mjOrefUrl: url }) as Partial<NodeData>
+      );
+    } else {
+      // blob: 或相对路径 → normalizeInspectorIngestImageUrl（<img> 加载，浏览器自动带 cookie）→ data URL → File → 上传 COS
+      try {
+        const dataUrl = await normalizeInspectorIngestImageUrl(url);
+        if (!dataUrl || !dataUrl.startsWith('data:')) return;
+        const response = await fetch(dataUrl);
+        const blob = await response.blob();
+        const ext = blob.type?.includes('png') ? 'png' : 'jpg';
+        const file = new File([blob], `mj-ref-canvas.${ext}`, { type: blob.type || 'image/jpeg' });
+        await handleMjReferenceFile(emptySlot.kind, file);
+      } catch {
+        /* 拉取失败静默跳过 */
+      }
+    }
+  };
+
+  /** MidJourney/Niji 参考图区域拖放处理：支持本地文件拖入 + 画布中键拖图 */
+  const handleMjRefDrop = async (e: React.DragEvent, targetKind?: 'sref' | 'cref' | 'oref') => {
+    e.preventDefault();
+    e.stopPropagation();
+    setMjRefDragOver(false);
+
+    const localFiles =
+      e.dataTransfer.files && e.dataTransfer.files.length > 0
+        ? Array.from(e.dataTransfer.files)
+        : [];
+
+    if (localFiles.length > 0) {
+      const file = localFiles[0];
+      if (!file.type.startsWith('image/') && !/\.(jpe?g|png|webp|gif)$/i.test(file.name)) return;
+      if (targetKind) {
+        await handleMjReferenceFile(targetKind, file);
+      } else {
+        // 填充第一个空槽位
+        const slots = getMjRefSlots();
+        const emptySlot = slots.find((s) => !s.url);
+        if (emptySlot) await handleMjReferenceFile(emptySlot.kind, file);
+      }
+      return;
+    }
+
+    const internalUrls = extractInspectorDragUrls(e.dataTransfer);
+    if (internalUrls.length > 0) {
+      for (const url of internalUrls) {
+        const slots = getMjRefSlots();
+        const emptySlot = targetKind
+          ? { kind: targetKind, url: data[targetKind === 'sref' ? 'mjSrefUrl' : targetKind === 'cref' ? 'mjCrefUrl' : 'mjOrefUrl'] ? 'filled' : undefined }
+          : slots.find((s) => !s.url);
+        if (!emptySlot || emptySlot.url) break;
+        try {
+          const response = await fetch(url);
+          const blob = await response.blob();
+          const ext = blob.type?.includes('png') ? 'png' : 'jpg';
+          const file = new File([blob], `mj-ref.${ext}`, { type: blob.type || 'image/jpeg' });
+          await handleMjReferenceFile(emptySlot.kind, file);
+        } catch {
+          /* 内部 URL 拉取失败，静默跳过 */
+        }
+      }
+    }
   };
 
   const handleRun = async () => {
@@ -5305,7 +5515,7 @@ function NodeInspector({
                   onChange={(e) => handleModelChange(e.target.value)}
                   className="w-full bg-gray-950 border border-gray-700 hover:border-brand-500 text-gray-200 text-xs rounded-lg px-3 py-2.5 pr-8 focus:outline-none focus:ring-2 focus:ring-brand-500/50 appearance-none transition-all cursor-pointer"
                 >
-                   {INSPECTOR_SELECTABLE_MODELS.map((modelId) => (
+                   {(isTextGenNode ? TEXT_GEN_NODE_MODELS : INSPECTOR_SELECTABLE_MODELS).map((modelId) => (
                      <option key={modelId} value={modelId}>
                        {modelId}
                      </option>
@@ -5320,8 +5530,8 @@ function NodeInspector({
              </div>
           </div>
 
-          {/* SECTION 2: UPLOAD AREA (For Nano Banana) */}
-          {!isKeling && !isJimeng && !isVidu && !isSeedance && (
+          {/* SECTION 2: UPLOAD AREA (For Nano Banana)；Text Node（文生节点）无媒体上传 */}
+          {!isTextGenNode && !isKeling && !isJimeng && !isVidu && !isSeedance && (
             <div className="border-b border-gray-800 bg-gray-900/30 flex-shrink-0 p-4">
               {supportsSubjectLibraryPicker && (
                 <div className="flex gap-2 mb-2">
@@ -5349,6 +5559,8 @@ function NodeInspector({
           )}
 
           {/* SECTION 2: ASSETS / FIRST-LAST FRAME（底部分隔由可拖动 ResizeHandle 承担；第一条可拉高素材区可视高度） */}
+          {/* Text Node（文生节点）：Nano 文生图无素材区，整段（含下方 ResizeHandle）隐藏；image2 仅保留风格、seedance2.0 仅保留文生提示 */}
+          {!(isTextGenNode && !isSeedance20 && !isImage2 && !isMidJourney) && (
           <div className="bg-gray-900/30 flex-shrink-0 min-h-0 flex flex-col">
             <div
               className="min-h-0 flex-1 overflow-y-auto overflow-x-hidden custom-scrollbar flex flex-col"
@@ -5547,13 +5759,26 @@ function NodeInspector({
                                 ) : (
                                     <div className="p-2 grid grid-cols-3 gap-2">
                                         {(() => {
-                                          const omniRefSlots = panelReferenceDisplaySlots(
-                                            klingOmniActiveRefImages
-                                          )
-                                            .map(({ url, slotIndex }) => ({
-                                              img: url,
-                                              origIdx: slotIndex,
-                                            }))
+                                          const omniRefSlots = (klingOmniActiveRefImages || [])
+                                            .map((raw, slotIndex) => {
+                                              const url = String(raw || '').trim();
+                                              const cap = data.referenceImageLabels?.[slotIndex]?.trim();
+                                              let img = url;
+                                              // 参照 Seedance/标准多图参考：非视频参考图按标签做资产库 URL 映射，
+                                              // 使「鸱吻」等命名资产标签显示资产库图片而非原始 blob。
+                                              if (img && !isLikelyMainVideoUrl(img)) {
+                                                const assetUrl = resolveNamedAssetUrlByLabel(cap, projectAssetLabelRows);
+                                                if (assetUrl) img = assetUrl;
+                                              }
+                                              // 兜底：原 URL 为空/失效但标签是命名资产时，仍从资产库取图显示，
+                                              // 修复旧数据 localRef 丢失导致刷新后空白的问题。
+                                              if (!img) {
+                                                const assetUrl = resolveNamedAssetUrlByLabel(cap, projectAssetLabelRows);
+                                                if (assetUrl) img = assetUrl;
+                                              }
+                                              return { img, origIdx: slotIndex };
+                                            })
+                                            .filter(({ img }) => Boolean(img))
                                             .filter(
                                               ({ img }) =>
                                                 // 仅主图格实际展示时去重；否则保留与 imagePreview 同 URL 的参考槽
@@ -5674,6 +5899,13 @@ function NodeInspector({
             ) : isSeedance20 ? (
                 /* === Seedance2.0 三 Tab 资产区 === */
                 <div className="p-4 flex flex-col gap-3">
+                    {isTextGenNode ? (
+                        /* Text Node（文生节点）：仅文生视频，隐藏三 Tab 与素材区 */
+                        <div className="text-[10px] text-red-300 px-2 py-2 leading-relaxed text-center bg-red-500/10 border border-red-500/30 rounded-lg">
+                            ⚠ 文生视频以文字描述为主，请在下方提示词中写清主体、场景、运镜与风格。
+                        </div>
+                    ) : (
+                    <>
                     <div className="flex items-center gap-1.5 flex-wrap">
                         {(
                             [
@@ -6041,6 +6273,8 @@ function NodeInspector({
                             </div>
                         </>
                     )}
+                    </>
+                    )}
                 </div>
             ) : (isKeling || isVidu || isSeedance15) ? (
                 /* === KELING / VIDU / SEEDANCE 首尾帧 UI（与 Input 节点一致，Output Mov 节点也显示）=== */
@@ -6116,8 +6350,208 @@ function NodeInspector({
                         </div>
                     </div>
                 </div>
+            ) : isMidJourney ? (
+                /* === MIDJOURNEY 文生图（Text Node 专属）：风格族 + 参考图 + 风格 + 高级参数 === */
+                <div className="p-4 flex flex-col gap-3">
+                  {/* 风格族切换 */}
+                  <div>
+                    <div className="flex items-center gap-2 mb-1.5">
+                      <Sparkles className="text-brand-500 w-3 h-3" />
+                      <span className="text-[10px] font-bold text-gray-400 uppercase tracking-wider">风格</span>
+                    </div>
+                    <div className="flex gap-2">
+                      {MJ_FAMILY_OPTIONS.map((f) => {
+                        const active = mjFamily === f.id;
+                        return (
+                          <button
+                            key={f.id}
+                            type="button"
+                            onClick={() => {
+                              const nextFamily = f.id;
+                              const nextVersion =
+                                nextFamily === 'cartoon'
+                                  ? (data.mjVersion && MJ_VERSION_OPTIONS_CARTOON.includes(data.mjVersion as any)
+                                      ? data.mjVersion
+                                      : MJ_DEFAULT_VERSION_CARTOON)
+                                  : data.mjVersion && MJ_VERSION_OPTIONS_REALISTIC.includes(data.mjVersion as any)
+                                    ? data.mjVersion
+                                    : MJ_DEFAULT_VERSION_REALISTIC;
+                              onUpdate({ mjFamily: nextFamily, mjVersion: nextVersion });
+                            }}
+                            className={`flex-1 py-2 px-2 text-xs font-medium rounded-lg border transition-colors ${
+                              active
+                                ? 'bg-brand-500/20 text-brand-400 border-brand-500/30'
+                                : 'bg-gray-950 border-gray-700 text-gray-500 hover:border-gray-600'
+                            }`}
+                          >
+                            {f.label}
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </div>
+
+                  {/* 风格下拉（API style 字段） */}
+                  <div>
+                    <div className="flex items-center gap-2 mb-1.5">
+                      <Info size={12} className="text-gray-500 shrink-0" />
+                      <span className="text-[10px] font-bold text-gray-400 uppercase tracking-wider">风格选项</span>
+                    </div>
+                    <div className="relative">
+                      <select
+                        value={data.mjStyle || ''}
+                        onChange={(e) => onUpdate({ mjStyle: e.target.value || undefined })}
+                        className="w-full bg-gray-950 border border-gray-700 hover:border-brand-500 text-gray-200 text-xs rounded px-2 py-2 pr-6 appearance-none focus:outline-none focus:ring-1 focus:ring-brand-500"
+                      >
+                        <option value="">默认（不传 style）</option>
+                        {MJ_STYLE_OPTIONS.map((s) => (
+                          <option key={s.value} value={s.value}>
+                            {s.name}
+                          </option>
+                        ))}
+                      </select>
+                      <ChevronDown className="absolute right-2 top-1/2 -translate-y-1/2 w-3 h-3 text-gray-500 pointer-events-none" />
+                    </div>
+                  </div>
+
+                  {/* 参考图（默认折叠） */}
+                  <div className="border border-gray-800 rounded-lg overflow-hidden">
+                    <button
+                      type="button"
+                      onClick={() => { const v = !mjRefImagesOpen; setMjRefImagesOpen(v); onUpdate({ mjRefImagesOpen: v } as Partial<NodeData>); }}
+                      className="w-full flex items-center justify-between px-3 py-2 bg-gray-900/40 hover:bg-gray-800/60 transition-colors"
+                    >
+                      <div className="flex items-center gap-2">
+                        <ImageIcon className="text-blue-400 w-3 h-3" />
+                        <span className="text-[10px] font-bold text-gray-400 uppercase tracking-wider">
+                          参考图（选填）
+                        </span>
+                      </div>
+                      <ChevronDown
+                        className={`w-3 h-3 text-gray-500 transition-transform ${mjRefImagesOpen ? 'rotate-180' : ''}`}
+                      />
+                    </button>
+                    {mjRefImagesOpen && (
+                      <div
+                        className={`p-3 flex flex-col gap-2 rounded-b-lg transition-colors ${
+                          mjRefDragOver ? 'bg-brand-500/5 border-brand-500/60' : ''
+                        }`}
+                        data-flowgen-media-drop="1"
+                        data-flowgen-node-id={nodeId}
+                        data-flowgen-drop-zone="mj-reference"
+                        onDragOver={(e) => {
+                          e.preventDefault();
+                          e.stopPropagation();
+                          e.dataTransfer.dropEffect = 'copy';
+                          if (!mjRefDragOver) setMjRefDragOver(true);
+                        }}
+                        onDragLeave={(e) => {
+                          e.preventDefault();
+                          e.stopPropagation();
+                          if (mjRefDragOver) setMjRefDragOver(false);
+                        }}
+                        onDrop={(e) => void handleMjRefDrop(e)}
+                      >
+                        <div className="grid grid-cols-2 gap-2">
+                          {(
+                            (mjFamily === 'cartoon'
+                              ? [
+                                  { kind: 'sref' as const, label: '风格一致性图', url: data.mjSrefUrl },
+                                  { kind: 'cref' as const, label: '角色一致性图', url: data.mjCrefUrl },
+                                ]
+                              : [
+                                  { kind: 'sref' as const, label: '风格一致性图', url: data.mjSrefUrl },
+                                  { kind: 'oref' as const, label: '参照万物图', url: data.mjOrefUrl },
+                                ]) as Array<{ kind: 'sref' | 'cref' | 'oref'; label: string; url?: string }>
+                          ).map((slot) => {
+                            const slotUrl = String(slot.url || '').trim();
+                            const uploading = Boolean(mjRefUploading[slot.kind]);
+                            return (
+                              <div key={slot.kind} className="flex flex-col gap-1 min-w-0">
+                                {slotUrl ? (
+                                  <div
+                                    className="group relative aspect-square rounded-lg overflow-hidden border border-gray-700 bg-gray-900"
+                                    onDragOver={(e) => {
+                                      e.preventDefault();
+                                      e.stopPropagation();
+                                      e.dataTransfer.dropEffect = 'copy';
+                                    }}
+                                    onDrop={(e) => void handleMjRefDrop(e, slot.kind)}
+                                  >
+                                    <img
+                                      src={resolveDisplayMediaUrl(slotUrl)}
+                                      alt={slot.label}
+                                      className="w-full h-full object-cover"
+                                    />
+                                    {uploading && (
+                                      <div className="absolute inset-0 bg-black/60 flex items-center justify-center">
+                                        <Loader2 size={16} className="animate-spin text-brand-400" />
+                                      </div>
+                                    )}
+                                    <button
+                                      type="button"
+                                      title="移除"
+                                      onClick={() =>
+                                        onUpdate(
+                                          (slot.kind === 'sref'
+                                            ? { mjSrefUrl: undefined }
+                                            : slot.kind === 'cref'
+                                              ? { mjCrefUrl: undefined }
+                                              : { mjOrefUrl: undefined }) as Partial<NodeData>
+                                        )
+                                      }
+                                      className="absolute top-1 right-1 p-0.5 bg-black/60 hover:bg-red-500 text-white rounded opacity-0 group-hover:opacity-100 transition-opacity z-[2]"
+                                    >
+                                      <X size={12} />
+                                    </button>
+                                  </div>
+                                ) : (
+                                  <button
+                                    type="button"
+                                    disabled={uploading}
+                                    onClick={() => {
+                                      const inp = document.createElement('input');
+                                      inp.type = 'file';
+                                      inp.accept = 'image/jpeg,image/png,image/webp,.jpg,.jpeg,.png,.webp';
+                                      inp.onchange = () => void handleMjReferenceFile(slot.kind, inp.files?.[0]);
+                                      inp.click();
+                                    }}
+                                    onDragOver={(e) => {
+                                      e.preventDefault();
+                                      e.stopPropagation();
+                                      e.dataTransfer.dropEffect = 'copy';
+                                    }}
+                                    onDrop={(e) => void handleMjRefDrop(e, slot.kind)}
+                                    className="w-full aspect-square rounded-lg border border-dashed border-gray-700 bg-gray-950/50 hover:border-gray-500 flex flex-col items-center justify-center gap-1.5 text-gray-500 transition-colors cursor-pointer disabled:opacity-60"
+                                  >
+                                    {uploading ? (
+                                      <Loader2 size={16} className="animate-spin text-brand-400" />
+                                    ) : (
+                                      <UploadCloud className="w-5 h-5 opacity-60" />
+                                    )}
+                                    <span className="text-[10px]">上传图片</span>
+                                  </button>
+                                )}
+                                <span className="text-[9px] text-gray-500 text-center leading-tight">
+                                  {slot.label}
+                                </span>
+                              </div>
+                            );
+                          })}
+                        </div>
+                        <div className="text-[9px] text-gray-600 leading-snug">
+                          {mjFamily === 'cartoon'
+                            ? '风格一致性图=sref 保持画风一致；角色一致性图=cref 保持角色一致'
+                            : '风格一致性图=sref 保持画风一致；参照万物图=oref 全局参考'}
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                </div>
             ) : isImage2 ? (
                 <div className="p-4 flex flex-col gap-3">
+                  {/* Text Node（文生节点）：image2 文生图无多图参考，仅保留风格 */}
+                  {!isTextGenNode && (
                   <div>
                     <div className="flex items-center justify-between mb-1.5">
                       <div className="flex items-center gap-2">
@@ -6251,6 +6685,7 @@ function NodeInspector({
                       </div>
                     </div>
                   </div>
+                  )}
 
                   <div>
                     <div className="flex items-center gap-2 mb-1.5">
@@ -6436,11 +6871,14 @@ function NodeInspector({
             )}
             </div>
           </div>
+          )}
 
-          <InspectorResizeHandle
-            title="拖动：仅调整素材区高度，下方整体上移或下移"
-            onPointerDown={(e) => beginInspectorResize('assetsPrompt', e)}
-          />
+          {!(isTextGenNode && !isSeedance20 && !isImage2 && !isMidJourney) && (
+            <InspectorResizeHandle
+              title="拖动：仅调整素材区高度，下方整体上移或下移"
+              onPointerDown={(e) => beginInspectorResize('assetsPrompt', e)}
+            />
+          )}
 
           {/* SECTION 4–5: 创意描述 + 不希望呈现的内容（紧贴素材区下方，全模型统一顺序） */}
           {/* SECTION 4: PROMPT — 与输入区同一背景，避免标题与 textarea 之间出现“分割线”观感 */}
@@ -6451,7 +6889,7 @@ function NodeInspector({
                 <Type className="text-purple-400 w-3 h-3" />
                 <span className="text-[10px] font-bold text-gray-400 uppercase tracking-wider">创意描述</span>
               </div>
-              {projectAssetLibraryEnabled && (
+              {projectAssetLibraryEnabled && !isTextGenNode && (
                 <div className="flex flex-wrap items-center gap-1.5 justify-end max-w-[70%]">
                   <span className="text-[9px] text-gray-500 shrink-0">素材引用:</span>
                   <button
@@ -6538,7 +6976,9 @@ function NodeInspector({
                           : 'text-gray-200'
                       }`}
                       placeholder={
-                          isJimeng
+                          isTextGenNode
+                            ? '输入文字描述生成图片/视频（纯文生，无需 @ 引用素材）'
+                            : isJimeng
                             ? promptMentionItems.length > 0
                               ? '模板：先写【身份锁定：严格保持@主图人物身份与面部不变】→ 再写【仅允许变化】→ 再写【禁止变化】→ 最后写【画面要求】。输入 @ 可引用主图/主视频与拖入素材（@图片1/@视频1；简写 @图片/@视频=第1项）'
                               : '模板：先写【身份锁定】→【仅允许变化】→【禁止变化】→【画面要求】'
@@ -7309,6 +7749,184 @@ function NodeInspector({
                         </div>
                     </div>
                 </>
+            ) : isMidJourney ? (
+                /* === MIDJOURNEY SETTINGS：版本/比例/画质/计费模式/数量/高级参数 === */
+                <>
+                    {/* 模型版本 */}
+                    <div className="space-y-1">
+                        <div className="flex items-center gap-2 text-gray-400">
+                            <Info size={12} className="text-gray-500 shrink-0" />
+                            <Sparkles size={12} />
+                            <span className="text-[10px] font-bold uppercase tracking-wider">模型版本</span>
+                        </div>
+                        <div className="flex gap-2">
+                            {(mjFamily === 'cartoon' ? MJ_VERSION_OPTIONS_CARTOON : MJ_VERSION_OPTIONS_REALISTIC).map((v) => {
+                                const active = (data.mjVersion || (mjFamily === 'cartoon' ? MJ_DEFAULT_VERSION_CARTOON : MJ_DEFAULT_VERSION_REALISTIC)) === v;
+                                const display = v.trim().replace(/^--\s*/, '');
+                                return (
+                                    <button
+                                        key={v}
+                                        type="button"
+                                        onClick={() => onUpdate({ mjVersion: v })}
+                                        className={`flex-1 py-2 px-2 text-xs font-medium rounded-lg border transition-colors ${
+                                            active
+                                                ? 'bg-brand-500/20 text-brand-400 border-brand-500/30'
+                                                : 'bg-gray-950 border-gray-700 text-gray-500 hover:border-gray-600'
+                                        }`}
+                                    >
+                                        {display}
+                                    </button>
+                                );
+                            })}
+                        </div>
+                    </div>
+                    {/* 画面比例 */}
+                    <div className="space-y-1">
+                        <div className="flex items-center gap-2 text-gray-400">
+                            <Ratio size={12} />
+                            <span className="text-[10px] font-bold uppercase tracking-wider">画面比例</span>
+                        </div>
+                        <div className="flex gap-2 flex-wrap">
+                            {MJ_RATIO_OPTIONS.map((r) => (
+                                <button
+                                    key={r}
+                                    type="button"
+                                    onClick={() => onUpdate({ mjRatio: r })}
+                                    className={`flex-1 min-w-0 py-2 px-2 text-xs font-medium rounded-lg border transition-colors ${
+                                        (data.mjRatio || '1:1') === r
+                                            ? 'bg-brand-500/20 text-brand-400 border-brand-500/30'
+                                            : 'bg-gray-950 border-gray-700 text-gray-500 hover:border-gray-600'
+                                    }`}
+                                >
+                                    {r}
+                                </button>
+                            ))}
+                        </div>
+                    </div>
+                    {/* 画质 */}
+                    <div className="space-y-1">
+                        <div className="flex items-center gap-2 text-gray-400">
+                            <Monitor size={12} />
+                            <span className="text-[10px] font-bold uppercase tracking-wider">画质</span>
+                        </div>
+                        <div className="relative">
+                            <select
+                                value={data.mjQuality || '1'}
+                                onChange={(e) => onUpdate({ mjQuality: e.target.value })}
+                                className="w-full bg-gray-950 border border-gray-700 hover:border-brand-500 text-gray-200 text-xs rounded px-2 py-2 pr-6 appearance-none focus:outline-none focus:ring-1 focus:ring-brand-500"
+                            >
+                                {MJ_QUALITY_OPTIONS.map((q) => (
+                                    <option key={q.value} value={q.value}>
+                                        {q.name}
+                                    </option>
+                                ))}
+                            </select>
+                            <ChevronDown className="absolute right-2 top-1/2 -translate-y-1/2 w-3 h-3 text-gray-500 pointer-events-none" />
+                        </div>
+                    </div>
+                    {/* 计费模式 */}
+                    <div className="space-y-1">
+                        <div className="flex items-center gap-2 text-gray-400">
+                            <Zap size={12} />
+                            <span className="text-[10px] font-bold uppercase tracking-wider">计费模式</span>
+                        </div>
+                        <div className="flex gap-2">
+                            {(
+                                [
+                                    { id: 'FAST' as const, label: 'FAST 快速', sub: '30 积分' },
+                                    { id: 'RELAX' as const, label: 'RELAX 低速', sub: '15 积分' },
+                                ] as const
+                            ).map((m) => {
+                                const active = (data.mjMode || 'FAST') === m.id;
+                                return (
+                                    <button
+                                        key={m.id}
+                                        type="button"
+                                        onClick={() => onUpdate({ mjMode: m.id })}
+                                        className={`flex-1 py-2 px-2 text-xs font-medium rounded-lg border transition-colors ${
+                                            active
+                                                ? 'bg-brand-500/20 text-brand-400 border-brand-500/30'
+                                                : 'bg-gray-950 border-gray-700 text-gray-500 hover:border-gray-600'
+                                        }`}
+                                    >
+                                        <div>{m.label}</div>
+                                        <div className="text-[9px] opacity-70 mt-0.5">{m.sub}</div>
+                                    </button>
+                                );
+                            })}
+                        </div>
+                    </div>
+                    {/* 图像数量 */}
+                    <div className="space-y-1">
+                        <div className="flex items-center gap-2 text-gray-400">
+                            <Layers size={12} />
+                            <span className="text-[10px] font-bold uppercase tracking-wider">图像数量</span>
+                        </div>
+                        <div className="relative">
+                            <select
+                                value={data.numberOfImages || '1张'}
+                                onChange={(e) => onUpdate({ numberOfImages: e.target.value })}
+                                className="w-full bg-gray-950 border border-gray-700 hover:border-brand-500 text-gray-200 text-xs rounded px-2 py-2 pr-6 appearance-none focus:outline-none focus:ring-1 focus:ring-brand-500"
+                            >
+                                <option value="1张">1张</option>
+                                <option value="2张">2张</option>
+                                <option value="3张">3张</option>
+                                <option value="4张">4张</option>
+                            </select>
+                            <ChevronDown className="absolute right-2 top-1/2 -translate-y-1/2 w-3 h-3 text-gray-500 pointer-events-none" />
+                        </div>
+                    </div>
+                    {/* 高级参数（默认折叠） */}
+                    <div className="border border-gray-800 rounded-lg overflow-hidden">
+                        <button
+                            type="button"
+                            onClick={() => { const v = !mjAdvancedOpen; setMjAdvancedOpen(v); onUpdate({ mjAdvancedOpen: v } as Partial<NodeData>); }}
+                            className="w-full flex items-center justify-between px-3 py-2 bg-gray-900/40 hover:bg-gray-800/60 transition-colors"
+                        >
+                            <div className="flex items-center gap-2">
+                                <SlidersHorizontal size={12} className="text-gray-500" />
+                                <span className="text-[10px] font-bold text-gray-400 uppercase tracking-wider">高级参数</span>
+                            </div>
+                            <ChevronDown
+                                className={`w-3 h-3 text-gray-500 transition-transform ${mjAdvancedOpen ? 'rotate-180' : ''}`}
+                            />
+                        </button>
+                        {mjAdvancedOpen && (
+                            <div className="p-3 flex flex-col gap-3">
+                                {([
+                                    { key: 'mjAngle', label: '视角', options: MJ_ANGLE_OPTIONS },
+                                    { key: 'mjCamera', label: '人物镜头', options: MJ_CAMERA_OPTIONS },
+                                    { key: 'mjLight', label: '灯光', options: MJ_LIGHT_OPTIONS },
+                                    { key: 'mjArt', label: '艺术程度', options: MJ_ART_OPTIONS },
+                                ] as const).map((field) => (
+                                    <div key={field.key}>
+                                        <div className="flex items-center gap-2 mb-1.5">
+                                            <Info size={12} className="text-gray-500 shrink-0" />
+                                            <span className="text-[10px] font-bold text-gray-400 uppercase tracking-wider">{field.label}</span>
+                                        </div>
+                                        <div className="relative">
+                                            <select
+                                                value={(data as any)[field.key] || ''}
+                                                onChange={(e) =>
+                                                    onUpdate({ [field.key]: e.target.value || undefined } as Partial<NodeData>)
+                                                }
+                                                className="w-full bg-gray-950 border border-gray-700 hover:border-brand-500 text-gray-200 text-xs rounded px-2 py-2 pr-6 appearance-none focus:outline-none focus:ring-1 focus:ring-brand-500"
+                                            >
+                                                <option value="">默认（不传 {field.label}）</option>
+                                                {field.options.map((opt) => (
+                                                    <option key={opt.value} value={opt.value}>
+                                                        {opt.name}
+                                                    </option>
+                                                ))}
+                                            </select>
+                                            <ChevronDown className="absolute right-2 top-1/2 -translate-y-1/2 w-3 h-3 text-gray-500 pointer-events-none" />
+                                        </div>
+                                    </div>
+                                ))}
+                            </div>
+                        )}
+                    </div>
+                </>
             ) : isImage2 ? (
                 <>
                     <div className="space-y-1">
@@ -7954,4 +8572,4 @@ function NodeInspector({
 }
 
 export { NodeInspector };
-export default NodeInspector;
+export default React.memo(NodeInspector);

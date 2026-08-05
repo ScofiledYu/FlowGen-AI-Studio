@@ -51,6 +51,18 @@ const steps = [
   { label: '20260713-export-json-main-image', cmd: 'npm', args: ['run', 'test:20260713-export-json-main-image'] },
   { label: '20260714-seedance-reference-consistency', cmd: 'npm', args: ['run', 'test:20260714-seedance-reference-consistency'] },
   { label: '20260715-seedance-unreferenced-filter', cmd: 'npm', args: ['run', 'test:20260715-seedance-unreferenced-filter'] },
+  { label: 'text-gen-node', cmd: 'npm', args: ['run', 'test:text-gen-node'] },
+  { label: 'parallel-run-partial-failure', cmd: 'npm', args: ['run', 'test:parallel-run-partial-failure'] },
+  { label: 'run-error-panel-rollback', cmd: 'npm', args: ['run', 'test:run-error-panel-rollback'] },
+  { label: 'run-error-hydrate-blob-recovery', cmd: 'npm', args: ['run', 'test:run-error-hydrate-blob-recovery'] },
+  // §10.73 全模型刷新后 blob 持久化回归（防回归 image2 timing-race / 资产绑定 / cross-model）
+  { label: 'all-models-refresh-blob-persistence', cmd: 'npm', args: ['run', 'test:all-models-refresh-blob-persistence'] },
+  { label: 'cross-model-no-run-refresh-blob', cmd: 'npm', args: ['run', 'test:cross-model-no-run-refresh-blob'] },
+  { label: 'image2-timing-race-blob-loss', cmd: 'npm', args: ['run', 'test:image2-timing-race-blob-loss'] },
+  { label: 'image2-asset-binding-blob-loss', cmd: 'npm', args: ['run', 'test:image2-asset-binding-blob-loss'] },
+  { label: 'node-main-drag-normalize-override', cmd: 'npm', args: ['run', 'test:node-main-drag-normalize-override'] },
+  // §10.75 attachLocalReferenceRefs 移除 projectAssetId 守卫 → 资产库节点参考图可备份到 IDB（防回归）
+  { label: 'attach-local-reference-refs-backup', cmd: 'npm', args: ['run', 'test:attach-local-reference-refs-backup'] },
 ];
 
 console.log('=== FlowGen test:gate（回归门禁）===\n');

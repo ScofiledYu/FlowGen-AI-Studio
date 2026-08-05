@@ -3,6 +3,7 @@
  * npx tsx scripts/llm-web-search-probe-test.ts
  */
 import {
+  buildFallbackSearchAwareMessage,
   buildWebSearchProbeQueryFallback,
   isAssistantIdentityQuestion,
   isNonSearchableChatUtterance,
@@ -123,7 +124,59 @@ function runFallbackUnitTests() {
       { role: 'assistant', content: '深中梅香实验学校 深中龙华附属学校 普高率 四大率…' },
     ])
   );
-  const total = 13;
+  pass += assert(
+    '主语省略型追问补全东北实体',
+    /东北/.test(
+      buildWebSearchProbeQueryFallback('你认为未来会成为怎样的地位', [
+        { role: 'user', content: '介绍一下东北经济振兴的难点' },
+        { role: 'assistant', content: '东北经济面临计划经济路径依赖、人口外流等挑战…' },
+      ])
+    ),
+    buildWebSearchProbeQueryFallback('你认为未来会成为怎样的地位', [
+      { role: 'user', content: '介绍一下东北经济振兴的难点' },
+      { role: 'assistant', content: '东北经济面临计划经济路径依赖、人口外流等挑战…' },
+    ])
+  );
+  pass += assert(
+    '独立问句不被历史污染',
+    !/东北/.test(
+      buildWebSearchProbeQueryFallback('深圳今天天气怎么样', [
+        { role: 'user', content: '介绍一下东北经济振兴的难点' },
+        { role: 'assistant', content: '东北经济面临…' },
+      ])
+    ),
+    buildWebSearchProbeQueryFallback('深圳今天天气怎么样', [
+      { role: 'user', content: '介绍一下东北经济振兴的难点' },
+      { role: 'assistant', content: '东北经济面临…' },
+    ])
+  );
+  pass += assert(
+    'fallback 搜索感知 message 含独立检索问题',
+    /东北地区未来会成为怎样的经济地位/.test(
+      buildFallbackSearchAwareMessage(
+        '历史…\n用户：你认为未来会成为怎样的地位',
+        '东北地区未来会成为怎样的经济地位？',
+        '你认为未来会成为怎样的地位'
+      )
+    ),
+    buildFallbackSearchAwareMessage(
+      '历史…\n用户：你认为未来会成为怎样的地位',
+      '东北地区未来会成为怎样的经济地位？',
+      '你认为未来会成为怎样的地位'
+    )
+  );
+  pass += assert(
+    'fallback 搜索感知 message 保留原始追问',
+    /用户原始追问：那明天呢/.test(
+      buildFallbackSearchAwareMessage(
+        '历史…',
+        '广州明天天气怎么样？',
+        '那明天呢'
+      )
+    ),
+    buildFallbackSearchAwareMessage('历史…', '广州明天天气怎么样？', '那明天呢')
+  );
+  const total = 17;
   return { pass, fail: total - pass };
 }
 
@@ -173,6 +226,33 @@ async function runApiRewriteTests() {
     ],
     '深中梅香实验学校小学部怎么样',
     (q) => /深中梅香|小学部/.test(q) && !/天气|深圳.*天气/.test(q)
+  );
+  await runCase(
+    '主语省略型追问补全东北实体',
+    [
+      { role: 'user', content: '介绍一下东北经济振兴的难点' },
+      { role: 'assistant', content: '东北经济面临计划经济路径依赖、人口外流等挑战…' },
+    ],
+    '你认为未来会成为怎样的地位',
+    (q) => /东北/.test(q) && !/你认为未来会成为怎样的地位/.test(q)
+  );
+  await runCase(
+    '指代型追问补全广州明天天气',
+    [
+      { role: 'user', content: '广州今天天气怎么样' },
+      { role: 'assistant', content: '广州今天多云，25-32度…' },
+    ],
+    '那明天呢',
+    (q) => /广州.*明天.*天气|明天.*广州.*天气/.test(q)
+  );
+  await runCase(
+    'topic-shift 不串历史',
+    [
+      { role: 'user', content: '北京今天天气怎么样' },
+      { role: 'assistant', content: '北京今天晴…' },
+    ],
+    '深圳今天天气怎么样',
+    (q) => /深圳.*天气/.test(q) && !/北京/.test(q)
   );
 
   return { pass, fail };

@@ -46,7 +46,7 @@ function withScoreProjectId(payload: object): object {
 export function isPreloadDebugEnabled(): boolean {
   if (typeof window === 'undefined') return false;
   const w = window as Window & { __FLOWGEN_DEBUG_PRELOAD__?: boolean };
-  return w.__FLOWGEN_DEBUG_PRELOAD__ === true;
+  return w.__FLOWGEN_DEBUG_PRELOAD__ !== false;
 }
 
 /** 控制台打印 JSON preload（每次发往 AITOP 只打一条，含 domainAccount / scoreProjectId） */
@@ -551,6 +551,132 @@ export async function createImage2Task(
   } catch (e) {
     if (e instanceof Error) throw e;
     throw new Error(`**❌ image 2 请求异常**\n**错误：** ${String(e)}`);
+  }
+}
+
+/** MidJourney 文生图创建任务参数（POST /api/v1/images/mj/imagine，已实测 2026-07-23） */
+export interface MjImagineTaskOptions {
+  /** API model 字段：' --v 7' | ' --v 6.1' | ' --v 6' | ' --niji6' | ' --niji5'（含前导空格） */
+  mjVersion: string;
+  /** 计费模式：FAST=30 积分 / RELAX=15 积分 */
+  mjMode: 'FAST' | 'RELAX';
+  /** 画面比例：'1:1' | '4:3' | '3:4' | '16:9' | '9:16'（文档示例字段，已实测接受） */
+  mjRatio?: string;
+  /** 风格（API style 字段，空=不传） */
+  mjStyle?: string;
+  /** 画质档：'0.25' | '0.5' | '1' | '2'（空=不传） */
+  mjQuality?: string;
+  /** 视角（API angle 字段，空=不传） */
+  mjAngle?: string;
+  /** 人物镜头（API camera 字段，空=不传） */
+  mjCamera?: string;
+  /** 灯光（API light 字段，空=不传） */
+  mjLight?: string;
+  /** 艺术程度（API art 字段，空=不传） */
+  mjArt?: string;
+  /** 风格一致性图 URL（sref，选填） */
+  mjSrefUrl?: string;
+  /** 角色一致性图 URL（cref，选填） */
+  mjCrefUrl?: string;
+  /** 参照万物/全局参考图 URL（oref，选填） */
+  mjOrefUrl?: string;
+  /** 并行多图批量标记（与 Nano/image2 同款） */
+  clientBatchIndex?: number;
+  clientBatchTotal?: number;
+  /** 面板日志展示用模型名 */
+  logModelName?: string;
+}
+
+/**
+ * MidJourney/Niji 文生图【创建任务】
+ * 接口：POST /api/v1/images/mj/imagine
+ * 文档：https://docs.qingque.cn/d/home/eZQA2UGOKwvFp1-_Np_AoD-tJ#section=h.iqutor95zd0c
+ * 已实测（test-mj-imagine.ts）：FAST/RELAX 计费、model 前导空格、ratio 字段均接受
+ */
+export async function createMjImagineTask(
+  prompt: string,
+  options: MjImagineTaskOptions
+): Promise<string | null> {
+  const endpoint = '/api/v1/images/mj/imagine';
+  const fullUrl = `${BASE_URL}${endpoint}`;
+  const logName = options.logModelName || 'MidJourney';
+  try {
+    const payload: Record<string, unknown> = {
+      platform: 'MidJourney',
+      prompt,
+      mode: options.mjMode === 'RELAX' ? 'RELAX' : 'FAST',
+      model: options.mjVersion,
+    };
+    if (options.mjRatio) payload.ratio = options.mjRatio;
+    if (options.mjStyle?.trim()) payload.style = options.mjStyle.trim();
+    if (options.mjQuality) payload.quality = options.mjQuality;
+    if (options.mjAngle?.trim()) payload.angle = options.mjAngle.trim();
+    if (options.mjCamera?.trim()) payload.camera = options.mjCamera.trim();
+    if (options.mjLight?.trim()) payload.light = options.mjLight.trim();
+    if (options.mjArt?.trim()) payload.art = options.mjArt.trim();
+    // sref/cref/oref 仅透传 http(s) COS URL；面板上传中（blob:）时不下发，避免 API 拉取失败
+    const mjRefUrl = (u?: string) => {
+      const s = String(u || '').trim();
+      return /^https?:\/\//i.test(s) ? s : '';
+    };
+    const sref = mjRefUrl(options.mjSrefUrl);
+    const cref = mjRefUrl(options.mjCrefUrl);
+    const oref = mjRefUrl(options.mjOrefUrl);
+    if (sref) payload.sref = sref;
+    if (cref) payload.cref = cref;
+    if (oref) payload.oref = oref;
+    if (options.clientBatchTotal != null && options.clientBatchTotal > 1) {
+      payload.clientBatchIndex = options.clientBatchIndex ?? 1;
+      payload.clientBatchTotal = options.clientBatchTotal;
+    }
+
+    const mjHeaders = aitopJsonHeaders();
+    const mjBody = withScoreProjectId(payload);
+    logAitopModelRequest({
+      model: logName,
+      method: 'POST',
+      url: fullUrl,
+      headers: mjHeaders,
+      body: mjBody,
+    });
+    const response = await fetch(fullUrl, {
+      method: 'POST',
+      headers: mjHeaders,
+      body: JSON.stringify(mjBody),
+    });
+
+    if (!response.ok) {
+      let errorDetail = '';
+      try {
+        const errorData = await response.json();
+        errorDetail =
+          errorData?.message ||
+          errorData?.msg ||
+          (errorData?.error ? JSON.stringify(errorData.error) : JSON.stringify(errorData));
+      } catch {
+        try {
+          errorDetail = await response.text();
+        } catch {
+          errorDetail = response.statusText;
+        }
+      }
+      throw new Error(
+        `**❌ ${logName} API 调用失败**\n**错误：** [${endpoint}] HTTP ${response.status} ${response.statusText} - ${errorDetail || 'Unknown'}`
+      );
+    }
+
+    const data = await response.json();
+    if (data.code === 0 && data.success) {
+      const taskId = data.data?.taskId;
+      if (taskId) return taskId;
+      throw new Error(`**❌ ${logName} API 调用失败**\n**错误：** [${endpoint}] success but missing taskId`);
+    }
+    throw new Error(
+      `**❌ ${logName} API 调用失败**\n**错误：** [${endpoint}] ${data.message || data.msg || JSON.stringify(data)}`
+    );
+  } catch (e) {
+    if (e instanceof Error) throw e;
+    throw new Error(`**❌ ${logName} 请求异常**\n**错误：** ${String(e)}`);
   }
 }
 

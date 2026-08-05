@@ -87,13 +87,15 @@ export async function pollVideoTaskUntilUrl(
   throw new Error(`**❌ ${label} 任务失败**\n\n**错误消息：** 视频生成超时`);
 }
 
-/** 创建 count 个独立任务（每个 generateNum=1），并行轮询，返回 URL 列表。 */
+/** 创建 count 个独立任务（每个 generateNum=1），并行轮询，返回 { urls, errors }。
+ *  urls：成功的结果 URL（保序）；errors：失败任务的错误详情（含任务序号）。
+ *  调用方应检查 errors.length 并提示用户部分失败，避免静默丢失。 */
 export async function runParallelGenerationTasks(
   count: number,
   createTask: (index: number) => Promise<string | null>,
   pollTask: (taskId: string, index: number) => Promise<string>,
   onTaskCreated?: (taskId: string, index: number) => void
-): Promise<string[]> {
+): Promise<{ urls: string[]; errors: string[] }> {
   const taskIds: string[] = [];
   const errors: string[] = [];
   for (let i = 0; i < count; i++) {
@@ -137,5 +139,5 @@ export async function runParallelGenerationTasks(
       `**❌ 批量生成失败**\n\n未获取到任何结果 URL。\n\n**错误详情：**\n${errors.join('\n')}`
     );
   }
-  return urls;
+  return { urls, errors };
 }

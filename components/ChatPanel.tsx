@@ -32,11 +32,12 @@ import { resolveNodeSelectionPreviewUrl } from '../utils/nodeDetailsPreview';
 import type { ProjectAssetLabelRow } from '../utils/referenceImageSlotLabels';
 import { buildNodePromptUpdatePatch } from '../utils/promptMediaRefs';
 import { profileSync } from '../utils/runtimeProfile';
-import { isAssistantIdentityQuestion, isNonSearchableChatUtterance, resolveWebSearchProbeQuery } from '../utils/webSearchProbe';
+import { buildFallbackSearchAwareMessage, isAssistantIdentityQuestion, isNonSearchableChatUtterance, resolveWebSearchProbeQuery } from '../utils/webSearchProbe';
 import {
   ASSISTANT_MARKER_THINKING,
   ASSISTANT_MARKER_WEB_SEARCH,
   composeAssistantMessage,
+  extractNativeThinkTags,
   isLikelyRawWebSearchDump,
   isLikelyTooShortMainAnswer,
   localizeWebSearchProcessForDisplay,
@@ -56,6 +57,7 @@ import {
   parseAssistantMessage,
   resolveAssistantDisplaySections,
   stripAssistantProcessForHistory,
+  compressAssistantProcessForHistory,
   isInternalPromptLeakQuery,
   isInternalPromptBoilerplateLine,
   stripLeakedSearchBlocks,
@@ -76,9 +78,11 @@ import {
   chatModelDisplayLabel,
   chatModelFallbackChain,
   getAitopChatModel,
+  getAitopModelCapabilities,
   isAitopLlmUiModel,
   isQwenChatUiModel,
   normalizeChatModelId,
+  type AitopChatModelDef,
 } from '../utils/aitopChatModels';
 import { logChatLlmPreload, isChatQwenDebugEnabled } from '../utils/chatRequestLog';
 
@@ -118,7 +122,10 @@ const PROXIES = {
   https: null
 };
 
-type ThinkingMode = 'off' | 'light' | 'deep';
+// 思考模式二态：off=关闭，on=深思考（参考 Claude/ChatGPT 官方 toggle 设计，不再区分浅/深）
+type ThinkingMode = 'off' | 'on';
+// 思考强度（仅当 thinking 开启时有意义）：high=深思考，low=轻量降级（短句自动降级以加快响应）
+type ThinkingLevel = 'high' | 'low';
 
 export interface ChatMessage {
   id: string;
@@ -842,8 +849,9 @@ function resolveAitopStreamIdleTimeoutMs(
 ): number {
   if (opts.useDegraded) return DEGRADED_STREAM_IDLE_TIMEOUT_MS;
   if (opts.isSummarize || opts.effectiveWebSearch) return AITOP_SUMMARIZE_STREAM_IDLE_TIMEOUT_MS;
+  // 开启思考（on）=深思考超时 180s，关闭=普通 90s
   let base =
-    thinkingMode === 'deep' ? AITOP_LLM_STREAM_IDLE_DEEP_MS : AITOP_LLM_STREAM_IDLE_TIMEOUT_MS;
+    thinkingMode === 'on' ? AITOP_LLM_STREAM_IDLE_DEEP_MS : AITOP_LLM_STREAM_IDLE_TIMEOUT_MS;
   const mult = resolveAitopPayloadHeavyMultiplier(opts.payloadCharLen ?? 0);
   if (mult <= 1) return base;
   return Math.min(Math.round(base * mult), AITOP_HEAVY_PAYLOAD_STREAM_IDLE_CAP_MS);
@@ -1575,10 +1583,10 @@ function truncateChatText(text: string, maxLen: number): string {
 }
 
 /** 客户端 Token 估算（借鉴 llama.cpp LLMContextManager.estimateTokens） */
-function estimateChatTokens(messages: ChatMessage[]): number {
+function estimateChatTokens(messages: Array<{ role?: string; content?: string }>): number {
   let total = 0;
   for (const msg of messages) {
-    if (isMetaChatMessage(msg)) continue;
+    if ('id' in msg && typeof (msg as any).id === 'string' && isMetaChatMessage(msg as ChatMessage)) continue;
     const text = msg.content || '';
     // 中文字符 ≈ 1.5 token，英文单词 ≈ 1.3 token，其他字符 ≈ 0.3 token
     const chineseChars = (text.match(/[\u4e00-\u9fff\u3400-\u4dbf]/g) || []).length;
@@ -1592,18 +1600,20 @@ function estimateChatTokens(messages: ChatMessage[]): number {
 /** Token 估算阈值（超过此值在输入框旁显示提示） */
 const CHAT_TOKEN_WARNING_THRESHOLD = 8000;
 
-/** ????????????????? Gemini ?? reasoning ?? Claude ?? */
+/** 
+ * 跨模型历史 sanitize：保留正文，把过程区压缩成摘要（检索词 + 关键来源）。
+ * 避免完全剥离导致用户追问「你刚才引用的链接」时 fallback 模型丢失上下文。
+ */
 function sanitizeContentForCrossModelHistory(content: string): string {
-  return stripAssistantProcessForHistory(content || '');
+  return compressAssistantProcessForHistory(content || '');
 }
 
 function isNoisyAssistantHistory(content: string): boolean {
   const t = (content || '').trim();
   if (!t) return true;
-  const sections = parseAssistantMessage(t);
-  if (sections.main.length > 24) return false;
+  const compressed = compressAssistantProcessForHistory(t);
+  if (compressed.length > 24) return false;
   return (
-    (!sections.main && !!sections.webSearch) ||
     /^Search results for\s*"/i.test(t) ||
     /I'll search for\s*"/i.test(t) ||
     /Here are the search results/i.test(t) ||
@@ -1688,7 +1698,144 @@ function collectDialogueTurnsForApi(
   return turns.slice(-maxTurns);
 }
 
-/** AiTop Gemini/Claude 单 message 字段拼历史；Skill 优先保留，历史从最近一轮往前装包。 */
+/**
+ * 用轻量 LLM 对早期对话历史做摘要压缩，避免长对话超出上下文窗口。
+ * 仅在 token 超过阈值且轮次较多时调用。
+ */
+async function summarizeHistoryWithLlm(
+  turns: { role: 'user' | 'assistant'; content: string }[],
+  modelDef?: AitopChatModelDef,
+  chatId?: string
+): Promise<string | null> {
+  if (!turns.length) return null;
+  const promptBody = turns
+    .map((t) => `${t.role === 'user' ? '用户' : '助手'}：${t.content.slice(0, 400)}`)
+    .join('\n');
+  const prompt = `请将以下对话历史压缩成一段中文摘要（≤200字），保留用户核心问题、助手关键结论、专有名词和重要数据。不要包含任何解释。\n\n${promptBody}\n\n摘要：`;
+
+  const ac = new AbortController();
+  const timer = setTimeout(() => ac.abort(), 15000);
+  try {
+    const res = await fetch(AITOP_LLM_API.URL, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'api-key': AITOP_LLM_API.API_KEY },
+      body: JSON.stringify({
+        id: chatId || `compact-${Date.now().toString(36).slice(-8)}${Math.random().toString(36).substring(2, 5)}`,
+        message: prompt,
+        model: modelDef?.apiModelName || 'claude-sonnet-4-6',
+        tip: ' ',
+        thinking: false,
+        webSearch: false,
+        stream: true,
+      }),
+      signal: ac.signal,
+    });
+    if (!res.ok || !res.body) return null;
+    const reader = res.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = '';
+    let content = '';
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      const lines = buffer.split('\n');
+      buffer = lines.pop() || '';
+      for (const line of lines) {
+        const pl = line.replace(/^data:\s*/, '').trim();
+        if (!pl || pl === '[DONE]') continue;
+        try {
+          const data = JSON.parse(pl);
+          const chunk = data.choices?.[0]?.delta?.content || data.content || data.text || '';
+          if (typeof chunk === 'string') content += chunk;
+        } catch {
+          // ignore non-JSON lines
+        }
+      }
+    }
+    return content.trim() || null;
+  } catch {
+    return null;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+/** AiTop Gemini/Claude 单 message 字段拼历史；Skill 优先保留，历史从最近一轮往前装包。
+ *  长对话时会对早期历史做 LLM 摘要压缩，保留最近 3 轮原文。
+ */
+async function buildAitopMessageWithHistoryAsync(
+  messages: ChatMessage[],
+  latestUserText: string,
+  tailAppend = '',
+  opts?: { webSearch?: boolean; skillBlock?: string; modelDef?: AitopChatModelDef; chatId?: string }
+): Promise<string> {
+  let body = (latestUserText || '').trim();
+  if (tailAppend) body = body ? `${body}\n${tailAppend}` : tailAppend;
+  const latest = (latestUserText || '').trim();
+  const skillPrefix = (opts?.skillBlock || '').trim();
+  const skillSection = skillPrefix ? `${skillPrefix}\n\n` : '';
+  const userSection = `${AITOP_USER_QUESTION_HEADER}\n${body}`;
+
+  const turns = collectDialogueTurnsForApi(messages, latest, {
+    maxTurns: opts?.webSearch ? 8 : CHAT_CTX_MAX_TURNS,
+    maxCharsPerMsg: opts?.webSearch
+      ? resolveHistoryMaxCharsPerMsg(latest, true)
+      : CHAT_CTX_MAX_CHARS_PER_MSG,
+  });
+  if (turns.length === 0) return skillSection + userSection;
+
+  // 上下文压缩：token 超过阈值且轮次较多时，对早期历史做 LLM 摘要
+  const estimatedTokens = estimateChatTokens(
+    turns.map((t) => ({ role: t.role as 'user' | 'assistant', content: t.content }))
+  );
+  let summary = '';
+  let displayTurns = turns;
+  if (estimatedTokens > CHAT_TOKEN_WARNING_THRESHOLD * 0.7 && turns.length > 4) {
+    const turnsToSummarize = turns.slice(0, -3);
+    const summaryText = await summarizeHistoryWithLlm(turnsToSummarize, opts?.modelDef, opts?.chatId);
+    if (summaryText) {
+      summary = summaryText;
+      displayTurns = turns.slice(-3);
+    }
+  }
+
+  const overhead =
+    skillSection.length +
+    AITOP_HISTORY_HEADER.length +
+    2 +
+    userSection.length +
+    4 +
+    (summary ? summary.length + 20 : 0);
+  const historyBudget = Math.max(0, CHAT_CTX_MAX_TOTAL_CHARS - overhead);
+
+  const lines: string[] = [];
+  let total = 0;
+  for (let i = displayTurns.length - 1; i >= 0; i--) {
+    const t = displayTurns[i];
+    const label = t.role === 'user' ? '用户' : '助手';
+    const block = `${label}：${t.content}`;
+    if (total + block.length > historyBudget) break;
+    lines.unshift(block);
+    total += block.length;
+  }
+  if (lines.length === 0) return skillSection + userSection;
+
+  const historyLines: string[] = [];
+  if (summary) {
+    historyLines.push(`【前文要点】${summary}`);
+  }
+  historyLines.push(...lines);
+
+  return (
+    skillSection +
+    `${AITOP_HISTORY_HEADER}\n` +
+    `${historyLines.join('\n\n')}\n\n` +
+    userSection
+  );
+}
+
+/** 同步兜底版本：在 async 摘要失败或未触发时复用相同逻辑（无 LLM 摘要） */
 function buildAitopMessageWithHistory(
   messages: ChatMessage[],
   latestUserText: string,
@@ -1752,6 +1899,14 @@ type LlmSendRetryOptions = {
   summarizeRetryCount?: number;
   /** ?????????????????? */
   summarizeCompact?: boolean;
+  /** 降级链 fallback 调用标记：跳过联网 probe 首轮，直接用带完整对话历史的 baseMessage，避免指代型追问丢上下文 */
+  fromFallback?: boolean;
+  /** fallback 时透传原模型的用户设置，避免降级后丢失联网/思考/温度等参数 */
+  inheritedParams?: {
+    thinkingMode?: 'off' | 'on';
+    webSearchEnabled?: boolean;
+    temperature?: number;
+  };
   /** 长输出自动续写上下文（流中断且已输出较长时，同模型继续输出而非切换模型） */
   continuationContext?: {
     round: number;
@@ -1792,6 +1947,49 @@ function isContinuableStreamError(
 function isContextOverflowError(error: unknown): boolean {
   const msg = error instanceof Error ? error.message : String(error || '');
   return /context.?length|exceed.?context|context.?overflow|context.?size|上下文.?长|token.?limit|max.?token|context.?window|too.?long|exceed.?max|context.?limit|n_ctx/i.test(msg);
+}
+
+type StreamErrorKind = 'fatal' | 'retriable' | 'context-overflow' | 'auth';
+
+/** 把 SSE/HTTP 错误归类为 fatal/retriable/context-overflow/auth，用于 fallback 链决策和重试策略。
+ * 参考 @microsoft/fetch-event-source：RetriableError vs FatalError。
+ */
+function classifyStreamError(error: unknown): { kind: StreamErrorKind; retryable: boolean; backoff?: boolean } {
+  const msg = error instanceof Error ? error.message : String(error || '');
+  const code = axios.isAxiosError(error) ? String(error.code || '').toUpperCase() : '';
+  const status = axios.isAxiosError(error) ? error.response?.status : undefined;
+
+  // 认证/鉴权：直接 fatal，不重试
+  if (status === 401 || status === 403 || /认证异常|鉴权|未授权|令牌无效|令牌过期|invalid.*token|unauthorized|forbidden/i.test(msg)) {
+    return { kind: 'auth', retryable: false };
+  }
+
+  // 上下文溢出：可尝试上下文压缩后重试，不走模型降级
+  if (isContextOverflowError(error)) {
+    return { kind: 'context-overflow', retryable: true, backoff: false };
+  }
+
+  // 限流 / 服务端忙：指数退避后重试
+  if (status === 429 || status === 502 || status === 503 || status === 504 || /限流|rate\s*limit|too\s*many\s*requests|service\s*unavailable|gateway/i.test(msg)) {
+    return { kind: 'retriable', retryable: true, backoff: true };
+  }
+
+  // 网络瞬断 / 超时：可重试
+  if (isLikelyTransientNetworkError(error) || /超时|timeout|timed?\s*out|ECONN|ETIMEDOUT|Failed to fetch|流中断|连接/i.test(msg)) {
+    return { kind: 'retriable', retryable: true, backoff: false };
+  }
+
+  // 用户取消 / 上游兜底文案：不视为可重试错误，交给 fallback 逻辑
+  if (/AbortError|用户取消|upstream|fallback|兜底|未能回复|请多试/i.test(msg)) {
+    return { kind: 'fatal', retryable: false };
+  }
+
+  return { kind: 'fatal', retryable: false };
+}
+
+/** 指数退避：返回建议等待毫秒数（上限 8s） */
+function exponentialBackoffMs(attempt: number): number {
+  return Math.min(1000 * 2 ** Math.max(0, attempt - 1), 8000);
 }
 
 /** 构造续写 prompt：携带原问题 + 已输出内容尾部（借鉴 grok-build truncate_middle_words 保留尾部上下文） */
@@ -2519,7 +2717,14 @@ export const ChatPanel = React.forwardRef<ChatPanelHandle, ChatPanelProps>(
   const [selectedModel, setSelectedModel] = useState<string>(initialChatState.modelId);
   const [showModelSelector, setShowModelSelector] = useState<boolean>(false);
   const [thinkingMode, setThinkingMode] = useState<ThinkingMode>('off'); // ???????/??/??
-  const [useWebSearch, setUseWebSearch] = useState<boolean>(false); // ???????Gemini/Claude?
+  const [useWebSearch, setUseWebSearch] = useState<boolean>(false); // ??????Gemini/Claude?
+  // 思考开启时实时检测当前输入是否为轻量短句（问候/致谢等），用于 UI 透明提示「已自动轻量降级」。
+  // 透明化设计参考 OpenAI reasoning.effort 用户可见可控理念：让用户知道当前轮思考强度被自动调整。
+  const thinkingLightweightNow =
+    thinkingMode === 'on' &&
+    getAitopModelCapabilities(selectedModel).thinking &&
+    input.trim().length > 0 &&
+    isLightweightPrompt(input);
   const [attachedImages, setAttachedImages] = useState<string[]>([]);
   const [referencedImage, setReferencedImage] = useState<string | null>(null); // ???????????????????????????
   const [referencedImages, setReferencedImages] = useState<string[]>([]); // ?????????????????????????????
@@ -2566,6 +2771,7 @@ export const ChatPanel = React.forwardRef<ChatPanelHandle, ChatPanelProps>(
   const lastFailedStreamCharsRef = useRef(0);
   const isSendingRef = useRef(false); // 并发发送锁（借鉴 FastChat limit_worker_concurrency）
   const webSearchProbeCacheRef = useRef<string | null>(null); // 联网检索 probe 结果缓存，避免 fallback 链重复调用
+  const temperatureRef = useRef<number>(0.7); // 生成温度，当前 UI 未暴露，透传 fallback 时保持一致
 
   const beginDegradedUiForModelSwitch = useCallback((hadThinkingOrWeb: boolean) => {
     degradedOnceAfterModelSwitchRef.current = true;
@@ -2971,10 +3177,13 @@ export const ChatPanel = React.forwardRef<ChatPanelHandle, ChatPanelProps>(
     text: string,
     images: string[],
     chatIdForActivity?: string,
-    sendOpts?: { fromFallback?: boolean }
+    sendOpts?: { fromFallback?: boolean; inheritedParams?: LlmSendRetryOptions['inheritedParams'] }
   ) => {
     if (isAitopLlmUiModel(modelId)) {
-      await handleAitopLlmSend(modelId, text, images, chatIdForActivity);
+      await handleAitopLlmSend(modelId, text, images, chatIdForActivity, 0, {
+        fromFallback: sendOpts?.fromFallback,
+        inheritedParams: sendOpts?.inheritedParams,
+      });
       return;
     }
     if (modelId === QWEN_CHAT_UI_ID) {
@@ -3026,8 +3235,15 @@ export const ChatPanel = React.forwardRef<ChatPanelHandle, ChatPanelProps>(
       const primaryLabel = modelLabelById(modelId);
       const fallbackChain = fallbackChainByPrimary(modelId);
 
-      // 上下文溢出检测（借鉴 llama.cpp isContextOverflow）：不切换模型，直接提示用户
-      if (isContextOverflowError(primaryError)) {
+      const primaryErrClass = classifyStreamError(primaryError);
+
+      // 认证错误：直接 fatal，不切换模型，避免无效重试
+      if (primaryErrClass.kind === 'auth') {
+        throw primaryError;
+      }
+
+      // 上下文溢出：先尝试上下文压缩后重试（P0 压缩层完成后接入），暂直接提示用户
+      if (primaryErrClass.kind === 'context-overflow') {
         setMessages((prev) => [
           ...prev,
           {
@@ -3045,10 +3261,13 @@ export const ChatPanel = React.forwardRef<ChatPanelHandle, ChatPanelProps>(
       let effectivePrimaryError: unknown = primaryError;
       if (
         PRIMARY_SAME_MODEL_RETRY_ONCE &&
-        isLikelyRetryablePrimaryModelError(primaryError)
+        (primaryErrClass.retryable || isLikelyRetryablePrimaryModelError(primaryError))
       ) {
         const retryChatId = createEphemeralChatId();
         try {
+          if (primaryErrClass.backoff) {
+            await new Promise((r) => setTimeout(r, exponentialBackoffMs(1)));
+          }
           await sendByModel(modelId, text, images, retryChatId);
           return finishTurn(modelId);
         } catch (retryErr) {
@@ -3085,11 +3304,20 @@ export const ChatPanel = React.forwardRef<ChatPanelHandle, ChatPanelProps>(
 
         try {
           const fallbackApiChatId = createEphemeralChatId();
+          const fallbackCaps = getAitopModelCapabilities(fallbackModel);
           const hadThinkingOrWeb = thinkingMode !== 'off' || useWebSearch;
-          if (fallbackModel === 'qwen' && hadThinkingOrWeb) {
+          // 能力矩阵决定是否需要降级 UI：目标模型不支持思考/联网时，才提示降级
+          if (!fallbackCaps.thinking || !fallbackCaps.webSearch) {
             beginDegradedUiForModelSwitch(hadThinkingOrWeb);
           }
-          await sendByModel(fallbackModel, text, images, fallbackApiChatId, { fromFallback: true });
+          await sendByModel(fallbackModel, text, images, fallbackApiChatId, {
+            fromFallback: true,
+            inheritedParams: {
+              thinkingMode: thinkingMode !== 'off' && !fallbackCaps.thinking ? 'off' : thinkingMode,
+              webSearchEnabled: useWebSearch && fallbackCaps.webSearch,
+              temperature: temperatureRef.current,
+            },
+          });
           return finishTurn(fallbackModel);
         } catch (fallbackError) {
           const fallbackErrContent = formatModelFailureContent(fallbackLabel, fallbackError);
@@ -4025,28 +4253,52 @@ export const ChatPanel = React.forwardRef<ChatPanelHandle, ChatPanelProps>(
         throw new Error(`图片处理失败: ${errorMessage}`);
       }
     }
+    // fallback 时透传原模型参数；目标模型不支持时已在 fallback 链中降级关闭
+    const inheritedThinkingMode = retryOptions?.inheritedParams?.thinkingMode ?? thinkingMode;
+    const inheritedWebSearch = retryOptions?.inheritedParams?.webSearchEnabled ?? useWebSearch;
+    const inheritedTemperature = retryOptions?.inheritedParams?.temperature ?? temperatureRef.current;
+
     const forcedWebSearchOff = forcedWebSearchOffGemini;
     const keepWebSearchOnDegradedRetry =
-      retryOptions?.degraded === true && useWebSearch && !forcedWebSearchOff;
+      retryOptions?.degraded === true && inheritedWebSearch && !forcedWebSearchOff;
     // 轻量问候等：即使 UI 开着联网，本轮也不走检索首轮（避免历史话题污染）
     const effectiveWebSearch = forcedWebSearchOff
       ? false
       : keepWebSearchOnDegradedRetry
         ? true
-        : (useDegraded || lightweight ? false : useWebSearch);
+        : (useDegraded || lightweight ? false : inheritedWebSearch);
     const isGeminiWebSearchFirstPass =
-      !!effectiveWebSearch && !retryOptions?.summarizeSearchDumpText;
+      !!effectiveWebSearch && !retryOptions?.summarizeSearchDumpText && retryOptions?.fromFallback !== true;
+    // 临时调试：写入 localStorage 供 browser_evaluate 读取
+    try {
+      const _dbg = {
+        effectiveWebSearch, useDegraded, degradedAfterSwitch, useWebSearch,
+        thinkingMode, inheritedThinkingMode, inheritedWebSearch, lightweight,
+        isGeminiWebSearchFirstPass, model: uiModelId,
+        isSummarizeRetry: !!retryOptions?.summarizeSearchDumpText,
+        fromFallback: retryOptions?.fromFallback === true,
+        ts: Date.now(),
+      };
+      localStorage.setItem('__debug_aitop', JSON.stringify(_dbg));
+      (globalThis as any).__debugPathVars = (globalThis as any).__debugPathVars || [];
+      (globalThis as any).__debugPathVars.push(_dbg);
+    } catch {}
     // 联网搜索复用当前对话 chatId（借鉴 FastChat 会话持久化），保留上下文连续性
     let currentChatId = forcedChatId || generateChatId();
     if (isGeminiWebSearchFirstPass && !chatIdRef.current) {
       // 仅在全新对话（无现有 chatId）时创建临时 ID；已有对话则复用原 chatId
       currentChatId = createEphemeralChatId();
     }
-    const baseMessage = buildAitopMessageWithHistory(
+    const baseMessage = await buildAitopMessageWithHistoryAsync(
       persistSnapshotRef.current.messages,
       currentInput || '',
       imageTail,
-      { webSearch: effectiveWebSearch, skillBlock: resolveProjectSkillBlock() }
+      {
+        webSearch: effectiveWebSearch,
+        skillBlock: resolveProjectSkillBlock(),
+        modelDef,
+        chatId: currentChatId,
+      }
     );
     const webDialogueCtx = buildWebSearchDialogueContext(
       persistSnapshotRef.current.messages,
@@ -4090,7 +4342,34 @@ export const ChatPanel = React.forwardRef<ChatPanelHandle, ChatPanelProps>(
       geminiWebSearchQuery = probeQuery;
       message = probeQuery;
     } else {
-      message = baseMessage;
+      // fallback / 总结后 / fromFallback 路径：若仍开启联网搜索，显式注入独立检索问题
+      // 参考 LangChain RunnableWithFallbacks：不同模型 fallback 时应使用适合它的 prompt
+      if (effectiveWebSearch && currentInput) {
+        let probeQuery: string;
+        if (webSearchProbeCacheRef.current !== null) {
+          probeQuery = webSearchProbeCacheRef.current;
+          console.warn('[chat] fallback web search using cached probe', { query: probeQuery.slice(0, 120) });
+        } else {
+          const probeRewriteChatId = createEphemeralChatId();
+          probeQuery = await resolveWebSearchProbeMessageForAitop(
+            {
+              url: AITOP_LLM_API.URL,
+              apiKey: AITOP_LLM_API.API_KEY,
+              model: apiModelName,
+            },
+            persistSnapshotRef.current.messages,
+            currentInput || '',
+            imageTail,
+            probeRewriteChatId
+          );
+          webSearchProbeCacheRef.current = probeQuery;
+          console.warn('[chat] fallback web search probe generated', { query: probeQuery.slice(0, 120) });
+        }
+        geminiWebSearchQuery = probeQuery;
+        message = buildFallbackSearchAwareMessage(baseMessage, probeQuery, currentInput || '');
+      } else {
+        message = baseMessage;
+      }
     }
     
                 // ??????
@@ -4110,16 +4389,30 @@ export const ChatPanel = React.forwardRef<ChatPanelHandle, ChatPanelProps>(
     };
     
     const isSummarizeRetry = !!retryOptions?.summarizeSearchDumpText;
-    const thinkingEnabledForTurn = thinkingMode !== 'off';
+    // 以模型能力矩阵为准：上游不支持的模型强制关闭 thinking，避免 API 错误
+    const modelSupportsThinking = getAitopModelCapabilities(uiModelId).thinking;
+    const thinkingEnabledForTurn = inheritedThinkingMode !== 'off' && modelSupportsThinking;
     // 联网总结二次 pass：仍尊重用户思考开关，禁止「仅开联网」却强制 thinking:true
+    // thinkingLevel 仅在 thinking=true 时有意义：high=深思考，low=轻量/降级；关闭思考时不赋值，避免语义混淆
     if (isSummarizeRetry) {
       payload.thinking = thinkingEnabledForTurn;
-      payload.thinkingLevel =
-        payload.thinking && !useDegraded && thinkingMode === 'deep' ? 'high' : 'low';
+      if (thinkingEnabledForTurn) {
+        payload.thinkingLevel = (
+          !useDegraded && inheritedThinkingMode === 'on' ? 'high' : 'low'
+        ) as ThinkingLevel;
+      }
     } else {
-      payload.thinkingLevel =
-        !useDegraded && !lightweight && thinkingMode === 'deep' ? 'high' : 'low';
+      // 开启思考且非轻量提示词=high（深思考），轻量提示词自动降级为 low（避免「你好」也走 180s）
+      if (thinkingEnabledForTurn) {
+        payload.thinkingLevel = (
+          !useDegraded && !lightweight && inheritedThinkingMode === 'on' ? 'high' : 'low'
+        ) as ThinkingLevel;
+      }
       payload.thinking = thinkingEnabledForTurn;
+    }
+    // 透传温度（部分模型支持；上游不识别时会被忽略，不影响调用）
+    if (typeof inheritedTemperature === 'number') {
+      payload.temperature = inheritedTemperature;
     }
     payload.tip = buildAitopTip({
       thinking: !!payload.thinking,
@@ -4136,7 +4429,7 @@ export const ChatPanel = React.forwardRef<ChatPanelHandle, ChatPanelProps>(
       payloadCharLen: String(message).length,
     };
     const geminiFetchTimeoutMs = resolveAitopFetchTimeoutMs(timeoutFamily, aitopTimeoutOpts);
-    const geminiStreamIdleTimeoutMs = resolveAitopStreamIdleTimeoutMs(thinkingMode, aitopTimeoutOpts);
+    const geminiStreamIdleTimeoutMs = resolveAitopStreamIdleTimeoutMs(inheritedThinkingMode, aitopTimeoutOpts);
     const aitopRequestUrl =
       typeof window !== 'undefined'
         ? new URL(AITOP_LLM_API.URL, window.location.origin).href
@@ -4271,6 +4564,8 @@ export const ChatPanel = React.forwardRef<ChatPanelHandle, ChatPanelProps>(
       fullContent = '';
       fullReasoning = '';
       let buffer = '';
+      let thinkBuffer = ''; // 原生 <think> 标签跨 chunk 缓冲
+      let thinkOpen = false;
 
       const collectApiReasoning = thinkingEnabledForTurn;
       const guardContentOpts = {
@@ -4350,10 +4645,30 @@ export const ChatPanel = React.forwardRef<ChatPanelHandle, ChatPanelProps>(
           upstreamRequestId,
           pickRequestIdFromStreamPayload(data)
         );
-        const contentChunk = getStreamContentChunk(data);
+        let contentChunk = getStreamContentChunk(data);
         if (contentChunk) {
-          fullContent += contentChunk;
-          flushStreamUiIfDue();
+          // 处理原生 <think> 标签：跨 chunk 缓冲，闭合后归入 reasoning
+          if (thinkOpen || /<\/?(?:think|thinking|reasoning)\b/i.test(contentChunk)) {
+            thinkBuffer += contentChunk;
+            const extracted = extractNativeThinkTags(thinkBuffer);
+            if (extracted.thinking) {
+              fullReasoning += (fullReasoning ? '\n' : '') + extracted.thinking;
+              thinkBuffer = '';
+              thinkOpen = false;
+              contentChunk = extracted.main;
+            } else if (extracted.openTag) {
+              thinkOpen = true;
+              contentChunk = '';
+            } else {
+              contentChunk = thinkBuffer;
+              thinkBuffer = '';
+              thinkOpen = false;
+            }
+          }
+          if (contentChunk) {
+            fullContent += contentChunk;
+            flushStreamUiIfDue();
+          }
         }
         if (collectApiReasoning) {
           const reasoningChunk = getStreamReasoningChunk(data);
@@ -5110,12 +5425,21 @@ export const ChatPanel = React.forwardRef<ChatPanelHandle, ChatPanelProps>(
       // ???? Qwen ??????Gemini/Claude ???????????????
       if (normalizedTarget === 'qwen' && hadThinkingOrWeb) {
         beginDegradedUiForModelSwitch(hadThinkingOrWeb);
+      } else if (normalizedTarget !== 'qwen' && degradedOnceAfterModelSwitchRef.current) {
+        // 切换离开 Qwen 到支持思考/联网的模型时，清除 Qwen 降级残留的 degraded 标记。
+        // 否则 degradedOnceAfterModelSwitchRef 残留 true 会导致 useDegraded=true，
+        // 进而 effectiveWebSearch=false（联网被静默关闭）、thinkingLevel 被降级为 low，
+        // 用户重新开启联网+思考后仍不生效，回复丢失 [联网检索] 和 [思考过程] 展示框。
+        // 不恢复快照（toggleSnapshotBeforeModelSwitchRef）：用户可能已手动重新设置，
+        // 恢复快照会覆盖用户当前选择。
+        degradedOnceAfterModelSwitchRef.current = false;
+        toggleSnapshotBeforeModelSwitchRef.current = null;
       }
 
       const switchHint =
         normalizedTarget === 'qwen'
           ? hadThinkingOrWeb
-            ? '💡 Qwen 暂不支持联网搜索与深度思考，已关闭相关选项。'
+            ? '💡 Qwen 暂不支持联网搜索与思考，已关闭相关选项。'
             : '💡 当前对话历史已保留，可以继续对话。'
           : hadThinkingOrWeb
             ? '💡 已切换模型，联网搜索/思考模式设置已保留。'
@@ -6188,7 +6512,7 @@ export const ChatPanel = React.forwardRef<ChatPanelHandle, ChatPanelProps>(
               </div>
             </div>
             <div className="text-sm font-semibold text-gray-400 mb-1.5">开始与AI对话...</div>
-            <div className="text-xs text-gray-600 font-medium">在下方输入消息，支持联网搜索与深度思考</div>
+            <div className="text-xs text-gray-600 font-medium">在下方输入消息，支持联网搜索与思考</div>
           </div>
         ) : (
           <>
@@ -6492,42 +6816,40 @@ export const ChatPanel = React.forwardRef<ChatPanelHandle, ChatPanelProps>(
               </button>
               <button
                 onClick={() =>
-                  setThinkingMode((prev) =>
-                    prev === 'off' ? 'light' : prev === 'light' ? 'deep' : 'off'
-                  )
+                  setThinkingMode((prev) => (prev === 'off' ? 'on' : 'off'))
                 }
                 className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-all duration-200 flex items-center gap-2 ${
-                  isQwenChatUiModel(selectedModel)
+                  !getAitopModelCapabilities(selectedModel).thinking
                     ? 'bg-gray-800/40 text-gray-500 cursor-not-allowed border border-gray-700/30'
-                    : thinkingMode === 'deep'
+                    : thinkingMode === 'on'
                     ? 'bg-gradient-to-r from-purple-600/30 to-blue-600/30 text-purple-300 border border-purple-500/50 shadow-lg shadow-purple-500/20'
-                      : thinkingMode === 'light'
-                        ? 'bg-gradient-to-r from-indigo-600/30 to-slate-600/30 text-indigo-200 border border-indigo-500/50 shadow-lg shadow-indigo-500/20'
-                        : 'bg-gray-800/60 text-gray-400 hover:text-gray-300 border border-gray-700/50 hover:border-gray-600/50'
+                    : 'bg-gray-800/60 text-gray-400 hover:text-gray-300 border border-gray-700/50 hover:border-gray-600/50'
                 }`}
                 title={
-                  isQwenChatUiModel(selectedModel)
-                    ? 'Qwen 暂不支持深度思考'
-                    : '思考：关 → 浅 → 深（循环切换）'
+                  !getAitopModelCapabilities(selectedModel).thinking
+                    ? `${chatModelDisplayLabel(selectedModel)} 暂不支持思考`
+                    : thinkingLightweightNow
+                      ? '思考：开（深度思考）· 当前输入较短，将自动轻量思考以加快响应'
+                      : '思考：关 → 开（深度思考）'
                 }
-                disabled={isQwenChatUiModel(selectedModel)}
+                disabled={!getAitopModelCapabilities(selectedModel).thinking}
               >
                 <Brain
                   size={14}
                   className={
-                    !isQwenChatUiModel(selectedModel) && thinkingMode !== 'off'
-                      ? thinkingMode === 'deep'
-                        ? 'text-purple-400'
-                        : 'text-indigo-300'
+                    getAitopModelCapabilities(selectedModel).thinking && thinkingMode !== 'off'
+                      ? thinkingLightweightNow
+                        ? 'text-amber-400'
+                        : 'text-purple-400'
                       : 'text-gray-500'
                   }
                   strokeWidth={2}
                 />
-              <span>{thinkingMode === 'deep' ? '深度思考' : thinkingMode === 'light' ? '浅思考' : '思考'}</span>
-                {!isQwenChatUiModel(selectedModel) && thinkingMode !== 'off' && (
+              <span>{thinkingMode === 'on' ? '思考中' : '思考'}</span>
+                {getAitopModelCapabilities(selectedModel).thinking && thinkingMode !== 'off' && (
                   <div
                     className={`w-1.5 h-1.5 rounded-full animate-pulse ${
-                      thinkingMode === 'deep' ? 'bg-purple-400' : 'bg-indigo-300'
+                      thinkingLightweightNow ? 'bg-amber-400' : 'bg-purple-400'
                     }`}
                   ></div>
                 )}

@@ -1,4 +1,4 @@
-import type { NodeData } from '../types';
+import { NodeType, type GenerationParams, type NodeData } from '../types';
 
 /** 各首尾帧模型在 modelConfigs 中保存的槽位快照 */
 export type FrameSlotSnapshot = {
@@ -92,5 +92,38 @@ export function nanoBananaMainPatchOnModelSwitch(
     imageLocalRef: current.imageLocalRef,
     panelMainImageUrl: current.panelMainImageUrl,
     panelMainSlotVisible: current.panelMainSlotVisible,
+  };
+}
+
+/** 从运行快照中提取结果主图/主视频 URL（outputUrl 优先，其次 outputUrls[0]） */
+export function getRunResultMainPreviewUrl(generationParams?: GenerationParams): string | undefined {
+  if (!generationParams) return undefined;
+  if (generationParams.outputUrl) return generationParams.outputUrl;
+  if (Array.isArray(generationParams.outputUrls) && generationParams.outputUrls.length > 0) {
+    return generationParams.outputUrls[0];
+  }
+  return undefined;
+}
+
+/**
+ * outputNode / movNode 切换模型时：若存在运行结果 URL，保持其作为主图显示，
+ * 避免被 modelConfigs 中其他模型继承自上游的旧快照覆盖。
+ * 返回 null 表示无需保护（非运行结果节点或没有运行结果 URL）。
+ */
+export function preserveRunResultMainPreview(
+  nodeType: NodeType | string | undefined,
+  generationParams?: GenerationParams
+): Partial<
+  Pick<NodeData, 'imagePreview' | 'panelMainImageUrl' | 'panelMainSlotVisible' | 'imageLocalRef'>
+> | null {
+  const isResultNode = nodeType === NodeType.OUTPUT || nodeType === NodeType.MOV;
+  if (!isResultNode) return null;
+  const runResultUrl = getRunResultMainPreviewUrl(generationParams);
+  if (!runResultUrl) return null;
+  return {
+    imagePreview: runResultUrl,
+    panelMainImageUrl: undefined,
+    panelMainSlotVisible: undefined,
+    imageLocalRef: undefined,
   };
 }

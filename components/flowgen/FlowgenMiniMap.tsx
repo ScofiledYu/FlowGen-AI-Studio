@@ -307,6 +307,9 @@ function FlowgenMiniMapInner({
   };
 
   const onSvgNodeClick = (event: React.MouseEvent, nodeId: string) => {
+    // 阻止冒泡到 <svg onClick={onSvgClick}>，避免节点居中被 svg 级点击覆盖（跳到节点边缘）
+    // 与 xyflow 官方 MiniMap 点击节点只走"居中到节点中心"的语义保持一致
+    event.stopPropagation();
     const node = store.getState().nodeInternals.get(nodeId);
     if (!node) return;
     const { x: nx, y: ny } = getNodePositionWithOrigin(node, nodeOrigin).positionAbsolute;
