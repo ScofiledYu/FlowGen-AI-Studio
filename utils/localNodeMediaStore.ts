@@ -262,7 +262,17 @@ export async function putLocalMediaFile(ref: string, file: File | Blob): Promise
       db.close();
       resolve();
     };
-    tx.onerror = () => reject(tx.error);
+    tx.onerror = () => {
+      db.close();
+      reject(tx.error || new Error('IDB transaction error'));
+    };
+    // §11.90n：添加 onabort 处理器，防止事务被中止（quota 超限、并发冲突等）时 Promise 永久挂起。
+    // 此前缺少 onabort 导致 attachLocalMainRef 的 setNodes 已设置 imageLocalRef 但 blob 未写入，
+    // 刷新后 hydration 找不到 blob，主图丢失。
+    tx.onabort = () => {
+      db.close();
+      reject(tx.error || new Error('IDB transaction aborted'));
+    };
     tx.objectStore(STORE).put(blob, idbKey(ref));
   });
 }
@@ -279,6 +289,52 @@ export async function getLocalMediaBlob(ref: string): Promise<Blob | null> {
         resolve((req.result as Blob) || null);
       };
       req.onerror = () => reject(req.error);
+    });
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * §11.90n：按前缀扫描 IDB，返回第一个匹配的 blob。
+ * 用于 hydration 回退：当主图 ref（如 flowgen-local:scope:nodeId:main）无 blob 时，
+ * 尝试从模型作用域键（如 flowgen-local:scope:nodeId:main:Nano_Banana_20）恢复。
+ * 场景：用户在 Banana 模型下拖图后切到 Seedance，blob 在旧键下。
+ */
+export async function getLocalMediaBlobByPrefix(prefix: string): Promise<{ key: string; blob: Blob } | null> {
+  try {
+    const db = await openDb();
+    return await new Promise<{ key: string; blob: Blob } | null>((resolve, reject) => {
+      const tx = db.transaction(STORE, 'readonly');
+      tx.onerror = () => {
+        db.close();
+        reject(tx.error);
+      };
+      tx.onabort = () => {
+        db.close();
+        resolve(null);
+      };
+      const req = tx.objectStore(STORE).openCursor();
+      req.onsuccess = () => {
+        const cursor = req.result;
+        if (!cursor) {
+          db.close();
+          resolve(null);
+          return;
+        }
+        const key = String(cursor.key);
+        if (key.startsWith(prefix) && cursor.value instanceof Blob) {
+          const blob = cursor.value;
+          db.close();
+          resolve({ key, blob });
+          return;
+        }
+        cursor.continue();
+      };
+      req.onerror = () => {
+        db.close();
+        reject(req.error);
+      };
     });
   } catch {
     return null;

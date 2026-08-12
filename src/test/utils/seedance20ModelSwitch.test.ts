@@ -28,7 +28,10 @@ describe('seedance20ModelSwitch', () => {
     } as NodeData;
     const tabs = snapshotSeedanceTabConfigsWithLivePanel(data, '@主图 动起来');
     expect(tabs.text?.prompt).toBe('old text');
-    expect(tabs.reference?.referenceImages).toEqual(['https://cos.example/a.jpg']);
+    // §11.90l：对标 Banana 面板 — 参考图不再存入快照，顶层数据是唯一数据源
+    expect(tabs.reference?.referenceImages).toBeUndefined();
+    expect(tabs.reference?.referenceImageLabels).toBeUndefined();
+    // referenceMovs 和 referenceAudios 仍保留在快照中
     expect(tabs.reference?.referenceMovs?.[0]?.url).toBe('https://cos.example/v.mp4');
   });
 

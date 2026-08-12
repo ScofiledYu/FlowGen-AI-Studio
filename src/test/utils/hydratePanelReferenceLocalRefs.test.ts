@@ -16,6 +16,8 @@ import {
   stripRestoredUrlForLocalRefHydrate,
   removeReferenceImageLocalRefAtIndex,
   setReferenceImageLocalRefAtIndex,
+  parseReferenceLocalRefIndex,
+  nextAvailableReferenceLocalRefIndex,
 } from '../../../utils/hydratePanelReferenceLocalRefs';
 import { shouldShowPanelMainImageSlot } from '../../../utils/referencedMediaRun';
 
@@ -290,13 +292,53 @@ describe('hydratePanelReferenceLocalRefs async (no IDB in vitest)', () => {
     });
     expect(patch).toBeUndefined();
   });
+});
 
-  it('returns undefined for panel main when backup is persistable', async () => {
-    const patch = await hydratePanelMainImageUrlFromLocalRef({
-      panelMainSlotVisible: false,
-      panelMainImageUrl: 'https://cos/main.png',
-      imageLocalRef: 'flowgen-local:u:p:n:main',
-    });
-    expect(patch).toBeUndefined();
+describe('reference local ref index allocation', () => {
+  it('parseReferenceLocalRefIndex extracts trailing index', () => {
+    expect(parseReferenceLocalRefIndex('flowgen-local:s:n:ref:3')).toBe(3);
+    expect(parseReferenceLocalRefIndex('flowgen-local:s:n:ref:seedance20:3')).toBe(3);
+    expect(parseReferenceLocalRefIndex('flowgen-local:s:n:ref:omni_multi:7')).toBe(7);
+    expect(parseReferenceLocalRefIndex('')).toBeUndefined();
+    expect(parseReferenceLocalRefIndex(undefined)).toBeUndefined();
+    expect(parseReferenceLocalRefIndex('flowgen-local:s:n:ref:abc')).toBeUndefined();
+  });
+
+  it('nextAvailableReferenceLocalRefIndex skips occupied indexes', () => {
+    const localRefs = [
+      'flowgen-local:s:n:ref:2',
+      'flowgen-local:s:n:ref:3',
+      'flowgen-local:s:n:ref:4',
+      'flowgen-local:s:n:ref:6',
+      'flowgen-local:s:n:ref:8',
+    ];
+    // 删除前两个槽后数组长度变为 3，再追加应从 index 3 开始，但 ref:3/4/6/8 已被占用
+    expect(nextAvailableReferenceLocalRefIndex(localRefs, 3)).toBe(5);
+    // 继续追加应跳过 5 之后下一个被占用的 6
+    expect(nextAvailableReferenceLocalRefIndex([...localRefs, 'flowgen-local:s:n:ref:5'], 4)).toBe(7);
+  });
+
+  it('does not reuse an index already held by remaining localRefs after deletion', () => {
+    // 模拟：5 槽 → 删除前 2 槽 → 剩余 localRefs 仍叫 ref:2/ref:3/ref:4
+    const afterDelete = removeReferenceImageLocalRefAtIndex(
+      removeReferenceImageLocalRefAtIndex(
+        [
+          'flowgen-local:s:n:ref:0',
+          'flowgen-local:s:n:ref:1',
+          'flowgen-local:s:n:ref:2',
+          'flowgen-local:s:n:ref:3',
+          'flowgen-local:s:n:ref:4',
+        ],
+        0
+      ).localRefs,
+      0
+    ).localRefs;
+    expect(afterDelete).toEqual([
+      'flowgen-local:s:n:ref:2',
+      'flowgen-local:s:n:ref:3',
+      'flowgen-local:s:n:ref:4',
+    ]);
+    // 此时 referenceImages 长度 3，再追加应避开 ref:2/3/4
+    expect(nextAvailableReferenceLocalRefIndex(afterDelete, 3)).toBe(5);
   });
 });

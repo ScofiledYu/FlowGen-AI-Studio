@@ -220,6 +220,8 @@ export async function hydratePanelReferenceUrlsFromLocalRefs(
   const nextRefs = [...refs];
   while (nextRefs.length < maxLen) nextRefs.push('');
 
+  const nodeId = (data as any).id || 'unknown';
+
   for (let i = 0; i < maxLen; i++) {
     const localRef = String(localRefs[i] || '').trim();
     if (!localRef) continue;
@@ -231,13 +233,49 @@ export async function hydratePanelReferenceUrlsFromLocalRefs(
       continue;
     }
     const blob = await getLocalMediaBlob(localRef);
-    if (!blob) continue;
+    if (!blob) {
+      // §11.90n：IDB 中无对应 blob，说明该 ref 已被删除但未从数组中移除。
+      // 清空该位置的 localRef 并标记 changed，后续 compact 会清除空槽。
+      localRefs[i] = '';
+      changed = true;
+      continue;
+    }
     nextRefs[i] = URL.createObjectURL(blob);
     changed = true;
   }
 
   if (!changed) return undefined;
-  return { [imagesField]: nextRefs } as Partial<NodeData>;
+
+  // §11.90n：压缩空槽 —— IDB blob-miss 导致的空 localRef 和空 URL 一并清除
+  const compactedRefs: string[] = [];
+  const compactedLocalRefs: string[] = [];
+  // §11.90o：同步压缩 labels/eids，避免 compact 后标签与图片错位（仅标准参考图字段）
+  const syncLabels = localRefField === 'referenceImageLocalRefs';
+  const labelsArr = syncLabels ? [...((data.referenceImageLabels as string[] | undefined) || [])] : [];
+  const eidsArr = syncLabels
+    ? [...((data.referenceElementIds as (string | undefined)[] | undefined) || [])]
+    : [];
+  const compactedLabels: string[] = [];
+  const compactedEids: (string | undefined)[] = [];
+  for (let i = 0; i < maxLen; i++) {
+    const url = String(nextRefs[i] || '').trim();
+    const lr = String(localRefs[i] || '').trim();
+    if (!url && !lr) continue;
+    compactedRefs.push(url);
+    compactedLocalRefs.push(lr);
+    if (syncLabels) {
+      compactedLabels.push(String(labelsArr[i] || '').trim());
+      compactedEids.push(eidsArr[i]);
+    }
+  }
+
+  return {
+    [imagesField]: compactedRefs,
+    [localRefField]: compactedLocalRefs,
+    ...(syncLabels
+      ? { referenceImageLabels: compactedLabels, referenceElementIds: compactedEids }
+      : {}),
+  } as Partial<NodeData>;
 }
 
 export async function isBlobPreviewUrlAlive(url: string): Promise<boolean> {
@@ -353,4 +391,30 @@ export function removeReferenceImageLocalRefAtIndex(
   const removedRef = String(out[index] || '').trim() || undefined;
   if (index >= 0 && index < out.length) out.splice(index, 1);
   return { localRefs: out, removedRef };
+}
+
+/** 从 flowgen-local ref 字符串末尾解析 index 段（如 `...:ref:3` → 3）。
+ *  用于追加本地参考图时识别已被占用的 IDB key。 */
+export function parseReferenceLocalRefIndex(ref: string | undefined): number | undefined {
+  const s = String(ref || '').trim();
+  const lastColon = s.lastIndexOf(':');
+  if (lastColon < 0) return undefined;
+  const n = Number(s.slice(lastColon + 1));
+  return Number.isFinite(n) ? n : undefined;
+}
+
+/** 计算下一个不会被现有 localRefs 占用的 ref index，从 startIndex 开始向后扫描。
+ *  解决删除参考图后 localRefs 仅 splice 不重命名，再次追加时可能覆盖已有 IDB key 的问题。 */
+export function nextAvailableReferenceLocalRefIndex(
+  localRefs: string[] | undefined,
+  startIndex: number
+): number {
+  const used = new Set(
+    (localRefs || [])
+      .map((r) => parseReferenceLocalRefIndex(r))
+      .filter((n): n is number => n !== undefined)
+  );
+  let idx = Math.max(0, Math.floor(startIndex));
+  while (used.has(idx)) idx++;
+  return idx;
 }

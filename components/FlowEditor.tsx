@@ -1,4 +1,4 @@
-﻿import React, { Suspense, useState, useRef, useCallback, useEffect, useMemo } from 'react';
+﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿import React, { Suspense, useState, useRef, useCallback, useEffect, useMemo } from 'react';
 import ReactFlow, {
   ReactFlowProvider,
   addEdge,
@@ -201,6 +201,10 @@ import {
   buildPromptMediaRefContextFromNode,
   buildPromptMediaRefContextForRun,
   resolvePromptPlaceholders,
+  resolveSeedancePromptToNativeImageTokens,
+  resolveKlingOmniPromptToNativeImageTokens,
+  resolveImageGenPromptToImageTokens,
+  resolveJimengPromptStripImageTokens,
   collectProjectAssetUrlsFromPrompt,
   collectReferencedMediaFromPrompt,
   collectSeedanceReferencedMediaFromPrompt,
@@ -280,6 +284,7 @@ import {
   isFlowgenAssetThumbUrl,
   flowgenAssetFileUrlFromMediaUrl,
   stripAssetAccessTokenFromUrl,
+  withAssetAccessToken,
 } from '../services/flowgenApi';
 import {
   buildLocalMediaRef,
@@ -303,6 +308,8 @@ import {
   putLocalMediaFile,
   usesUnifiedSeedance20PanelLocalRef,
   revokeBlobPreviewUrl,
+  getLocalMediaBlobByPrefix,
+  parseLocalMediaRef,
   type KlingOmniPanelTab,
 } from '../utils/localNodeMediaStore';
 import {
@@ -315,6 +322,7 @@ import {
   enrichPanelPreviewPatchWithFreshMainBackup,
   type PanelReferenceLocalRefField,
   setReferenceImageLocalRefAtIndex,
+  nextAvailableReferenceLocalRefIndex,
 } from '../utils/hydratePanelReferenceLocalRefs';
 import {
   isEphemeralMediaUrl,
@@ -432,6 +440,89 @@ function stripChainFolderNodesAndUnhide(nodes: RFNode[]): RFNode[] {
 
 function clearEdgesHiddenFlag(edges: Edge[]): Edge[] {
   return edges.map((e) => ({ ...e, hidden: undefined }));
+}
+
+/**
+ * B1: 导出 JSON 前，将 node-media 海报 URL 内嵌为 data URL。
+ * 仅处理 /flowgen-api/projects/:id/node-media/:mediaId/file 格式的图片 URL，
+ * 深拷贝节点 data 后替换，不影响内存中的原始节点。
+ * fetch 失败时保持原 URL 不变，不阻塞导出。
+ */
+const NODE_MEDIA_FILE_RE = /\/flowgen-api\/projects\/[^/]+\/node-media\/[^/]+\/file/i;
+const POSTER_FIELDS_TO_INLINE = ['videoPosterDataUrl', 'posterDataUrl'] as const;
+
+async function fetchNodeMediaAsDataUrl(url: string): Promise<string | null> {
+  try {
+    const bare = stripAssetAccessTokenFromUrl(url);
+    const authed = isFlowgenProtectedAssetFileUrl(bare) ? withAssetAccessToken(bare) : bare;
+    const resp = await fetch(authed);
+    if (!resp.ok) return null;
+    const blob = await resp.blob();
+    if (!blob.type.startsWith('image/') || blob.size === 0) return null;
+    return await new Promise<string>((resolve) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve(typeof reader.result === 'string' ? reader.result : '');
+      reader.onerror = () => resolve('');
+      reader.readAsDataURL(blob);
+    });
+  } catch {
+    return null;
+  }
+}
+
+async function inlineNodeMediaPosters<T extends { data?: Record<string, unknown> }>(
+  nodes: T[]
+): Promise<T[]> {
+  const tasks: Promise<void>[] = [];
+  const clones = nodes.map((n) => ({ ...n, data: n.data ? { ...n.data } : n.data }));
+
+  for (const node of clones) {
+    if (!node.data) continue;
+    // 顶层 poster 字段
+    for (const field of POSTER_FIELDS_TO_INLINE) {
+      const val = node.data[field];
+      if (typeof val === 'string' && NODE_MEDIA_FILE_RE.test(val)) {
+        tasks.push(
+          fetchNodeMediaAsDataUrl(val).then((dataUrl) => {
+            if (dataUrl) (node.data as Record<string, unknown>)[field] = dataUrl;
+          })
+        );
+      }
+    }
+    // generatedThumbnails[].posterDataUrl
+    const thumbs = node.data.generatedThumbnails;
+    if (Array.isArray(thumbs)) {
+      for (const thumb of thumbs) {
+        if (!thumb || typeof thumb !== 'object') continue;
+        const t = thumb as Record<string, unknown>;
+        if (typeof t.posterDataUrl === 'string' && NODE_MEDIA_FILE_RE.test(t.posterDataUrl)) {
+          tasks.push(
+            fetchNodeMediaAsDataUrl(t.posterDataUrl).then((dataUrl) => {
+              if (dataUrl) t.posterDataUrl = dataUrl;
+            })
+          );
+        }
+      }
+    }
+    // referenceMovs[].posterDataUrl
+    const movs = node.data.referenceMovs;
+    if (Array.isArray(movs)) {
+      for (const mov of movs) {
+        if (!mov || typeof mov !== 'object') continue;
+        const m = mov as Record<string, unknown>;
+        if (typeof m.posterDataUrl === 'string' && NODE_MEDIA_FILE_RE.test(m.posterDataUrl)) {
+          tasks.push(
+            fetchNodeMediaAsDataUrl(m.posterDataUrl).then((dataUrl) => {
+              if (dataUrl) m.posterDataUrl = dataUrl;
+            })
+          );
+        }
+      }
+    }
+  }
+
+  await Promise.all(tasks);
+  return clones;
 }
 
 /** 一次灌入/批量展开节点过多时，用 hidden + 分批 reveal，降低 React Flow 同时 mount 导致崩溃的概率（含刷新读盘、导入、粘贴、排序第二次「全部展开」） */
@@ -2464,6 +2555,18 @@ const FlowEditor = ({
   const hydrateLocalMediaPreviews = useCallback(async () => {
     const current = getNodes();
     const patches: Array<{ id: string; data: Partial<NodeData> }> = [];
+    // §11.90h：迁移过程中记录已处理 blob 指纹，防止 IndexedDB 脏数据（两个不同 key
+    // 存了相同 blob）导致迁移后新 ref 也指向相同图片，刷新后出现重复（面板图片重复2.json）。
+    const migratedBlobFingerprints = new Set<string>();
+    const computeBlobFingerprint = async (blob: Blob): Promise<string> => {
+      const header = await blob.slice(0, 2048).arrayBuffer();
+      const view = new Uint8Array(header);
+      let hex = '';
+      for (let i = 0; i < view.length; i++) {
+        hex += view[i].toString(16).padStart(2, '0');
+      }
+      return `${blob.size}_${blob.type}_${hex}`;
+    };
     for (const n of current) {
       const nodePatch: Partial<NodeData> = {};
       // §10.73：projectAssetId 可能因 onUpdate 时序问题还残留在节点上（虽然已被清除，但 React
@@ -2496,7 +2599,13 @@ const FlowEditor = ({
                 curRef === buildReferenceLocalRefForModel(localMediaScope, n.id, model, refIndex);
               if (!legacy) return undefined;
               const blob = await getLocalMediaBlob(curRef);
-              if (blob) await putLocalMediaFile(targetRef, blob);
+              if (blob) {
+                const fp = await computeBlobFingerprint(blob);
+                if (!migratedBlobFingerprints.has(fp)) {
+                  await putLocalMediaFile(targetRef, blob);
+                  migratedBlobFingerprints.add(fp);
+                }
+              }
               return targetRef;
             }
           }
@@ -2509,7 +2618,13 @@ const FlowEditor = ({
               isKlingOmniTabScopedMainLocalRef(curRef);
             if (!legacy) return undefined;
             const blob = await getLocalMediaBlob(curRef);
-            if (blob) await putLocalMediaFile(targetRef, blob);
+            if (blob) {
+              const fp = await computeBlobFingerprint(blob);
+              if (!migratedBlobFingerprints.has(fp)) {
+                await putLocalMediaFile(targetRef, blob);
+                migratedBlobFingerprints.add(fp);
+              }
+            }
             return targetRef;
           }
           if (kind === 'firstFrame' || kind === 'lastFrame') {
@@ -2521,7 +2636,13 @@ const FlowEditor = ({
               curRef === buildFrameLocalRefForModel(localMediaScope, n.id, kind, model);
             if (!legacy) return undefined;
             const blob = await getLocalMediaBlob(curRef);
-            if (blob) await putLocalMediaFile(targetRef, blob);
+            if (blob) {
+              const fp = await computeBlobFingerprint(blob);
+              if (!migratedBlobFingerprints.has(fp)) {
+                await putLocalMediaFile(targetRef, blob);
+                migratedBlobFingerprints.add(fp);
+              }
+            }
             return targetRef;
           }
           return undefined;
@@ -2535,7 +2656,22 @@ const FlowEditor = ({
                 : buildLocalMediaRef(localMediaScope, n.id, kind);
           if (curRef === sharedRef) return undefined;
           const blob = await getLocalMediaBlob(curRef);
-          if (blob) await putLocalMediaFile(sharedRef, blob);
+          if (blob) {
+            // §11.90h：迁移前检查 blob 指纹，若已存在相同 blob（IndexedDB 脏数据），
+            // 仅删除旧 ref 不写入新 ref，避免刷新后两个槽位显示相同图片。
+            const fp = await computeBlobFingerprint(blob);
+            if (!migratedBlobFingerprints.has(fp)) {
+              await putLocalMediaFile(sharedRef, blob);
+              migratedBlobFingerprints.add(fp);
+            }
+            // §11.90g：迁移后删除旧 ref，防止新旧 ref 同时指向同一 blob，
+            // 导致后续刷新水化后两个槽位显示相同图片（面板图片重复2.json）。
+            // §11.90s：主图（kind==='main'）只复制不删除——其他模型 modelConfigs
+            // 快照里的 imageLocalRef 仍指向旧键，删除会导致切回该模型刷新后主图丢失。
+            if (kind !== 'main') {
+              await deleteLocalMediaRef(curRef);
+            }
+          }
           return sharedRef;
         }
         const targetRef =
@@ -2553,7 +2689,40 @@ const FlowEditor = ({
               : isLegacyFrameLocalRef(curRef);
         if (!isLegacy) return undefined;
         const blob = await getLocalMediaBlob(curRef);
-        if (blob) await putLocalMediaFile(targetRef, blob);
+        if (blob) {
+          // §11.90h：迁移前检查 blob 指纹去重
+          const fp = await computeBlobFingerprint(blob);
+          if (!migratedBlobFingerprints.has(fp)) {
+            await putLocalMediaFile(targetRef, blob);
+            migratedBlobFingerprints.add(fp);
+          }
+          // §11.90g：迁移后删除旧 ref，防止新旧 ref 同时指向同一 blob
+          // §11.90s：主图（kind==='main'）只复制不删除，避免其他模型
+          // modelConfigs 快照中的 imageLocalRef 失效导致主图丢失。
+          if (kind !== 'main') {
+            await deleteLocalMediaRef(curRef);
+          }
+          return targetRef;
+        }
+        // §11.90m.5：IDB 中 legacy ref 无 blob 时，再查新格式 targetRef 是否有 blob。
+        // 两种情况会命中：① workspace 保存 legacy ref，但 IDB 实际存的是新格式
+        // （早期某些路径写入不一致，或 attachLocalMainRef 写入成功后但 imageLocalRef
+        //  被其他代码覆盖为 legacy）；② 刷新前已按新格式写入（刚刚修复了 Nano 写入），
+        // 但 workspace 中仍有旧 legacy ref。两种情况都必须迁移到新格式，否则后续
+        // hydrate 按 legacy ref 取不到 IDB blob，导致 pickPersistableMainPreviewUrl 兜底失败，
+        // 主图全部丢失。
+        const targetBlob = await getLocalMediaBlob(targetRef);
+        if (targetBlob) {
+          // targetRef 已在 IDB，仅把 workspace 的 imageLocalRef 同步为 targetRef
+          return targetRef;
+        }
+        // §11.90m.5：新旧格式 IDB 都无 blob → 强制迁移到 targetRef（新格式）。
+        // 原因：如果保持 legacy ref，下次用户重新拖入主图时 attachLocalMainRef 用
+        // buildMainLocalRefForModel 写入 targetRef（新格式），但 imageLocalRef 仍是 legacy
+        // → 新写的 blob 取不到，主图依然丢失。统一为新格式后：
+        //   ① 拖入新图片时 setNodes 写入 imageLocalRef: targetRef 与 IDB key 一致 → 可恢复；
+        //   ② 后续 pickPersistableMainPreviewUrl 仍会从 gp/generatedThumbnails 做兜底恢复
+        //      （已在 hydrateNodeImagePreviewFromPersisted 中修复此分支），不会比保持 legacy 更差。
         return targetRef;
       };
 
@@ -2591,17 +2760,40 @@ const FlowEditor = ({
             fieldChanged = true;
           }
         }
-        if (fieldChanged) nodePatch[field] = localRefs as NodeData[typeof field];
+        if (fieldChanged) {
+          nodePatch[field] = localRefs as NodeData[typeof field];
+        }
       }
 
       if (!isAssetBoundPreview) {
-        const ref = n.data.imageLocalRef;
+        // §11.90i：迁移后旧 ref 已从 IDB 删除，须使用 nodePatch.imageLocalRef（迁移后的新 ref）
+        // 而非 n.data.imageLocalRef（已被删除的旧 ref），否则 getLocalMediaBlob 返回 null 导致主图丢失。
+        const ref = nodePatch.imageLocalRef || n.data.imageLocalRef;
+        const skipRestore = shouldPreferRunReferencePreviewOverLocalMain(n.data);
+        const previewOk =
+          !!n.data.imagePreview && !isEphemeralMediaUrl(String(n.data.imagePreview || ''), 'imagePreview');
         if (ref) {
-          if (
-            !shouldPreferRunReferencePreviewOverLocalMain(n.data) &&
-            (!n.data.imagePreview || isEphemeralMediaUrl(n.data.imagePreview, 'imagePreview'))
-          ) {
-            const blob = await getLocalMediaBlob(ref);
+          if (!skipRestore && !previewOk) {
+            let blob = await getLocalMediaBlob(ref);
+            // §11.90n：当前 ref 无 blob 时，回退扫描 IDB 中同节点同 slot 的模型作用域键。
+            // 场景：用户在 Banana 模型下拖图（blob 写入 flowgen-local:...:main:Nano_Banana_20），
+            // 之后切到 Seedance（imageLocalRef 变为 flowgen-local:...:main），刷新后 blob 在旧键下。
+            if (!blob) {
+              const parsed = parseLocalMediaRef(ref);
+              if (parsed && parsed.slot === 'main') {
+                // 构造前缀：flowgen-local:scope:nodeId:main:（冒号结尾，精确匹配模型作用域键）
+                const prefix = `flowgen-local:${parsed.scope}:${parsed.nodeId}:main:`;
+                const fallback = await getLocalMediaBlobByPrefix(prefix);
+                if (fallback) {
+                  blob = fallback.blob;
+                  // 迁移 blob 到当前 ref（统一格式），避免下次刷新再次回退扫描
+                  try {
+                    await putLocalMediaFile(ref, blob);
+                  } catch (e) {
+                  }
+                }
+              }
+            }
             if (blob) nodePatch.imagePreview = URL.createObjectURL(blob);
           }
         }
@@ -2609,6 +2801,8 @@ const FlowEditor = ({
       }
       const panelRefPatch = await hydrateAllPanelReferenceLocalRefs({ ...n.data, ...nodePatch });
       if (panelRefPatch) Object.assign(nodePatch, panelRefPatch);
+      // §11.90l：对标 Banana 面板 — 参考图仅存于顶层数据，hydration 后无需同步快照。
+      // 快照不再存储 referenceImages，顶层数据是唯一数据源。
       if (Object.keys(nodePatch).length > 0) {
         patches.push({ id: n.id, data: nodePatch });
       }
@@ -2659,6 +2853,19 @@ const FlowEditor = ({
           });
           next.referenceImages = newRefs;
         }
+        // §11.90p：hydrate compact patch 的 localRefs/labels/eids 必须与 referenceImages 同步写入。
+        // 此前只写 referenceImages 而丢弃 localRefs —— compact 缩短 refs 后 localRefs 保持旧长数组，
+        // 两数组错位；后续删除同下标 splice 会误删无辜 IDB blob（deleteLocalMediaRef 删错 ref），
+        // 自动保存把错位状态入库 → 下次刷新更多 blob-miss → 恶性循环，表现为「没删图刷新也自动少图」。
+        if (p.data.referenceImageLocalRefs !== undefined) {
+          next.referenceImageLocalRefs = p.data.referenceImageLocalRefs;
+        }
+        if (p.data.referenceImageLabels !== undefined) {
+          next.referenceImageLabels = p.data.referenceImageLabels;
+        }
+        if (p.data.referenceElementIds !== undefined) {
+          next.referenceElementIds = p.data.referenceElementIds;
+        }
         if (p.data.klingOmniMultiReferenceImages) {
           const newRefs = p.data.klingOmniMultiReferenceImages;
           const kept = new Set(newRefs.filter((u) => u && u.startsWith('blob:')));
@@ -2682,6 +2889,21 @@ const FlowEditor = ({
             if (u && u.startsWith('blob:') && !kept.has(u)) revokeBlobPreviewUrl(u);
           });
           next.klingOmniVideoReferenceImages = newRefs;
+        }
+        // §11.90p：Omni 三 tab 的 localRefs 同样须与 images 同步写入（防 compact 后错位）
+        if (p.data.klingOmniMultiReferenceLocalRefs !== undefined) {
+          next.klingOmniMultiReferenceLocalRefs = p.data.klingOmniMultiReferenceLocalRefs;
+        }
+        if (p.data.klingOmniInstructionReferenceLocalRefs !== undefined) {
+          next.klingOmniInstructionReferenceLocalRefs = p.data.klingOmniInstructionReferenceLocalRefs;
+        }
+        if (p.data.klingOmniVideoReferenceLocalRefs !== undefined) {
+          next.klingOmniVideoReferenceLocalRefs = p.data.klingOmniVideoReferenceLocalRefs;
+        }
+        // §11.90l：seedanceTabConfigs 仍可包含 tab 元数据（prompt 等），但不再包含 referenceImages。
+        // 参考图仅存于顶层数据，快照同步仅处理 tab 专属字段。
+        if (p.data.seedanceTabConfigs) {
+          next.seedanceTabConfigs = p.data.seedanceTabConfigs;
         }
         return { ...n, data: next };
       })
@@ -2728,13 +2950,6 @@ const FlowEditor = ({
     async (nodeId: string, file: File) => {
       const existing = getNodes().find((n) => n.id === nodeId);
       const existingData = existing?.data as NodeData & { projectAssetId?: string };
-      // §10.73：移除 projectAssetId 与 imagePreview 资产库 URL 检查 — 两者均依赖 getNodes()
-      // 的实时状态，但 onUpdate 的 setNodes 是异步调度的，dispatchEvent 可能先于状态更新执行，
-      // 导致 getNodes() 读到旧值（projectAssetId 还在 / imagePreview 还是资产库 URL）而跳过备份。
-      // 调用方（NodeInspector）已通过 dispatchEvent register-original-image type=main 明确表达
-      // 备份意图，此处无需二次校验。资产库节点初始化不会触发该事件（L2996-3000 已有 projectAssetId 守卫）。
-      // 即便误备份，仅多一份 IDB 记录，不影响资产库 URL 显示（hydrateLocalMediaPreviews 会因
-      // isAssetBoundPreview=true 跳过用 IDB 覆盖 imagePreview）。
       const ref = buildMainLocalRefForModel(
         localMediaScope,
         nodeId,
@@ -2817,18 +3032,28 @@ const FlowEditor = ({
       // 此处无需二次守卫。误备份仅多一份 IDB 记录，不影响资产库 URL 显示。
       const model = String(existingData?.selectedModel || 'default').trim();
       const omniTab = klingOmniTabFromReferenceLocalRefField(localRefField);
-      let nextLocalRefs = [...(existingData?.[localRefField] || [])];
+      // §11.90k：只记录本次新增的 ref 映射（slotIndex → ref），不基于 getNodes() 的
+      // 旧数据计算全量 nextLocalRefs。delete 后 add 时，getNodes() 可能返回 React
+      // 尚未批处理完成的旧数据，导致 setNodes 回调中用旧数据覆盖正确的最新数据，
+      // 使 referenceImageLocalRefs 数组错位、刷新后显示错误图片。
+      const newRefEntries = new Map<number, string>();
       for (let i = 0; i < files.length; i++) {
         const file = files[i];
         if (!(file instanceof File)) continue;
         const slotIndex = startIndex + i;
+        // refIndex 用于生成唯一 IDB key，允许与数组下标不一致（删除后重追加场景）
+        // 基于 latest snapshot 计算 used indices，避免复用已删除的 ref index
+        const refIndex = nextAvailableReferenceLocalRefIndex(
+          existingData?.[localRefField] as string[] | undefined,
+          slotIndex
+        );
         const ref =
           isKlingOmniModel(model) && omniTab
-            ? buildKlingOmniReferenceLocalRefForTab(localMediaScope, nodeId, omniTab, slotIndex)
-            : buildReferenceLocalRefForModel(localMediaScope, nodeId, model, slotIndex);
+            ? buildKlingOmniReferenceLocalRefForTab(localMediaScope, nodeId, omniTab, refIndex)
+            : buildReferenceLocalRefForModel(localMediaScope, nodeId, model, refIndex);
         try {
           await putLocalMediaFile(ref, file);
-          nextLocalRefs = setReferenceImageLocalRefAtIndex(nextLocalRefs, slotIndex, ref);
+          newRefEntries.set(slotIndex, ref);
           const o = getOriginals(nodeId);
           const bucket = o.referenceImages || [];
           while (bucket.length <= slotIndex) bucket.push(undefined as unknown as File);
@@ -2838,30 +3063,46 @@ const FlowEditor = ({
           console.warn('[flowgen] local reference media IDB write failed', e);
         }
       }
-      setNodes((nds) =>
-        nds.map((n) => {
-          if (n.id !== nodeId) return n;
-          const existing = [...((n.data[localRefField] as string[] | undefined) || [])];
-          const merged = [...existing];
-          const maxLen = Math.max(merged.length, nextLocalRefs.length);
-          while (merged.length < maxLen) merged.push('');
-          for (let i = 0; i < nextLocalRefs.length; i++) {
-            const v = String(nextLocalRefs[i] || '').trim();
-            if (v) merged[i] = v;
+      // §11.90k：setNodes 回调中仅写入本次新增的 ref，不覆盖已有 ref。
+      // 对标 Banana 面板：Banana 无快照层，仅靠顶层数据持久化，天然一致。
+      // 通过 Promise 将 setNodes 回调中的正确 merged 结果返回给调用方，
+      // 避免 getNodes() 在 setNodes 尚未执行时返回旧数据导致 ref 错位。
+      const mergedPromise = new Promise<string[]>((resolve) => {
+        const timeout = setTimeout(() => {
+          // 10 秒超时兜底：使用 getNodes()（此时 setNodes 大概率已执行）
+          const latest = getNodes().find((n) => n.id === nodeId);
+          const fallbackRefs = [...((latest?.data[localRefField] as string[] | undefined) || [])];
+          for (const [slotIndex, ref] of newRefEntries) {
+            while (fallbackRefs.length <= slotIndex) fallbackRefs.push('');
+            fallbackRefs[slotIndex] = ref;
           }
-          nextLocalRefs = merged;
-          return {
-            ...n,
-            data: {
-              ...n.data,
-              [localRefField]: merged,
-            },
-          };
-        })
-      );
+          resolve(fallbackRefs);
+        }, 10000);
+        setNodes((nds) => {
+          clearTimeout(timeout);
+          const result = nds.map((n) => {
+            if (n.id !== nodeId) return n;
+            const existing = [...((n.data[localRefField] as string[] | undefined) || [])];
+            const merged = [...existing];
+            for (const [slotIndex, ref] of newRefEntries) {
+              while (merged.length <= slotIndex) merged.push('');
+              merged[slotIndex] = ref;
+            }
+            resolve(merged);
+            return {
+              ...n,
+              data: {
+                ...n.data,
+                [localRefField]: merged,
+              },
+            };
+          });
+          return result;
+        });
+      });
       window.dispatchEvent(new CustomEvent('flowgen:persist-request'));
       if (serverProjectId) scheduleRemoteWorkspaceSave();
-      return nextLocalRefs;
+      return mergedPromise;
     },
     [getNodes, localMediaScope, setNodes, serverProjectId, scheduleRemoteWorkspaceSave]
   );
@@ -5771,7 +6012,7 @@ const FlowEditor = ({
       );
 
       const exportData = {
-        nodes: nodesToExport.map((node) => ({
+        nodes: (await inlineNodeMediaPosters(nodesToExport)).map((node) => ({
           id: node.id,
           type: node.type,
           position: node.position,
@@ -7548,12 +7789,9 @@ const FlowEditor = ({
                 nanoMediaPlan,
                 projectAssetResolveOptsRef.current
             );
-            const prompt = resolvePromptPlaceholders(
-                rawNanoPrompt,
-                currentNode.data,
-                nanoCtx,
-                nanoPrOpts
-            );
+            // §5.8.9：Nano Banana 2 对齐 Google 官方自然语言引用格式（Image N），
+            // 不再展开为「（面板参考…视作 [图N]）」长括号中文元说明。
+            const prompt = resolveImageGenPromptToImageTokens(rawNanoPrompt, nanoPrOpts);
             const imageUrls: string[] = [];
 
             const aspectRatio = currentNode.data.aspectRatio || "1:1";
@@ -7731,12 +7969,9 @@ const FlowEditor = ({
                 image2MediaPlan,
                 projectAssetResolveOptsRef.current
             );
-            const prompt = resolvePromptPlaceholders(
-                rawImage2Prompt,
-                currentNode.data,
-                image2Ctx,
-                image2PrOpts
-            );
+            // §5.8.9：gpt-image-2 对齐 OpenAI 官方自然语言引用格式（Image N），
+            // 不再展开为「（面板参考…视作 [图N]）」长括号中文元说明。
+            const prompt = resolveImageGenPromptToImageTokens(rawImage2Prompt, image2PrOpts);
             const imageUrls: string[] = [];
 
             const aspectRatio = image2NormalizeAspectRatio(currentNode.data.image2AspectRatio);
@@ -8074,6 +8309,15 @@ const FlowEditor = ({
             const omniProgressInterval = window.setInterval(() => {
                 bumpRunningNodeProgress(1, 95);
             }, 1000);
+            // §10.78 方案B：运行总超时兜底（30分钟），防止上传/轮询卡住导致 progress 永久卡在 95%
+            // 覆盖 getTaskStatus 等 fetch 无超时的场景；超时后 reject 被 catch 块捕获，节点回落 idle + Error Result Node
+            const OMNI_RUN_TOTAL_TIMEOUT_MS = 30 * 60 * 1000;
+            let omniRunTimeoutTimer: ReturnType<typeof setTimeout> | null = null;
+            const omniRunTimeoutPromise = new Promise<never>((_, reject) => {
+                omniRunTimeoutTimer = setTimeout(() => {
+                    reject(new Error('可灵3.0 Omni 运行超时（30分钟），请检查网络或重试'));
+                }, OMNI_RUN_TOTAL_TIMEOUT_MS);
+            });
             try {
             const originalsKeling = getOriginals(idToRun);
 
@@ -8114,8 +8358,10 @@ const FlowEditor = ({
                 omniMediaPlan,
                 projectAssetResolveOptsRef.current
             );
-            prompt = resolvePromptPlaceholders(prompt, d, omniPhCtx, omniPrOpts);
-            negativePrompt = resolvePromptPlaceholders(negativePrompt, d, omniPhCtx, omniPrOpts);
+            // §5.8.9：可灵3.0 Omni 对齐官方原生引用格式（@image_N），
+            // 不再展开为「（面板参考…视作 [图N]）」长括号中文元说明，避免可灵 NLP 无法识别。
+            prompt = resolveKlingOmniPromptToNativeImageTokens(prompt, omniPrOpts);
+            negativePrompt = resolveKlingOmniPromptToNativeImageTokens(negativePrompt, omniPrOpts);
             const quality = currentNode.data.quality || '高质量';
             const mode: 'std' | 'pro' = quality === '高质量' ? 'pro' : 'std';
             const durationValue = (currentNode.data.duration || '5s').replace('s', '');
@@ -8991,15 +9237,19 @@ const FlowEditor = ({
                 });
             }
             // 2) 轮询任务状态（数量>1 时创建多个独立任务，各 generateNum=1）
+            // §10.78 方案B：用 Promise.race 与总超时竞争，防止 getTaskStatus fetch 卡住导致永久挂起
             const pollOmniVideo = (tid: string) =>
-                pollVideoTaskUntilUrl(tid, {
-                    failLabel: '可灵3.0 Omni',
-                    intervalMs: 5000,
-                    maxAttempts: 240,
-                    onProgress: () => bumpRunningNodeProgress(1, 95),
-                    stabilize: (url) =>
-                        stabilizeVideoResourceUrl(url, { modelTag: '可灵3.0Omni', taskId: tid }),
-                });
+                Promise.race([
+                    pollVideoTaskUntilUrl(tid, {
+                        failLabel: '可灵3.0 Omni',
+                        intervalMs: 5000,
+                        maxAttempts: 240,
+                        onProgress: () => bumpRunningNodeProgress(1, 95),
+                        stabilize: (url) =>
+                            stabilizeVideoResourceUrl(url, { modelTag: '可灵3.0Omni', taskId: tid }),
+                    }),
+                    omniRunTimeoutPromise,
+                ]);
             if (omniGenerateCount > 1 && omniBatchPayload) {
                 const omniTaskIds: string[] = [taskId];
                 for (let i = 1; i < omniGenerateCount; i++) {
@@ -9023,6 +9273,7 @@ const FlowEditor = ({
             if (!generatedImages.length) throw new Error('可灵3.0 Omni 视频生成超时');
             } finally {
                 window.clearInterval(omniProgressInterval);
+                if (omniRunTimeoutTimer != null) clearTimeout(omniRunTimeoutTimer);
             }
         }
         // --- REAL API LOGIC FOR KLING VIDEO ---
@@ -9497,24 +9748,8 @@ const FlowEditor = ({
             if (isSeedance20Model) {
               Object.assign(runCaptureForGp, {
                 seedanceGenerationMode: seedanceMode,
-                seedanceReferenceRatioMode:
-                  seedanceMode === 'reference'
-                    ? ((currentNode.data.seedanceReferenceRatioMode ||
-                        gp.seedanceReferenceRatioMode ||
-                        'force') as 'force' | 'auto')
-                    : currentNode.data.seedanceReferenceRatioMode,
               });
             }
-            const seedanceReferenceRatioMode: 'force' | 'auto' =
-              isSeedance20Model && seedanceMode === 'reference'
-                ? ((currentNode.data.seedanceReferenceRatioMode ||
-                    gp.seedanceReferenceRatioMode ||
-                    'force') as 'force' | 'auto')
-                : 'force';
-            const shouldAutoMatchReferenceRatio =
-              isSeedance20Model &&
-              seedanceMode === 'reference' &&
-              seedanceReferenceRatioMode === 'auto';
             const originalsSeedance = getOriginals(idToRun);
             if (isSeedance20Model) {
               logPreloadDebug({
@@ -9631,16 +9866,13 @@ const FlowEditor = ({
               (seedanceMode === 'image' && firstFrameImage
                 ? (await getImageAspectRatioFromSource(firstFrameImage))
                 : '16:9');
-            // 图生首尾帧：先按首帧（或面板固定）比例统一裁切，避免 16:9+4:3 混用被前置校验拦下
+            // 图生首尾帧：仅做边长/字节/极值(0.4~2.5)约束，不按视频比例裁切。
+            // 豆包官方不强制首帧比例=视频 aspectRatio，模型自行适配比例（与即梦/参考生行为一致）。
             if (firstFrameImage) {
-              firstFrameImage = await prepareLocalImageSrcCached(firstFrameImage, {
-                  seedanceRatioLabel: ratioLabelForNorm,
-              });
+              firstFrameImage = await prepareLocalImageSrcCached(firstFrameImage);
             }
             if (lastFrameImage) {
-              lastFrameImage = await prepareLocalImageSrcCached(lastFrameImage, {
-                  seedanceRatioLabel: ratioLabelForNorm,
-              });
+              lastFrameImage = await prepareLocalImageSrcCached(lastFrameImage);
             }
             if (seedanceMode === 'image' && firstFrameImage && lastFrameImage && ratioFromPanel) {
                 const firstRatio = await getImageAspectRatioFromSource(firstFrameImage).catch(() => undefined);
@@ -9745,7 +9977,8 @@ const FlowEditor = ({
                 flowgenAssetFileUrlFromMediaUrl,
                 isFlowgenAssetThumbUrl,
                 base64ToUrl,
-                seedanceRatioLabel: ratioLabelForNorm,
+                // 图生 @图片n 上传：不按视频比例裁切（与首尾帧/参考生一致）
+                seedanceRatioLabel: null,
               };
               const uploadedByToken = new Map<string, string>();
               for (const entry of imagePlan.images) {
@@ -9949,7 +10182,9 @@ const FlowEditor = ({
                 flowgenAssetFileUrlFromMediaUrl,
                 isFlowgenAssetThumbUrl,
                 base64ToUrl,
-                seedanceRatioLabel: ratioLabelForNorm,
+                // 参考生模式：参考图保留原始构图，不按视频比例裁切（豆包仅要求宽高比 0.4~2.5）；
+                // 图生首尾帧仍按比例裁切以保护首帧还原。
+                seedanceRatioLabel: seedanceMode === 'reference' ? null : ratioLabelForNorm,
               };
               let uploadedMainImageUrl: string | undefined;
               const uploadedByToken = new Map<string, string>();
@@ -10067,8 +10302,7 @@ const FlowEditor = ({
                 bumpRunningNodeProgress(2, 50);
               }
               if (uploadedMovs.length > 0) referenceVideosPayload = uploadedMovs;
-              if (uploadedMovs.length > 0 && shouldAutoMatchReferenceRatio) {
-                ratioOverrideByReferenceVideo = await detectVideoRatioFromUrl(uploadedMovs[0]);
+              if (uploadedMovs.length > 0) {
                 const refDurationSec = await getVideoDurationSeconds(uploadedMovs[0]);
                 if (refDurationSec != null && (refDurationSec < 2 || refDurationSec > 15)) {
                   throw new Error(
@@ -10238,36 +10472,26 @@ const FlowEditor = ({
                 referenceAudios: uploaded.map((u) => u.slice(0, 160)),
                 ratioOverrideByReferenceVideo,
               });
-              // 仅在“自动匹配”时才从首张参考图推断比例；用户手选比例必须优先。
-              if (
-                shouldAutoMatchReferenceRatio &&
-                referenceImagesPayload?.[0] &&
-                !ratioOverrideByReferenceVideo &&
-                !ratioFromPanel
-              ) {
-                try {
-                  ratio = await getImageAspectRatioFromSource(referenceImagesPayload[0]);
-                  logPreloadDebug({
-                    model,
-                    stage: 'seedance-ratio-from-ref',
-                    ratio,
-                  });
-                } catch {
-                  /* 保留面板比例 */
-                }
-              }
               Object.assign(runCaptureForGp, {
                 seedanceAspectRatio: ratioOverrideByReferenceVideo || ratio,
               });
             }
             const seedCtxForPrompt = buildRunPromptCtx(seedanceDataForPromptExpand);
             const seedancePromptBeforeResolve = prompt;
-            prompt = resolvePromptPlaceholders(
-              prompt,
-              seedanceDataForPromptExpand,
-              seedCtxForPrompt,
-              seedanceResolveOptsForRun
-            );
+            // §11.91：Seedance 2.0 用豆包原生「图片N」标记（对照官方文档 82379/2222480 提示词指南、
+            // 82379/2291680 教程），不再展开为「（面板参考…视作 [图N]）」长括号自然语言说明，
+            // 避免丢失豆包要求的结构化「图片N」标记导致多图对齐失效。
+            // 1.5-pro 仅支持首帧/首尾帧（靠 startImage 字段，无多图参考），保持原 resolvePromptPlaceholders。
+            if (isSeedance20Model) {
+              prompt = resolveSeedancePromptToNativeImageTokens(prompt, seedanceResolveOptsForRun);
+            } else {
+              prompt = resolvePromptPlaceholders(
+                prompt,
+                seedanceDataForPromptExpand,
+                seedCtxForPrompt,
+                seedanceResolveOptsForRun
+              );
+            }
             if (seedanceMode === 'reference' && isSeedance20Model && seedancePreloadPlanImages) {
               const indexByToken: Record<string, number> = {};
               for (const img of seedancePreloadPlanImages) {
@@ -10416,10 +10640,8 @@ const FlowEditor = ({
                 jimengMediaPlan,
                 projectAssetResolveOptsRef.current
             );
-            const prompt = resolvePromptPlaceholders(
+            const prompt = resolveJimengPromptStripImageTokens(
                 rawJimengPrompt,
-                currentNode.data,
-                jimengCtx,
                 jimengPrOpts
             );
             const originalsJimeng = getOriginals(idToRun);
@@ -12855,7 +13077,7 @@ const FlowEditor = ({
       }
 
       const dataToSave = {
-        nodes: getNodes(),
+        nodes: await inlineNodeMediaPosters(getNodes()),
         edges: getEdges(),
         storyboardImages: storyboardImages,
         savedAt: new Date().toISOString()
@@ -12958,7 +13180,22 @@ const FlowEditor = ({
       setSaveFileName(sourceFileName.replace(/\.json$/i, ''));
 
       try {
-          
+
+          // B3: 清理旧版 /pr/ 无效路径标识（后端无此路由，导入后必 404）
+          const cleanLegacyPrPath = (val: unknown): unknown => {
+            if (typeof val === 'string') {
+              return /\/flowgen-api\/pr\/[A-Za-z0-9]+:\d+/.test(val) ? '' : val;
+            }
+            if (Array.isArray(val)) return val.map(cleanLegacyPrPath);
+            if (val && typeof val === 'object') {
+              const out: Record<string, unknown> = {};
+              for (const [k, v] of Object.entries(val)) out[k] = cleanLegacyPrPath(v);
+              return out;
+            }
+            return val;
+          };
+          if (parsed.nodes) parsed.nodes = cleanLegacyPrPath(parsed.nodes) as RFNode[];
+
           // 获取当前节点和边
           const currentNodes = getNodes();
           const currentEdges = getEdges();
@@ -12983,19 +13220,31 @@ const FlowEditor = ({
               return node;
             });
             
-            // 计算偏移量，将导入的节点放在右侧，避免重叠
-            const currentMaxX = currentNodes.length > 0 
-              ? Math.max(...currentNodes.map(n => n.position.x + (n.width || 200)))
+            // 将导入节点的几何中心平移到当前视口中心，确保用户当前可见区域立即出现导入结果
+            // （与粘贴节点逻辑 L6241-6248 同源；当画布已有节点时，沿 X 轴额外加一个节点宽+间距，避免与中心已有节点完全重叠）
+            const viewportCenter = screenToFlowPosition({
+              x: window.innerWidth / 2,
+              y: window.innerHeight / 2,
+            });
+            const validNodesForCenter = importedNodes.filter(hasReasonableNodePosition);
+            const ax = validNodesForCenter.length > 0
+              ? validNodesForCenter.reduce((s, n) => s + n.position.x, 0) / validNodesForCenter.length
               : 0;
-            const offsetX = currentNodes.length > 0 ? currentMaxX + 100 : 0;
-            
+            const ay = validNodesForCenter.length > 0
+              ? validNodesForCenter.reduce((s, n) => s + n.position.y, 0) / validNodesForCenter.length
+              : 0;
+            // 画布已有节点时，沿 X 轴额外偏移一个节点宽+间距（默认节点宽 200 + 120 间距），避免完全重叠
+            const extraOffsetX = currentNodes.length > 0 ? 320 : 0;
+            const dx = viewportCenter.x - ax + extraOffsetX;
+            const dy = viewportCenter.y - ay;
+
             // 调整导入节点的位置
             adjustedNodes = hydrateNodesImagePreviewFromPersisted(
               importedNodes.map((node: RFNode) => ({
                 ...node,
                 position: {
-                  x: node.position.x + offsetX,
-                  y: node.position.y
+                  x: node.position.x + dx,
+                  y: node.position.y + dy
                 }
               }))
             );
@@ -13122,8 +13371,8 @@ const FlowEditor = ({
           
         const posHint =
           currentNodes.length > 0
-            ? '已合并到当前工程（节点右移避免重叠），未覆盖现有内容。'
-            : '已导入到画布，节点保持文件中的原始位置。';
+            ? '已合并到当前工程，新节点放在当前视口中心右侧（避免与已有节点重叠）。'
+            : '已导入到画布，节点放在当前视口中心。';
         alert(
           `✅ 工程已导入！\n- 节点: ${parsed.nodes?.length || 0} 个\n- 边: ${parsed.edges?.length || 0} 条\n- 故事板图片: ${parsed.storyboardImages?.length || 0} 张\n\n${posHint}`
         );
@@ -13143,6 +13392,7 @@ const FlowEditor = ({
       hydrateLocalMediaPreviews,
       persistImportedGraphSnapshot,
       fitView,
+      screenToFlowPosition,
     ]
   );
 

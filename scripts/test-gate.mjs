@@ -63,6 +63,12 @@ const steps = [
   { label: 'node-main-drag-normalize-override', cmd: 'npm', args: ['run', 'test:node-main-drag-normalize-override'] },
   // §10.75 attachLocalReferenceRefs 移除 projectAssetId 守卫 → 资产库节点参考图可备份到 IDB（防回归）
   { label: 'attach-local-reference-refs-backup', cmd: 'npm', args: ['run', 'test:attach-local-reference-refs-backup'] },
+  // §11.90q Nano Banana 2.0 模型切换后主图丢失（防回归：imagePreview=undefined + imageLocalRef 存在时不继承失效 blob）
+  { label: 'nano-model-switch-main-loss', cmd: 'npm', args: ['run', 'test:nano-model-switch-main-loss'] },
+  // §11.90r movNode/OUTPUT 拖入图片覆盖主视频（防回归：已有主视频时不进入首张做主图分支）
+  { label: 'mov-node-drag-image-no-clobber-video', cmd: 'npm', args: ['run', 'test:mov-node-drag-image-no-clobber-video'] },
+  // §11.90u 面板图片隔离 & 主图持久化（防回归：image2/Omni 拖图后切模型主图丢失、跨模型参考图泄漏）
+  { label: 'panel-image-isolation-guard', cmd: 'npm', args: ['run', 'test:panel-image-isolation-guard'] },
 ];
 
 console.log('=== FlowGen test:gate（回归门禁）===\n');

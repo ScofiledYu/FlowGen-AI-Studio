@@ -49,13 +49,9 @@ export function snapshotSeedanceTabConfigsWithLivePanel(
     currentSnapshot.lastFrameLocalRef = data.lastFrameLocalRef;
   }
   if (mode === 'reference') {
-    currentSnapshot.referenceImages = data.referenceImages ? [...data.referenceImages] : [];
-    currentSnapshot.referenceImageLabels = data.referenceImageLabels
-      ? [...data.referenceImageLabels]
-      : [];
-    currentSnapshot.referenceElementIds = data.referenceElementIds
-      ? [...data.referenceElementIds]
-      : [];
+    // §11.90l：对标 Banana 面板 — 参考图不再存入快照。顶层 data.referenceImages
+    // 是唯一数据源，切换 tab 时不清空，切回时无需从快照恢复。
+    // 仅保留 prompt 等 tab 专属元数据在快照中。
     currentSnapshot.referenceMovs = data.referenceMovs ? [...data.referenceMovs] : [];
     currentSnapshot.referenceAudios = data.referenceAudios ? [...data.referenceAudios] : [];
   }

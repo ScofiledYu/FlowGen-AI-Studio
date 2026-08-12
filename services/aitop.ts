@@ -137,6 +137,43 @@ export function compactAitopPreloadBodyForLog(body: unknown): unknown {
   return out;
 }
 
+/**
+ * 带 AbortController 超时的 fetch 封装。
+ * 解决上传/拉取链路无超时导致节点 progress 永久卡在 95% 的问题（§10.78）。
+ * 超时后抛出明确错误，被 handleNodeRun 的 catch 块捕获，节点状态变为 idle + 创建 Error Result Node。
+ */
+async function fetchWithTimeout(
+  input: string,
+  init: RequestInit = {},
+  timeoutMs: number
+): Promise<Response> {
+  if (typeof AbortController === 'undefined' || timeoutMs <= 0) {
+    return fetch(input, init);
+  }
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const resp = await fetch(input, { ...init, signal: controller.signal });
+    return resp;
+  } catch (e) {
+    if (e instanceof DOMException && e.name === 'AbortError') {
+      throw new Error(`请求超时（${Math.round(timeoutMs / 1000)}s）：${input.slice(0, 80)}`);
+    }
+    throw e;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+/** 拉取媒体 blob 的超时（60s），覆盖直连 + 同源代理 */
+const FETCH_BLOB_TIMEOUT_MS = 60_000;
+/** 图片/音频上传超时（120s） */
+const UPLOAD_IMAGE_TIMEOUT_MS = 120_000;
+/** 视频上传超时（180s，视频文件通常较大） */
+const UPLOAD_VIDEO_TIMEOUT_MS = 180_000;
+/** 任务状态查询超时（30s），轮询频繁调用，超时后由 pollXxxUntilUrl 的 continue 兜底重试 */
+const TASK_STATUS_TIMEOUT_MS = 30_000;
+
 // Helper to convert URL/Base64 to Blob for Upload
 async function getBlobFromUrl(url: string): Promise<Blob> {
   const trimmed = (url || '').trim();
@@ -153,7 +190,11 @@ async function getBlobFromUrl(url: string): Promise<Blob> {
   }
 
   if (remoteMediaUrlPreferSameOriginProxy(url)) {
-    const proxyResp = await fetch(`/proxy-file?url=${encodeURIComponent(url)}`).catch((e) => {
+    const proxyResp = await fetchWithTimeout(
+      `/proxy-file?url=${encodeURIComponent(url)}`,
+      {},
+      FETCH_BLOB_TIMEOUT_MS
+    ).catch((e) => {
       throw e instanceof Error ? e : new Error(String(e));
     });
     if (proxyResp.ok) return await proxyResp.blob();
@@ -161,7 +202,7 @@ async function getBlobFromUrl(url: string): Promise<Blob> {
   }
 
   let fetchErr: unknown = null;
-  const direct = await fetch(url).catch((e) => {
+  const direct = await fetchWithTimeout(url, {}, FETCH_BLOB_TIMEOUT_MS).catch((e) => {
     fetchErr = e;
     return null;
   });
@@ -172,7 +213,11 @@ async function getBlobFromUrl(url: string): Promise<Blob> {
   // 远程地址在浏览器侧可能受 CORS 限制；回退同源代理拉取
   const isHttpLike = /^https?:\/\//i.test(url);
   if (isHttpLike) {
-    const proxyResp = await fetch(`/proxy-file?url=${encodeURIComponent(url)}`).catch((e) => {
+    const proxyResp = await fetchWithTimeout(
+      `/proxy-file?url=${encodeURIComponent(url)}`,
+      {},
+      FETCH_BLOB_TIMEOUT_MS
+    ).catch((e) => {
       if (fetchErr instanceof Error) throw fetchErr;
       throw e instanceof Error ? e : new Error(String(e));
     });
@@ -227,11 +272,15 @@ export async function uploadImage(imageUri: string): Promise<string | null> {
 
     const uploadUrl = `${BASE_URL}/api/v1/file/upload`;
     const uploadHeaders = aitopUploadHeaders();
-    const response = await fetch(uploadUrl, {
-      method: 'POST',
-      headers: uploadHeaders,
-      body: formData
-    });
+    const response = await fetchWithTimeout(
+      uploadUrl,
+      {
+        method: 'POST',
+        headers: uploadHeaders,
+        body: formData,
+      },
+      UPLOAD_IMAGE_TIMEOUT_MS
+    );
 
     let data: unknown = null;
     try {
@@ -276,11 +325,15 @@ export async function uploadAudio(audioUri: string): Promise<string | null> {
 
     const uploadUrl = `${BASE_URL}/api/v1/file/upload`;
     const uploadHeaders = aitopUploadHeaders();
-    const response = await fetch(uploadUrl, {
-      method: 'POST',
-      headers: uploadHeaders,
-      body: formData,
-    });
+    const response = await fetchWithTimeout(
+      uploadUrl,
+      {
+        method: 'POST',
+        headers: uploadHeaders,
+        body: formData,
+      },
+      UPLOAD_IMAGE_TIMEOUT_MS
+    );
 
     let data: unknown = null;
     try {
@@ -317,11 +370,15 @@ export async function uploadVideo(videoUri: string, filename = 'video.mp4'): Pro
 
     const uploadUrl = `${BASE_URL}/api/v1/file/upload`;
     const uploadHeaders = aitopUploadHeaders();
-    const response = await fetch(uploadUrl, {
-      method: 'POST',
-      headers: uploadHeaders,
-      body: formData
-    });
+    const response = await fetchWithTimeout(
+      uploadUrl,
+      {
+        method: 'POST',
+        headers: uploadHeaders,
+        body: formData,
+      },
+      UPLOAD_VIDEO_TIMEOUT_MS
+    );
 
     let data: unknown = null;
     try {
@@ -688,20 +745,23 @@ export async function getTaskStatus(taskId: string): Promise<any> {
     const proxyUrl = `/task-status?taskId=${encodeURIComponent(taskId)}${buildAitopBillingQuery()}`;
     let response: Response;
     try {
-      response = await fetch(proxyUrl, {
-        method: 'GET',
-        cache: 'no-store'
-      });
+      // §10.79：加 fetchWithTimeout 防止 /task-status 代理 fetch 卡住导致轮询无限等待
+      response = await fetchWithTimeout(
+        proxyUrl,
+        { method: 'GET', cache: 'no-store' },
+        TASK_STATUS_TIMEOUT_MS
+      );
       if (!response.ok) {
         throw new Error(`proxy status ${response.status}`);
       }
     } catch (proxyError) {
       const directUrl = `${BASE_URL}/api/v1/task/${taskId}`;
       const directHeaders = aitopJsonHeaders();
-      response = await fetch(directUrl, {
-        method: 'GET',
-        headers: directHeaders,
-      });
+      response = await fetchWithTimeout(
+        directUrl,
+        { method: 'GET', headers: directHeaders },
+        TASK_STATUS_TIMEOUT_MS
+      );
     }
 
     // 检查HTTP状态码

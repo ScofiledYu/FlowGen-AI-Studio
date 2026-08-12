@@ -257,6 +257,91 @@ export function removeReferenceImageAt(
   return { referenceImages: nextRefs, referenceImageLabels: aligned };
 }
 
+/**
+ * §11.90m：对标 Banana 面板（compactImage2PanelReferences + compactImage2PanelLocalRefs）——
+ * Seedance 面板删除参考图后，重新压紧 referenceImages（过滤空槽），并按槽位严格对齐
+ * referenceImageLabels / referenceImageLocalRefs / referenceElementIds。
+ *
+ * 为什么需要：
+ *   旧 removeRefImage 仅 splice 各数组，不重新压紧。当历史数据存在空槽或 localRefs
+ *   ref index 与 slot index 不一致（如 ['ref:1','ref:3','ref:7','ref:8']）时，
+ *   错位会持续累积，导致刷新后 hydrateAllPanelReferenceLocalRefs 按 i 下标从 IDB
+ *   取 blob 时读到错误槽位的图片，表现为「图片1和图片2一样 / 图片6和图片7一样」。
+ *
+ *   Banana 的 compactImage2PanelLocalRefs 会根据 URL 重新匹配 localRefs，
+ *   确保下标严格一一对应；本函数对 Seedance 做同样的事。
+ *
+ * 行为：
+ *   - 遍历 referenceImages，跳过空字符串槽位
+ *   - 保留下标对齐的 labels / localRefs / elementIds
+ *   - 不去重 URL（重复 URL 由上层 dedupe 逻辑处理），只压紧空槽
+ *
+ * @returns 压紧后的四个数组，长度一致且无空槽
+ */
+export function compactSeedancePanelReferences(
+  data: Pick<
+    NodeData,
+    'referenceImages' | 'referenceImageLabels' | 'referenceImageLocalRefs' | 'referenceElementIds'
+  >
+): {
+  referenceImages: string[];
+  referenceImageLabels: string[];
+  referenceImageLocalRefs: string[];
+  referenceElementIds: (string | undefined)[];
+} {
+  const refs = data.referenceImages || [];
+  const labels = data.referenceImageLabels || [];
+  const rawLocalRefs = data.referenceImageLocalRefs || [];
+  const eids = data.referenceElementIds || [];
+
+  // §11.90o：对标 Banana compactImage2PanelLocalRefs（image2PanelRefs.ts）——
+  // localRefs 与 refs 长度不一致时（两数组来自 onUpdate / attachLocalReferenceRefs
+  // 两条异步写入链路，快照可能错位），按 URL 内容重匹配 localRefs（used 防重），
+  // 避免下标错位导致 compact 丢图 / 删除时误删无辜 IDB blob。
+  let localRefs = rawLocalRefs;
+  if (rawLocalRefs.length !== refs.length) {
+    const used = new Set<number>();
+    localRefs = refs.map((rawUrl) => {
+      const url = String(rawUrl || '').trim();
+      if (!url) return '';
+      for (let j = 0; j < refs.length; j++) {
+        if (used.has(j)) continue;
+        if (String(refs[j] || '').trim() === url) {
+          used.add(j);
+          return String(rawLocalRefs[j] || '').trim();
+        }
+      }
+      return '';
+    });
+  }
+
+  const compactedRefs: string[] = [];
+  const compactedLabels: string[] = [];
+  const compactedLocalRefs: string[] = [];
+  const compactedEids: (string | undefined)[] = [];
+
+  // §11.90o：以 refs 长度为准遍历（不做 commonLen 截断）——
+  // 旧逻辑 Math.min(refs, labels, localRefs, eids) 会在任一数组短缺时
+  // 静默丢弃末尾合法图片，表现为「没删图刷新后自行少一张」。
+  for (let i = 0; i < refs.length; i++) {
+    const url = String(refs[i] || '').trim();
+    const localRef = String(localRefs[i] || '').trim();
+    // §11.90m：只过滤真正的空槽（URL 和 localRef 都为空）。
+    if (!url && !localRef) continue;
+    compactedRefs.push(url);
+    compactedLabels.push(String(labels[i] || '').trim());
+    compactedLocalRefs.push(localRef);
+    compactedEids.push(eids[i]);
+  }
+
+  return {
+    referenceImages: compactedRefs,
+    referenceImageLabels: compactedLabels,
+    referenceImageLocalRefs: compactedLocalRefs,
+    referenceElementIds: compactedEids,
+  };
+}
+
 export type FirstLastFrameSlot = 'first' | 'last';
 
 /** 首尾帧槽当前展示用 URL（file 优先于 blob） */
@@ -956,7 +1041,8 @@ export function syncGenericReferenceImageLabelsToSlotOrdinals(
       if (compact >= 1 && labelOrd === compact) return cap;
       if (labelOrd === i + 1 && labelOrd <= nonEmpty) return cap;
       if (compact >= 1 && labelOrd > nonEmpty) return `图片${compact}`;
-      if (labelOrd >= 1) return cap;
+      // 兜底：泛称标签序号与槽位不对齐时，按实际序号重新编号
+      return `图片${compact >= 1 ? compact : labelOrd}`;
     }
     return compact >= 1 ? `图片${compact}` : '';
   });

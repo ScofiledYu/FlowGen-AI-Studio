@@ -1289,15 +1289,33 @@ export function pickSeedanceReferencePanelSnapshot(data: Partial<NodeData>): {
   const refTab = data.seedanceTabConfigs?.reference as
     | { referenceImages?: string[]; referenceImageLabels?: string[] }
     | undefined;
+  const topRefs = (data.referenceImages || []).map((u) => String(u || '').trim());
+  const topLabels = data.referenceImageLabels;
+
+  // §11.90b：reference tab 快照与顶层面板数据不一致时，若快照明显贫化（全空、
+  // 非空 URL 数少于顶层），则回退到顶层 referenceImages，防止旧空快照在运行 recovery /
+  // 切换 tab 后覆盖面板真实数据，导致参考图丢失或 generationParams 回填错误。
+  //
+  // §11.90d：进一步收紧 —— 顶层有任何非空 URL 时，始终以顶层为准（对标 Banana）。
+  // 原逻辑 tabNonEmpty < topNonEmpty 在 COS URL 同时存在于两端时仍然会走 tab 快照的旧数据，
+  // 导致删图后 gp 回填错位。tab 快照仅用于顶层全空时兜底（如切 tab 后 image tab 活跃期）。
+  const tabRefsRaw = refTab?.referenceImages;
+  const tabRefs = (tabRefsRaw || []).map((u) => String(u || '').trim());
+  const topNonEmpty = topRefs.filter(Boolean).length;
+  const tabNonEmpty = tabRefs.filter(Boolean).length;
+  const useTopInstead = topNonEmpty > 0;
+
   // 保持原始槽位结构（含空槽），让 buildSeedanceReferenceDetailsFromSnapshot 按索引对齐 URL 与标签，
   // 避免只压缩 URL 导致标签错位（seedance2.json 缺图问题）。
   const referenceImages = (
-    refTab?.referenceImages?.length ? refTab.referenceImages : data.referenceImages
+    useTopInstead ? data.referenceImages : tabRefsRaw?.length ? tabRefsRaw : data.referenceImages
   )?.map((u) => String(u || '').trim());
   if (!referenceImages?.some((u) => u)) return { referenceImages: [] };
-  const referenceImageLabels = refTab?.referenceImageLabels?.length
-    ? refTab.referenceImageLabels
-    : data.referenceImageLabels;
+  const referenceImageLabels = useTopInstead
+    ? topLabels
+    : refTab?.referenceImageLabels?.length
+      ? refTab.referenceImageLabels
+      : topLabels;
   return {
     referenceImages,
     referenceImageLabels: referenceImageLabels?.length ? [...referenceImageLabels] : undefined,
@@ -1346,11 +1364,29 @@ export function repairSeedanceReferenceGenerationParamsFromPanel(
   //          与 repairOmniMultiGenerationParamsFromPanel 保持一致，防止 Node Details 参考图错乱。
   //          注意：不适用 imagePreview 回填主图（imagePreview 是生成输出而非主参考图，§11.77 已废弃）。
   //          主图 COS URL 应在运行时由 resolveSeedancePromptTokenMedia + seedanceApiRefImages 正确写入 gp。
+  //
+  // §11.90e：删除参考图后 panel 与 gp 长度不一致，位置索引回退会错位（如 blob[5] 回退到 gp[5] 但 gp[5] 实际
+  //          对应已删除的旧图），导致 gp 出现重复 URL。仅当长度一致时做位置回退，否则不回退。
+  // §11.90f：gp 回退去重 —— 先收集所有面板非 blob URL 作为去重集合，再回退 gp[i] 时检查该 URL
+  //          是否已在合并结果（含面板自身 URL）中出现过，防止索引错位导致 gp 出现重复 URL。
+  //          同时处理旧 session 遗留的 gp 重复 URL。
+  const panelGpLengthMatch = panelRefs.length === prevRefArr.length;
+  const seenRefUrls = new Set<string>();
+  // 第一遍：收集所有面板非 blob URL，用于 gp 回退去重
+  for (const u of panelRefs) {
+    const v = String(u || '').trim();
+    if (v && !/^(blob|data):/i.test(v)) seenRefUrls.add(v);
+  }
+  // 第二遍：合并面板与 gp，回退时去重
   const mergedRefs = panelRefs.map((u, i) => {
     const v = String(u || '').trim();
     if (v && !/^(blob|data):/i.test(v)) return v;
+    if (!panelGpLengthMatch) return '';
     const fromGp = String(prevRefArr[i] || '').trim();
-    if (fromGp) return fromGp;
+    if (fromGp && !seenRefUrls.has(fromGp)) {
+      seenRefUrls.add(fromGp);
+      return fromGp;
+    }
     return '';
   });
   const prevLabels = (prev.referenceImageLabels || []) as string[];
@@ -1396,17 +1432,29 @@ export function repairOmniMultiGenerationParamsFromPanel(
 	//          否则后续 Node Details §11.65 过滤时 snapKeys 会包含 blob UUID，
 	//          误删主图等持久化 https URL，导致参考图标签错乱/主图丢失（可灵还是有问题.json）。
 	const panelRefs = (data.klingOmniMultiReferenceImages || [])
-		.map((u) => String(u || '').trim());
-	if (!panelRefs.some((u) => u)) return undefined;
+			.map((u) => String(u || '').trim());
+		if (!panelRefs.some((u) => u)) return undefined;
 
-	const prev = (data.generationParams || {}) as GenerationParams;
-	const prevRefArr = (prev.referenceImages || []) as string[];
-	const mergedRefs = panelRefs.map((u, i) => {
-		const v = String(u || '').trim();
-		// §11.78: 跳过 blob:/data: 临时 URL，回退 gp 原值，保证 gp 持久化
-		if (v && !/^(blob|data):/i.test(v)) return v;
-		return String(prevRefArr[i] || '').trim();
-	});
+		const prev = (data.generationParams || {}) as GenerationParams;
+		const prevRefArr = (prev.referenceImages || []) as string[];
+		// §11.90f：gp 回退去重 —— 先收集所有面板非 blob URL 作为去重集合，再回退 gp[i] 时检查该 URL
+		//          是否已在合并结果中出现过，防止索引错位导致 gp 出现重复 URL。
+		const seenOmniUrls = new Set<string>();
+		for (const u of panelRefs) {
+			const v = String(u || '').trim();
+			if (v && !/^(blob|data):/i.test(v)) seenOmniUrls.add(v);
+		}
+		const mergedRefs = panelRefs.map((u, i) => {
+			const v = String(u || '').trim();
+			// §11.78: 跳过 blob:/data: 临时 URL，回退 gp 原值，保证 gp 持久化
+			if (v && !/^(blob|data):/i.test(v)) return v;
+			const fromGp = String(prevRefArr[i] || '').trim();
+			if (fromGp && !seenOmniUrls.has(fromGp)) {
+				seenOmniUrls.add(fromGp);
+				return fromGp;
+			}
+			return '';
+		});
 
 	const panelLabels = data.referenceImageLabels;
 	const prevLabels = (prev.referenceImageLabels || []) as string[];

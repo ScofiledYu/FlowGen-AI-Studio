@@ -2155,6 +2155,247 @@ export function resolvePromptPlaceholders(
   return out;
 }
 
+/**
+ * Seedance 2.0 提交豆包 API 专用：把 prompt 中 @图片N / @主图 / @资产:名 等引用标记，
+ * 统一替换为豆包官方原生「图片N」标记（序号对应 referenceImages 数组顺序）。
+ *
+ * 为什么需要（对照火山引擎官方文档 82379/2222480 提示词指南、82379/2291680 教程）：
+ *   豆包 SeedDance 2.0 要求 prompt「必须使用素材类型+序号格式引用素材」，序号对应
+ *   content/referenceImages 数组顺序。原 resolvePromptPlaceholders 把 @图片N 展开成
+ *   「（面板参考…视作 [图N]）」长括号自然语言说明，丢失豆包原生「图片N」结构化标记，
+ *   复杂多图场景（多角色/多镜头）对齐不可靠。
+ *
+ * 行为：
+ *   - @图片N / @主图 / @资产:名 / @主体 → 图片{imageIndex}（imageIndex 来自 referenceImageIndexByToken）
+ *   - @图片（简写）→ 图片1（若 map 有 @图片1）
+ *   - @首帧图 / @尾帧图 / @主视频 → 移除标记（首尾帧靠 startImage/endImage 字段，非 prompt 标记）
+ *   - 未在 map 中的 @标记 → 保留原样（兜底，避免误删用户正文）
+ *
+ * 与 resolvePromptPlaceholders 互斥：seedance 2.0 调本函数；1.5-pro 仍走 resolvePromptPlaceholders
+ * （1.5-pro 仅支持首帧/首尾帧，靠 startImage 字段，无多图参考需求）。
+ */
+export function resolveSeedancePromptToNativeImageTokens(
+  prompt: string,
+  opts: ResolvePromptPlaceholdersOptions | undefined
+): string {
+  if (!prompt) return prompt;
+  const projectAssets = opts?.projectAssets;
+  const matches = matchAllPromptMediaTokens(prompt, projectAssets);
+  if (matches.length === 0) return prompt;
+  let out = prompt;
+  const map = opts?.referenceImageIndexByToken;
+  const hasMap = !!map && map.size > 0;
+  // 从后往前替换，避免 index 位移
+  const sorted = [...matches].sort((a, b) => b.index - a.index);
+  for (const { token, index } of sorted) {
+    // @首帧图/@尾帧图：转为自然语言（首尾帧通过 startImage/endImage 字段传递，
+    // 官方文档无首尾帧引用标记；转为「起始画面/结束画面」保留用户语义，避免移除后 prompt 语义断裂）
+    if (token === '@首帧图') {
+      out = out.slice(0, index) + '起始画面' + out.slice(index + token.length);
+      continue;
+    }
+    if (token === '@尾帧图') {
+      out = out.slice(0, index) + '结束画面' + out.slice(index + token.length);
+      continue;
+    }
+    // @主视频：靠 API 字段（referenceVideos），prompt 移除标记避免干扰
+    if (token === '@主视频') {
+      out = out.slice(0, index) + out.slice(index + token.length);
+      continue;
+    }
+    // 以下 @图片N/@主图/@主体/@图片 需要 map 支持；map 为空时跳过（保留原标记）
+    if (!hasMap) continue;
+    const idx = map.get(token);
+    if (idx != null && idx >= 1) {
+      out = out.slice(0, index) + `图片${idx}` + out.slice(index + token.length);
+      continue;
+    }
+    // @主图/@主体 兜底：若 map 无直接映射，尝试 @图片1
+    if (token === '@主图' || token === '@主体') {
+      const img1 = map.get('@图片1');
+      if (img1 != null && img1 >= 1) {
+        out = out.slice(0, index) + `图片${img1}` + out.slice(index + token.length);
+        continue;
+      }
+      continue;
+    }
+    // @图片 简写 → 图片1
+    if (token === '@图片') {
+      const img1 = map.get('@图片1');
+      if (img1 != null && img1 >= 1) {
+        out = out.slice(0, index) + `图片${img1}` + out.slice(index + token.length);
+        continue;
+      }
+    }
+    // 其余未命中标记保留原样（避免误删用户正文 / 未知名 @资产 等）
+  }
+  return out;
+}
+
+/**
+ * 通用基础：把 prompt 中 @图片N / @主图 / @资产:名 / @主体 等引用标记，
+ * 替换为指定格式的原生标记。各模型通过 formatToken(imageIndex) 指定格式。
+ *
+ * 行为（与 resolveSeedancePromptToNativeImageTokens 一致，仅替换字符串不同）：
+ *   - @图片N / @资产:名 / @主体 → formatToken(imageIndex)
+ *   - @主图 / @主体 兜底 → formatToken(@图片1 的 index)
+ *   - @图片（简写）→ formatToken(@图片1 的 index)
+ *   - @首帧图 / @尾帧图 / @主视频 → 移除标记（靠 API 字段传递，非 prompt 标记）
+ *   - 未在 map 中的 @标记 → 保留原样（兜底，避免误删用户正文）
+ */
+function resolvePromptToNativeImageTokensBase(
+  prompt: string,
+  opts: ResolvePromptPlaceholdersOptions | undefined,
+  formatToken: (imageIndex: number) => string
+): string {
+  if (!prompt) return prompt;
+  const map = opts?.referenceImageIndexByToken;
+  const projectAssets = opts?.projectAssets;
+  const hasMap = !!map && map.size > 0;
+  const matches = matchAllPromptMediaTokens(prompt, projectAssets);
+  if (matches.length === 0) return prompt;
+  let out = prompt;
+  // 从后往前替换，避免 index 位移
+  const sorted = [...matches].sort((a, b) => b.index - a.index);
+  for (const { token, index } of sorted) {
+    // @首帧图/@尾帧图：可灵 Omni 首尾帧在 imageList 中（type=first_frame/end_frame），
+    // 若 map 有映射则转为 @image_N（官方原生引用）；无映射则转为自然语言（起始画面/结束画面）保留语义
+    if (token === '@首帧图') {
+      const idx = hasMap ? map.get(token) : undefined;
+      if (idx != null && idx >= 1) {
+        out = out.slice(0, index) + formatToken(idx) + out.slice(index + token.length);
+      } else {
+        out = out.slice(0, index) + '起始画面' + out.slice(index + token.length);
+      }
+      continue;
+    }
+    if (token === '@尾帧图') {
+      const idx = hasMap ? map.get(token) : undefined;
+      if (idx != null && idx >= 1) {
+        out = out.slice(0, index) + formatToken(idx) + out.slice(index + token.length);
+      } else {
+        out = out.slice(0, index) + '结束画面' + out.slice(index + token.length);
+      }
+      continue;
+    }
+    // @主视频：靠 API 字段（referenceVideos/videoList），prompt 移除标记避免干扰
+    if (token === '@主视频') {
+      out = out.slice(0, index) + out.slice(index + token.length);
+      continue;
+    }
+    // 以下 @图片N/@主图/@主体/@图片 需要 map 支持；map 为空时跳过（保留原标记）
+    if (!hasMap) continue;
+    const idx = map.get(token);
+    if (idx != null && idx >= 1) {
+      out = out.slice(0, index) + formatToken(idx) + out.slice(index + token.length);
+      continue;
+    }
+    // @主图/@主体 兜底：若 map 无直接映射，尝试 @图片1
+    if (token === '@主图' || token === '@主体') {
+      const img1 = map.get('@图片1');
+      if (img1 != null && img1 >= 1) {
+        out = out.slice(0, index) + formatToken(img1) + out.slice(index + token.length);
+        continue;
+      }
+      continue;
+    }
+    // @图片 简写 → formatToken(@图片1)
+    if (token === '@图片') {
+      const img1 = map.get('@图片1');
+      if (img1 != null && img1 >= 1) {
+        out = out.slice(0, index) + formatToken(img1) + out.slice(index + token.length);
+        continue;
+      }
+    }
+    // 其余未命中标记保留原样（避免误删用户正文 / 未知名 @资产 等）
+  }
+  return out;
+}
+
+/**
+ * 可灵3.0 Omni 提交 API 专用：把 prompt 中 @图片N 替换为可灵官方原生「@image_N」标记。
+ *
+ * 为什么需要（对照可灵官方 API 文档、useapi.net/unifically 指南）：
+ *   可灵3.0 Omni 多图参考要求 prompt 中使用 @image_1、@image_2……@image_7
+ *   引用 imageList/image_urls 数组中的参考图片。
+ *   原 resolvePromptPlaceholders 把 @图片N 展开成「（面板参考…视作 [图N]）」
+ *   长括号自然语言说明，可灵 NLP 无法识别为图片引用标记，导致多图参考失效。
+ *
+ * 行为：@图片N → @image_{imageIndex}（imageIndex 来自 referenceImageIndexByToken）
+ */
+export function resolveKlingOmniPromptToNativeImageTokens(
+  prompt: string,
+  opts: ResolvePromptPlaceholdersOptions | undefined
+): string {
+  return resolvePromptToNativeImageTokensBase(prompt, opts, (idx) => `@image_${idx}`);
+}
+
+/**
+ * gpt-image-2 / Nano Banana 2 提交 API 专用：把 prompt 中 @图片N 替换为英文自然语言「Image N」标记。
+ *
+ * 为什么需要（对照 OpenAI Cookbook 提示词指南、Google Gemini 官方文档）：
+ *   - OpenAI gpt-image-2: 多图编辑时用 "Image 1: product photo…" 自然语言引用
+ *   - Google Nano Banana 2: 用自然语言描述参考图关系（"the same woman from the reference image"）
+ *   原 resolvePromptPlaceholders 展开成长括号中文元说明，非官方推荐格式。
+ *
+ * 行为：@图片N → Image {imageIndex}（imageIndex 来自 referenceImageIndexByToken）
+ */
+export function resolveImageGenPromptToImageTokens(
+  prompt: string,
+  opts: ResolvePromptPlaceholdersOptions | undefined
+): string {
+  return resolvePromptToNativeImageTokensBase(prompt, opts, (idx) => `Image ${idx}`);
+}
+
+/**
+ * 即梦3.0 Pro 提交 API 专用：移除 prompt 中所有 @图片N/@主图/@主体/@尾帧图/@主视频 标记，
+ * @首帧图 转为「起始画面」保留语义。
+ *
+ * 为什么需要（对照火山引擎官方文档 85621/1777001）：
+ *   即梦3.0 Pro 仅支持1张首帧图（通过 image_urls 字段传递），prompt 为纯自然语言。
+ *   原 resolvePromptPlaceholders 把 @图片N 展开成长文本「（面板参考…视作 [图N]）」，
+ *   但官方只传1张图，长文本中的「对应 referenceImages 第N张」是错误的，且污染 prompt。
+ *
+ * 行为：
+ *   - @首帧图 → 「起始画面」（保留语义，首帧通过 imageUrls 字段传递）
+ *   - @图片N / @主图 / @主体 / @图片 → 移除标记（官方只支持1张图，不需要引用）
+ *   - @尾帧图 / @主视频 → 移除标记（即梦3.0 Pro 不支持尾帧/视频参考）
+ *   - 未命中的 @标记 → 保留原样
+ */
+export function resolveJimengPromptStripImageTokens(
+  prompt: string,
+  opts: ResolvePromptPlaceholdersOptions | undefined
+): string {
+  if (!prompt) return prompt;
+  const projectAssets = opts?.projectAssets;
+  const matches = matchAllPromptMediaTokens(prompt, projectAssets);
+  if (matches.length === 0) return prompt;
+  let out = prompt;
+  // 从后往前替换，避免 index 位移
+  const sorted = [...matches].sort((a, b) => b.index - a.index);
+  for (const { token, index } of sorted) {
+    // @首帧图 → 起始画面（保留语义，首帧通过 imageUrls 字段传递）
+    if (token === '@首帧图') {
+      out = out.slice(0, index) + '起始画面' + out.slice(index + token.length);
+      continue;
+    }
+    // @尾帧图/@主视频/@图片N/@主图/@主体/@图片 → 移除标记（即梦3.0 Pro 仅支持1张首帧图，prompt 为纯自然语言）
+    if (
+      token === '@尾帧图' ||
+      token === '@主视频' ||
+      token === '@主图' ||
+      token === '@主体' ||
+      token === '@图片' ||
+      /^@图片\d+$/.test(token)
+    ) {
+      out = out.slice(0, index) + out.slice(index + token.length);
+      continue;
+    }
+    // 其余未命中标记保留原样（避免误删用户正文 / 未知名 @资产 等）
+  }
+  return out;
+}
+
 export function slugifyProjectAssetToken(name: string): string {
   const t = name.trim().replace(/\s+/g, '_');
   const cleaned = t.replace(/[^\w\u4e00-\u9fff_-]/g, '');

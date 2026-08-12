@@ -249,7 +249,10 @@ export function hydrateNodeImagePreviewFromPersisted<
   ) {
     const nodeData = node.data as Partial<NodeData>;
     const useGpRefs = runNodeShouldHydratePreviewFromGpRefs(nodeData);
-    if (useGpRefs || !hasLocalMainRef) {
+    // §11.90m.3：对标 Banana 面板 — imagePreview 为空（持久化剥离后）时，即使有 imageLocalRef
+    // 也尝试从 gp 参考图恢复。Banana 无 imageLocalRef 时直接走此分支；Seedance 有 imageLocalRef
+    // 但 IDB 可能无 blob（跨机器 JSON / IDB 清空），此时应从 gp 参考图兜底恢复，避免主图丢失。
+    if (useGpRefs || !hasLocalMainRef || !previewStr) {
       const enriched = enrichPanelSourceFromGenerationSnapshot(nodeData, gp);
       const fromSelection = resolveNodeSelectionPreviewUrl(enriched);
       if (fromSelection && isPersistableMediaUrl(fromSelection)) {
@@ -282,13 +285,18 @@ export function hydrateNodeImagePreviewFromPersisted<
     /** 跨机器 JSON：@主图 + 已持久化 COS 主预览须保留；仅剥离「面板首参考槽 / 非持久化 gp 参考 URL」以走 IDB */
     /** panelMainSlotVisible===false 时，imagePreview 已是运行后切换的参考图，不应清空 */
     const panelMainHidden = (node.data as { panelMainSlotVisible?: boolean }).panelMainSlotVisible === false;
+    // §11.90m.3：imagePreview 为空时不触发清空提前 return — 否则会跳过后续
+    // pickPersistableMainPreviewUrl 从 generatedThumbnails/gp 恢复主图的逻辑。
+    // 注意：`!isPersistableMediaUrl('')` 返回 true，所以必须显式检查 `current` 非空。
+    // 对标 Banana 面板：imagePreview 为空时走正常恢复流程，不提前 return。
     const shouldClearForLocalMainRestore =
-      !current ||
-      (looksLikePanelFirstRef && !panelMainHidden) ||
-      (!isPersistableMediaUrl(current) && matchesGpRef) ||
-      // §10.69：imagePreview 是 panelMainImageUrl 备份的失效 blob/data + 有 imageLocalRef + 主图格显示中
-      // （运行失败 catch 回滚场景）→ 清空让后续 hydrateLocalMediaPreviews 从 IDB 恢复原主图
-      (!isPersistableMediaUrl(current) && hasLocalMainRef && !panelMainHidden);
+      current &&
+      ((looksLikePanelFirstRef && !panelMainHidden) ||
+        (!isPersistableMediaUrl(current) && matchesGpRef) ||
+        // §10.69：imagePreview 是 panelMainImageUrl 备份的失效 blob/data + 有 imageLocalRef + 主图格显示中
+        // （运行失败 catch 回滚场景）→ 清空让后续 hydrateLocalMediaPreviews 从 IDB 恢复原主图
+        (!isPersistableMediaUrl(current) && hasLocalMainRef && !panelMainHidden));
+
     if (shouldClearForLocalMainRestore) {
       return { ...node, data: { ...node.data, imagePreview: '' } };
     }
@@ -315,6 +323,7 @@ export function hydrateNodeImagePreviewFromPersisted<
   }
 
   let picked = pickPersistableMainPreviewUrl(node.data, node.type);
+
   if (
     !picked &&
     node.type === NodeType.OUTPUT &&

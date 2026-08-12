@@ -320,6 +320,104 @@ describe('§11.73 repairSeedanceReferenceGenerationParamsFromPanel 空槽回填�
 	  });
 	});
 
+// §11.90e 门禁：删除参考图后 panel 与 gp 长度不一致时不回退 gp（防止位置错位导致重复 URL）
+describe('§11.90e repairSeedanceReferenceGenerationParamsFromPanel 长度不一致时不回退 gp', () => {
+  const mainCos = 'https://cos.example/main.png';
+  const img1Cos = 'https://cos.example/img1.png';
+  const img2Cos = 'https://cos.example/img2.png';
+
+  it('panel 5 项 gp 7 项 → 不回退 gp，blob 槽留空', () => {
+    const data = {
+      selectedModel: 'seedance2.0 (急速版)',
+      seedanceGenerationMode: 'reference',
+      referenceImages: [mainCos, 'blob:a', 'blob:b', img1Cos, img2Cos],
+      referenceImageLabels: ['主图', '图片2', '图片3', '图片4', '图片5'],
+      generationParams: {
+        model: 'seedance2.0 (急速版)',
+        referenceImages: [mainCos, img1Cos, img2Cos, img1Cos, img2Cos, img2Cos, img2Cos],
+        referenceImageLabels: ['主图', '图片2', '图片3', '图片4', '图片5', '图片6', '图片7'],
+      },
+    } as any;
+    const result = repairSeedanceReferenceGenerationParamsFromPanel(data);
+    expect(result).toBeDefined();
+    expect(result!.referenceImages).toEqual([mainCos, '', '', img1Cos, img2Cos]);
+    // 不应出现重复 URL
+    const nonEmpty = result!.referenceImages.filter((u: string) => String(u || '').trim());
+    expect(new Set(nonEmpty).size).toBe(nonEmpty.length);
+  });
+
+  it('panel 与 gp 长度一致 → blob 回退到 gp URL（标签不同触发写回）', () => {
+    const data = {
+      selectedModel: 'seedance2.0 (急速版)',
+      seedanceGenerationMode: 'reference',
+      referenceImages: [mainCos, 'blob:a', img1Cos],
+      referenceImageLabels: ['主图', '图片2', '图片3'],
+      generationParams: {
+        model: 'seedance2.0 (急速版)',
+        referenceImages: [mainCos, img2Cos, img1Cos],
+        referenceImageLabels: ['主图', '标签2', '图片3'],
+      },
+    } as any;
+    const result = repairSeedanceReferenceGenerationParamsFromPanel(data);
+    // mergedRefs: blob:a → gp[1]=img2Cos → [mainCos, img2Cos, img1Cos]
+    // 标签不同触发写回
+    expect(result).toBeDefined();
+    expect(result!.referenceImages).toEqual([mainCos, img2Cos, img1Cos]);
+    expect(result!.referenceImageLabels).toEqual(['主图', '图片2', '图片3']);
+  });
+
+  // §11.90f：gp 回退去重 —— 回退到 gp[i] 时若 URL 已在 mergedRefs 中出现过，留空
+  it('panel 与 gp 长度一致且 gp 有重复 URL → blob 回退到 gp 时去重，重复 URL 留空', () => {
+    const data = {
+      selectedModel: 'seedance2.0 (急速版)',
+      seedanceGenerationMode: 'reference',
+      referenceImages: [mainCos, 'blob:a', 'blob:b', img1Cos, img2Cos, 'blob:c', 'blob:d'],
+      referenceImageLabels: ['主图', '图片2', '图片3', '图片4', '图片5', '图片6', '图片7'],
+      generationParams: {
+        model: 'seedance2.0 (急速版)',
+        // gp 已有重复 URL（img2Cos 在索引 4,5,6 重复）
+        referenceImages: [mainCos, img1Cos, '', img1Cos, img2Cos, img2Cos, img2Cos],
+        referenceImageLabels: ['主图', '图片2', '图片3', '图片4', '图片5', '图片6', '图片7'],
+      },
+    } as any;
+    const result = repairSeedanceReferenceGenerationParamsFromPanel(data);
+    expect(result).toBeDefined();
+    // 两遍去重：
+    // 第一遍收集面板非 blob URL: {mainCos, img1Cos, img2Cos}
+    // 第二遍合并：
+    // [0] mainCos → use it
+    // [1] blob:a → gp[1]=img1Cos, 已在 seenRefUrls → ''
+    // [2] blob:b → gp[2]='' → ''
+    // [3] img1Cos → use it
+    // [4] img2Cos → use it
+    // [5] blob:c → gp[5]=img2Cos, 已在 seenRefUrls → ''
+    // [6] blob:d → gp[6]=img2Cos, 已在 seenRefUrls → ''
+    expect(result!.referenceImages).toEqual([mainCos, '', '', img1Cos, img2Cos, '', '']);
+    const nonEmpty = result!.referenceImages.filter((u: string) => String(u || '').trim());
+    expect(new Set(nonEmpty).size).toBe(nonEmpty.length);
+  });
+
+  it('panel 与 gp 长度一致且 gp 无重复 → 正常回退，无变化', () => {
+    const data = {
+      selectedModel: 'seedance2.0 (急速版)',
+      seedanceGenerationMode: 'reference',
+      referenceImages: [mainCos, 'blob:a', img1Cos],
+      referenceImageLabels: ['主图', '图片2', '图片3'],
+      generationParams: {
+        model: 'seedance2.0 (急速版)',
+        referenceImages: [mainCos, img2Cos, img1Cos],
+        referenceImageLabels: ['主图', '标签2', '图片3'],
+      },
+    } as any;
+    const result = repairSeedanceReferenceGenerationParamsFromPanel(data);
+    // mergedRefs: mainCos, img2Cos(gp[1]), img1Cos
+    // 标签不同触发写回
+    expect(result).toBeDefined();
+    expect(result!.referenceImages).toEqual([mainCos, img2Cos, img1Cos]);
+    expect(result!.referenceImageLabels).toEqual(['主图', '图片2', '图片3']);
+  });
+});
+
 // §11.79 门禁：buildSeedanceReferenceApiLabelsFromPlan 面板标签对齐 ——
 // 参考可灵多图参考，当面板有自定义标签（如"大牙"）时，gp 标签应使用面板标签而非泛化名（如"主图"）。
 describe('§11.79 buildSeedanceReferenceApiLabelsFromPlan 面板标签对齐', () => {
@@ -641,10 +739,25 @@ describe('§11.83 pickSeedanceReferencePanelSnapshot 快照提取', () => {
   const mainCos = 'https://cos.example/main.png';
   const img1Cos = 'https://cos.example/img1.png';
 
-  it('从 seedanceTabConfigs.reference 提取 → 优先使用 tab 数据', () => {
+  it('顶层有数据时优先使用顶层（对标 Banana，§11.90d）', () => {
     const data = {
-      referenceImages: ['blob:old'],
-      referenceImageLabels: ['旧标签'],
+      referenceImages: [mainCos, img1Cos],
+      referenceImageLabels: ['主图', '图片1'],
+      seedanceTabConfigs: {
+        reference: {
+          referenceImages: ['blob:old'],
+          referenceImageLabels: ['旧标签'],
+        },
+      },
+    } as any;
+    const result = pickSeedanceReferencePanelSnapshot(data);
+    expect(result.referenceImages).toEqual([mainCos, img1Cos]);
+    expect(result.referenceImageLabels).toEqual(['主图', '图片1']);
+  });
+
+  it('顶层全空时使用 tab 快照', () => {
+    const data = {
+      referenceImages: ['', ''],
       seedanceTabConfigs: {
         reference: {
           referenceImages: [mainCos, img1Cos],
@@ -692,5 +805,54 @@ describe('§11.83 pickSeedanceReferencePanelSnapshot 快照提取', () => {
     const result = pickSeedanceReferencePanelSnapshot(data);
     expect(result.referenceImages).toEqual([mainCos]);
     expect(result.referenceImageLabels).toBeUndefined();
+  });
+
+  // §11.90b：tab 快照明显贫化时回退到顶层，防止旧空快照覆盖面板。
+  it('tab 快照全空但顶层有图 → 回退到顶层', () => {
+    const data = {
+      referenceImages: [mainCos, img1Cos],
+      referenceImageLabels: ['主图', '图片1'],
+      seedanceTabConfigs: {
+        reference: {
+          referenceImages: ['', ''],
+          referenceImageLabels: ['主图', '图片1'],
+        },
+      },
+    } as any;
+    const result = pickSeedanceReferencePanelSnapshot(data);
+    expect(result.referenceImages).toEqual([mainCos, img1Cos]);
+    expect(result.referenceImageLabels).toEqual(['主图', '图片1']);
+  });
+
+  it('tab 快照长度与顶层不一致 → 回退到顶层', () => {
+    const data = {
+      referenceImages: [mainCos, img1Cos, 'https://cos.example/img3.png'],
+      referenceImageLabels: ['主图', '图片1', '图片2'],
+      seedanceTabConfigs: {
+        reference: {
+          referenceImages: [mainCos, img1Cos],
+          referenceImageLabels: ['主图', '图片1'],
+        },
+      },
+    } as any;
+    const result = pickSeedanceReferencePanelSnapshot(data);
+    expect(result.referenceImages).toHaveLength(3);
+    expect(result.referenceImageLabels).toHaveLength(3);
+  });
+
+  it('tab 快照非空数量远少于顶层 → 回退到顶层', () => {
+    const data = {
+      referenceImages: [mainCos, img1Cos, 'https://cos.example/img3.png', 'https://cos.example/img4.png'],
+      referenceImageLabels: ['主图', '图片1', '图片2', '图片3'],
+      seedanceTabConfigs: {
+        reference: {
+          referenceImages: ['', '', '', img1Cos],
+          referenceImageLabels: ['主图', '图片1', '图片2', '图片3'],
+        },
+      },
+    } as any;
+    const result = pickSeedanceReferencePanelSnapshot(data);
+    expect(result.referenceImages).toEqual(data.referenceImages);
+    expect(result.referenceImageLabels).toEqual(data.referenceImageLabels);
   });
 });

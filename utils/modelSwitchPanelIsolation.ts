@@ -1,4 +1,5 @@
 import { NodeType, type GenerationParams, type NodeData } from '../types';
+import { isLikelyMainVideoUrl } from './promptMediaRefs';
 
 /** 各首尾帧模型在 modelConfigs 中保存的槽位快照 */
 export type FrameSlotSnapshot = {
@@ -54,7 +55,7 @@ export function applyFrameSlotSnapshot(
   patch.lastFrameLocalRef = snap.lastFrameLocalRef;
 }
 
-/** 切到 Nano Banana 2.0：曾保存过快照则恢复主图预览，否则保留节点当前主图 */
+/** 切到 Nano Banana 2.0：曾保存过有效主图快照则恢复主图预览，否则保留节点当前主图 */
 export function nanoBananaMainPatchOnModelSwitch(
   nanoConfig:
     | {
@@ -75,15 +76,60 @@ export function nanoBananaMainPatchOnModelSwitch(
     'imagePreview' | 'imageName' | 'imageLocalRef' | 'panelMainImageUrl' | 'panelMainSlotVisible'
   >
 > {
-  if (nanoConfig && ('imagePreview' in nanoConfig || nanoConfig.imageLocalRef)) {
+  // §11.90x：节点处于「运行后未 @主图」状态（panelMainSlotVisible=false 且 imagePreview
+  // 已切到首个 @ 参考，见 buildPanelImagePreviewPatchAfterRun §5.7/§10.38）时，主图跟随当前
+  // imagePreview（= @ 首个元素），与 seedance/即梦等模型切换分支一致（那些分支不动 imagePreview）。
+  // 此时若恢复 Banana 旧快照主图，面板显示的是「面板默认首张图」而非 @ 首个元素
+  // （image2-特别.json：应显示 @鸱吻=当前 imagePreview，旧逻辑显示快照里的夏茉）。
+  const curPreview = String(current.imagePreview || '').trim();
+  if (current.panelMainSlotVisible === false && curPreview && !isLikelyMainVideoUrl(curPreview)) {
     return {
-      imagePreview: nanoConfig.imagePreview,
+      imagePreview: current.imagePreview,
+      imageName: current.imageName,
+      // 勿继承上一模型的 IDB 键（模型隔离，防 hydration 把旧主图 blob 灌回 Banana 主图格）
+      imageLocalRef: undefined,
+      // 勿用上一模型主图备份盖掉首个 @ 参考；主图格直接展示 imagePreview
+      panelMainImageUrl: undefined,
+      panelMainSlotVisible: undefined,
+    };
+  }
+  // §11.90t：对标 image2 的 image2ConfigHasMainSnapshot——只有快照里 imageLocalRef 或
+  // imagePreview 真实非空才算「有主图快照」。旧条件 `'imagePreview' in nanoConfig` 在
+  // 保存分支恒写 imagePreview（即使为 undefined）的情况下恒为 true，导致空快照把
+  // image2/Omni 拖入后继承来的主图清空（切到 Banana 面板主图丢失）。
+  const hasMainSnapshot = Boolean(
+    nanoConfig &&
+      (String(nanoConfig.imageLocalRef || '').trim() ||
+        String(nanoConfig.imagePreview || '').trim())
+  );
+  if (nanoConfig && hasMainSnapshot) {
+    // §11.90q：nanoConfig.imagePreview 为 undefined 但 imageLocalRef 存在时，
+    // 勿继承 current.imagePreview（可能是刷新后失效的 blob/data URL），
+    // 应置空让后续 hydration 从 imageLocalRef 恢复主图。
+    const hasValidSnapshotPreview = nanoConfig.imagePreview !== undefined;
+    const restoredPreview = hasValidSnapshotPreview ? nanoConfig.imagePreview : undefined;
+    const restoredBackup = nanoConfig.panelMainImageUrl;
+    const hasVisibleProp = Object.prototype.hasOwnProperty.call(nanoConfig, 'panelMainSlotVisible');
+    let restoredVisible = hasVisibleProp ? nanoConfig.panelMainSlotVisible : undefined;
+    // §11.90v：快照带「隐藏主图格」标记（panelMainSlotVisible=false）但快照本身没存
+    // panelMainImageUrl 备份时，主图槽将永远无法显示（resolvePanelMainSlotPreviewUrl：
+    // 无 backup 且 visible=false → undefined）。典型场景：image2 生图完成后切 Banana，
+    // Banana 快照保存时顶层 panelMainImageUrl 恰好为空导致备份字段丢失。
+    // 此时 restoredPreview 即主图本身，清除虚假隐藏标记让主图槽直接展示——
+    // 与重新选中节点时 buildPanelMainImageRestorePatchForEditing 的恢复语义一致。
+    if (
+      restoredVisible === false &&
+      !String(restoredBackup || '').trim() &&
+      String(restoredPreview || '').trim()
+    ) {
+      restoredVisible = undefined;
+    }
+    return {
+      imagePreview: restoredPreview,
       imageName: nanoConfig.imageName,
       imageLocalRef: nanoConfig.imageLocalRef,
-      panelMainImageUrl: nanoConfig.panelMainImageUrl,
-      ...(Object.prototype.hasOwnProperty.call(nanoConfig, 'panelMainSlotVisible')
-        ? { panelMainSlotVisible: nanoConfig.panelMainSlotVisible }
-        : {}),
+      panelMainImageUrl: restoredBackup,
+      ...(hasVisibleProp ? { panelMainSlotVisible: restoredVisible } : {}),
     };
   }
   return {

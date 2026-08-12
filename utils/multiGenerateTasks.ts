@@ -21,7 +21,14 @@ export async function pollImageTaskUntilUrl(
     await new Promise((r) => setTimeout(r, intervalMs));
     attempts++;
     opts.onProgress?.();
-    const statusData = await getTaskStatus(taskId);
+    // §10.79：单次 getTaskStatus 超时/失败时 continue 重试，不终止整个轮询
+    // 连续超时最终会因 attempts >= maxAttempts 抛出"轮询超时"错误兜底
+    let statusData: any = null;
+    try {
+      statusData = await getTaskStatus(taskId);
+    } catch {
+      continue;
+    }
     if (!statusData) continue;
     const status = statusData.status;
     if (
@@ -65,7 +72,14 @@ export async function pollVideoTaskUntilUrl(
     await new Promise((r) => setTimeout(r, intervalMs));
     attempts++;
     opts.onProgress?.();
-    const statusData = await getTaskStatus(taskId);
+    // §10.79：单次 getTaskStatus 超时/失败时 continue 重试，不终止整个轮询
+    // 连续超时最终会因 attempts >= maxAttempts 抛出"视频生成超时"错误兜底
+    let statusData: any = null;
+    try {
+      statusData = await getTaskStatus(taskId);
+    } catch {
+      continue;
+    }
     if (!statusData) continue;
     const status = statusData.status;
     if (status === 'TRANSFER_SUCCESS') {

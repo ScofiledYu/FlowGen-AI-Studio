@@ -75,11 +75,20 @@ function VideoPoster({
   }, []);
   const [loadedPoster, setLoadedPoster] = useState<string | null>(null);
   const [captureFailed, setCaptureFailed] = useState(false);
+  const [posterLoadFailed, setPosterLoadFailed] = useState(false);
   const fallbackTimerRef = useRef<number | null>(null);
+
+  // B2: 当 poster 图片加载失败（404/401 等跨服务器场景）时，重置状态以触发截帧兜底
+  useEffect(() => {
+    if (!posterLoadFailed) return;
+    setPosterLoadFailed(false);
+    setLoadedPoster(null);
+  }, [posterLoadFailed, src]);
 
   useEffect(() => {
     // 有 fallback 仍尝试截帧；fallback 仅在截帧失败时展示，避免参考图抢先占位并阻止 capture
-    if (!enableCapture || !src || !thumbId || !ownerNodeId || !onPosterGenerated || posterDataUrl) return;
+    // B2: posterLoadFailed 时也触发截帧（poster URL 指向已失效的 node-media 文件）
+    if (!enableCapture || !src || !thumbId || !ownerNodeId || !onPosterGenerated || (posterDataUrl && !posterLoadFailed)) return;
     let cancelled = false;
     setCaptureFailed(false);
     setLoadedPoster(null);
@@ -111,11 +120,11 @@ function VideoPoster({
         fallbackTimerRef.current = null;
       }
     };
-  }, [src, thumbId, ownerNodeId, onPosterGenerated, posterDataUrl, fallbackPosterDataUrl, enableCapture]);
+  }, [src, thumbId, ownerNodeId, onPosterGenerated, posterDataUrl, fallbackPosterDataUrl, enableCapture, posterLoadFailed]);
 
   const finalPoster = posterDataUrl || loadedPoster || fallbackPosterDataUrl;
   if (finalPoster) {
-    return <img src={toRenderableSrc(finalPoster)} alt={alt} className={className} />;
+    return <img src={toRenderableSrc(finalPoster)} alt={alt} className={className} onError={() => setPosterLoadFailed(true)} />;
   }
   // 与截帧逻辑一致：跨域 CDN 直连常 403，缩略图区用同源代理拉流，首帧才能显示（否则只能点播放后才解码出画面）
   const fallbackVideoSrc = src ? resolveUrlForVideoCapture(src) : '';
@@ -213,6 +222,7 @@ const CustomNode = ({ id, data, type, selected }: NodeProps) => {
   const [isCanvasRefreshPaused, setIsCanvasRefreshPaused] = useState(() => getCanvasRefreshPaused());
   const [isCanvasViewportMoving, setIsCanvasViewportMoving] = useState(() => getCanvasViewportMoving());
   const [lodPreviewFallbackFile, setLodPreviewFallbackFile] = useState(false);
+  const [mainPosterLoadFailed, setMainPosterLoadFailed] = useState(false);
   const localImageInputRef = useRef<HTMLInputElement>(null);
 
   const isInput = type === NodeType.INPUT;
@@ -884,7 +894,8 @@ const CustomNode = ({ id, data, type, selected }: NodeProps) => {
 
   // 大图 poster：只要是 MOV 且当前没有 poster，就截帧写回（与 0327 一致，保证“至少有一张缩略图”）
   useEffect(() => {
-    if (!mainVideoUrl || data.videoPosterDataUrl || isDragPerformanceMode || isCanvasRefreshPaused) return;
+    // B2: poster URL 指向已失效文件（跨服务器导入 404）时也触发截帧
+    if (!mainVideoUrl || (data.videoPosterDataUrl && !mainPosterLoadFailed) || isDragPerformanceMode || isCanvasRefreshPaused) return;
     let cancelled = false;
     captureVideoMiddleFrameQueued(mainVideoUrl).then(async (poster) => {
       if (cancelled || !poster) return;
@@ -893,12 +904,13 @@ const CustomNode = ({ id, data, type, selected }: NodeProps) => {
       const finalPoster = stored || poster;
       if (cancelled) return;
       applyCapturedPosterAcrossGraph(finalPoster);
+      setMainPosterLoadFailed(false);
       setTimeout(() => window.dispatchEvent(new CustomEvent('flowgen:persist-request')), 300);
     });
     return () => {
       cancelled = true;
     };
-  }, [mainVideoUrl, data.videoPosterDataUrl, isDragPerformanceMode, isCanvasRefreshPaused, applyCapturedPosterAcrossGraph]);
+  }, [mainVideoUrl, data.videoPosterDataUrl, mainPosterLoadFailed, isDragPerformanceMode, isCanvasRefreshPaused, applyCapturedPosterAcrossGraph]);
 
   /**
    * 用户点播放后，强制再尝试一次“由当前视频截图”覆盖封面：
@@ -1160,12 +1172,13 @@ const CustomNode = ({ id, data, type, selected }: NodeProps) => {
                     src={toRenderableSrc(mainPosterSrc)}
                     alt=""
                     className="absolute inset-0 w-full h-full object-cover"
+                    onError={() => setMainPosterLoadFailed(true)}
                   />
                 )}
                 {!deferVideoDecode && (
                 <video
                   ref={videoRef}
-                  src={nodeVideoSrc || mainVideoDisplaySrc || displayImagePreview}
+                  src={toRenderableSrc(nodeVideoSrc || mainVideoDisplaySrc || displayImagePreview)}
                   className="absolute inset-0 w-full h-full object-cover pointer-events-none"
                   preload={isCanvasRefreshPaused && !selected ? 'none' : 'auto'}
                   onError={() => {
@@ -1294,6 +1307,12 @@ const CustomNode = ({ id, data, type, selected }: NodeProps) => {
               <div className="text-[18px] font-mono font-bold text-emerald-300 tabular-nums tracking-tight drop-shadow-[0_0_12px_rgba(16,185,129,0.55),0_2px_8px_rgba(0,0,0,0.85)] bg-emerald-950/80 border border-emerald-400/40 rounded-md px-2.5 py-1">
                 {data.progress || 0}%
               </div>
+              {/* §10.78 方案C：进度达 95% 后提示"仍在运行"，避免用户误以为卡住 */}
+              {(data.progress || 0) >= 95 && (
+                <div className="mt-1.5 text-[9px] text-emerald-200/80 leading-tight text-center px-2 animate-pulse">
+                  任务仍在运行中，请耐心等待…
+                </div>
+              )}
            </div>
         )}
       </div>

@@ -3,7 +3,7 @@ import {
   resolveDisplayMediaUrl,
 } from '../services/flowgenApi';
 import { resolveUrlForVideoCapture } from '../utils/videoThumbnail';
-import { deleteLocalMediaRef, getLocalMediaBlob } from '../utils/localNodeMediaStore';
+import { deleteLocalMediaRef, getLocalMediaBlob, getLocalMediaBlobByPrefix } from '../utils/localNodeMediaStore';
 import {
   removeReferenceImageLocalRefAtIndex,
   anyPanelRefsPendingLocalHydrate,
@@ -354,6 +354,7 @@ import {
   projectAssetDisplayNameFromUrl,
   referenceImagesDedupePatchIfNeeded,
   removeReferenceImageAt,
+  compactSeedancePanelReferences,
   syncGenericReferenceImageLabelsToSlotOrdinals,
   resolveFirstLastFramePanelDisplayLabel,
   resolveMainImagePanelDisplayLabel,
@@ -1190,7 +1191,7 @@ function NodeInspector({
   const isSeedance20 = ['seedance2.0 (高质量版)', 'seedance2.0 (急速版)'].includes(data.selectedModel || '');
   const isSeedance20HighQuality = data.selectedModel === 'seedance2.0 (高质量版)';
   const isSeedance = isSeedance15 || isSeedance20;
-  const seedanceMode = data.seedanceGenerationMode || 'text';
+  const seedanceMode = data.seedanceGenerationMode || 'reference';
   /** Text Node（文生节点）：纯文生图/文生视频；面板隐藏媒体区、模型限定白名单、seedance2.0 仅文生 tab */
   const isTextGenNode = Boolean(data.textGenNode);
 
@@ -1356,9 +1357,23 @@ function NodeInspector({
     }
     if (!ref) return;
     void (async () => {
-      const blob = await getLocalMediaBlob(ref);
+      let blob = await getLocalMediaBlob(ref);
       if (cancelled) return;
-      if (!blob) return;
+      if (!blob) {
+        // §11.90t：imageLocalRef 指向的模型作用域键已失效（如旧版本迁移删除、
+        // 或快照保存的是其他模型的 main 键）时，按节点 main 前缀兜底——
+        // 与 §11.90n（FlowEditor 加载期前缀兜底）同理，但覆盖 4 段 legacy main
+        // 与 5 段 main:Model 两种键，保证切模型后任一存活主图 blob 都能恢复显示。
+        const parts = ref.split(':');
+        const mainPrefix =
+          parts.length >= 4 && parts[0] === 'flowgen-local' && parts[3] === 'main'
+            ? parts.slice(0, 4).join(':')
+            : undefined;
+        if (!mainPrefix) return;
+        const found = await getLocalMediaBlobByPrefix(mainPrefix);
+        if (cancelled || !found) return;
+        blob = found.blob;
+      }
       const url = safeCreateObjectURL(blob);
       if (!url) return;
       mainHydrateTokenRef.current.ref = ref;
@@ -2593,18 +2608,19 @@ function NodeInspector({
       patch.lastFrameImageUrl = next.lastFrameImageUrl;
       patch.firstFrameLocalRef = next.firstFrameLocalRef;
       patch.lastFrameLocalRef = next.lastFrameLocalRef;
-      patch.referenceImages = [];
-      patch.referenceMovs = [];
-      patch.referenceAudios = [];
-      patch.referenceElementIds = [];
+      // §11.90l：对标 Banana 面板 — 切换 tab 时不清空顶层 referenceImages，
+      // 参考图始终保留在顶层数据中，切回 reference tab 时无需从快照恢复。
+      // 避免快照与顶层数据不一致导致的图片标签错位问题。
       if (shouldMigrateSeedance20AspectToDefault(data.seedanceAspectRatio)) {
         patch.seedanceAspectRatio = getSeedanceDefaultAspectRatio(data.selectedModel);
       }
     } else if (target === 'reference') {
+      // §11.90l：对标 Banana 面板 — 从顶层 data.referenceImages 读取参考图，
+      // 不再依赖 seedanceTabConfigs.reference 快照。顶层数据是唯一数据源。
       const refPatch = referenceImagesDedupePatchIfNeeded(
         {
-          referenceImages: next.referenceImages || [],
-          referenceImageLabels: next.referenceImageLabels || [],
+          referenceImages: data.referenceImages || [],
+          referenceImageLabels: data.referenceImageLabels || [],
           imagePreview: data.imagePreview,
           panelMainImageUrl: data.panelMainImageUrl,
           panelMainSlotVisible: data.panelMainSlotVisible,
@@ -2614,20 +2630,12 @@ function NodeInspector({
           projectAssets: projectAssetLabelRows,
         }
       );
-      patch.referenceImages = refPatch?.referenceImages ?? (next.referenceImages || []);
+      patch.referenceImages = refPatch?.referenceImages ?? (data.referenceImages || []);
       patch.referenceImageLabels =
-        refPatch?.referenceImageLabels ?? (next.referenceImageLabels || []);
-      patch.referenceElementIds = next.referenceElementIds || [];
-      patch.referenceMovs = next.referenceMovs || [];
-      patch.referenceAudios = next.referenceAudios || [];
-      if (refPatch) {
-        tabs.reference = {
-          ...(tabs.reference || {}),
-          referenceImages: refPatch.referenceImages,
-          referenceImageLabels: refPatch.referenceImageLabels,
-        };
-        patch.seedanceTabConfigs = tabs;
-      }
+        refPatch?.referenceImageLabels ?? (data.referenceImageLabels || []);
+      patch.referenceElementIds = data.referenceElementIds || [];
+      patch.referenceMovs = data.referenceMovs || [];
+      patch.referenceAudios = data.referenceAudios || [];
       patch.seedanceReferenceRatioMode = data.seedanceReferenceRatioMode || 'force';
       patch.firstFrameImage = undefined;
       patch.lastFrameImage = undefined;
@@ -2641,10 +2649,7 @@ function NodeInspector({
       patch.lastFrameImage = undefined;
       patch.firstFrameImageUrl = undefined;
       patch.lastFrameImageUrl = undefined;
-      patch.referenceImages = [];
-      patch.referenceMovs = [];
-      patch.referenceAudios = [];
-      patch.referenceElementIds = [];
+      // §11.90l：对标 Banana — 切到 text tab 时不清空参考图，保留在顶层数据中
       if (shouldMigrateSeedance20AspectToDefault(data.seedanceAspectRatio)) {
         patch.seedanceAspectRatio = getSeedanceDefaultAspectRatio(data.selectedModel);
       }
@@ -3365,11 +3370,14 @@ function NodeInspector({
         updateData.klingOmniInstructionReferenceElementIds = omniConfig.klingOmniInstructionReferenceElementIds;
         updateData.klingOmniVideoReferenceElementIds = omniConfig.klingOmniVideoReferenceElementIds;
         Object.assign(updateData, clearInheritedPanelRefsOnFrameModelSwitch());
-        // 参照 Seedance/Nano/image2：modelConfigs 中无 localRefs 时保留当前顶层值，避免误清 IndexedDB 备份指针。
+        // §11.90s：与 Seedance 恢复分支一致——modelConfigs 中无 shared localRefs 时兜底为空数组，
+        // 严禁继承当前顶层值：顶层 referenceImageLocalRefs 属于上一个模型（image2/Seedance/Nano），
+        // 继承后 hydrate 会把外来图片恢复到顶层 referenceImages，再被面板槽位同步写入
+        // klingOmniMultiReferenceImages，导致 Omni 多图参考串入其他模型的图片。
         updateData.referenceImageLocalRefs =
           omniConfig.referenceImageLocalRefs != null
             ? [...omniConfig.referenceImageLocalRefs]
-            : data.referenceImageLocalRefs ?? [];
+            : [];
         updateData.klingOmniMultiReferenceLocalRefs =
           omniConfig.klingOmniMultiReferenceLocalRefs != null
             ? [...omniConfig.klingOmniMultiReferenceLocalRefs]
@@ -3478,13 +3486,12 @@ function NodeInspector({
           seedanceConfig.seedanceReferenceWebSearch ??
           (seedanceConfig as { seedanceImageWebSearch?: boolean }).seedanceImageWebSearch ??
           false;
-        const hasMainImage = !!data.imagePreview;
         updateData.seedanceGenerationMode =
           model === 'seedance1.5-pro'
             ? 'image'
             : isTextGenNode
               ? 'text'
-              : (seedanceConfig.seedanceGenerationMode || (hasMainImage ? 'reference' : 'text'));
+              : (seedanceConfig.seedanceGenerationMode || 'reference');
         updateData.seedanceTabConfigs = seedanceConfig.seedanceTabConfigs || {};
         /** 仅「参考生视频」tab 使用顶层 reference*；图/文 tab 与 switchSeedance20Tab 一致，避免脏参考图在图生视频下出现「图片1」 */
         if (updateData.seedanceGenerationMode === 'reference') {
@@ -3949,6 +3956,8 @@ function NodeInspector({
         projectedIdx,
         opts?.canvasSourceNodeId
       );
+      // §11.90l：对标 Banana 面板 — 参考图仅存于顶层数据，不再同步到快照。
+      // 快照不再存储 referenceImages，无需手动同步。
       const patch = withReferenceLocalRefsInPatch(
         {
           referenceImages: cappedRefs,
@@ -4169,7 +4178,10 @@ function NodeInspector({
       return;
     }
 
-    if (isImage2) {
+    // §11.90m.4：Nano Banana 2.0 / image2 走同一套「首张做主图」的 Banana 家族规则。
+    // 原代码仅 isImage2 分支处理主图，Nano 漏了 attachLocalMainRef（IDB 备份 + imageLocalRef 设置），
+    // 导致刷新后 IDB 无 blob，pickPersistableMainPreviewUrl 返回 (none)，主图全部丢失。
+    if (isImage2 || isNano) {
       const latest = nodeDataRef.current;
       const main = latest.imagePreview?.trim();
       const needsMain = !main || isLikelyMainVideoUrl(main);
@@ -4190,7 +4202,9 @@ function NodeInspector({
         if (rest.length > 0) {
           const registered = await dispatchReferenceAppendFiles(rest, 0);
           const refUrls = await compressImagesInBatches(rest, { batchSize: 2 });
-          onUpdate(withReferenceLocalRefsInPatch({ ...patch, referenceImages: refUrls.slice(0, 2) }, registered));
+          // Nano 多图参考上限 14 张，image2 上限 4 张，各自按上限截断
+          const maxForModel = isImage2 ? 2 : 14;
+          onUpdate(withReferenceLocalRefsInPatch({ ...patch, referenceImages: refUrls.slice(0, maxForModel) }, registered));
         } else {
           onUpdate(patch);
         }
@@ -4201,36 +4215,62 @@ function NodeInspector({
         );
         return;
       }
+      // §11.90m.4：Nano Banana 2.0 参考图上限 14 张，image2 参考图上限由 image2MaxReferenceSlots（最多 3-4 张，因含主图占格）
       const latestAfterMain = nodeDataRef.current;
-      const maxRefs = image2MaxReferenceSlots(latestAfterMain);
-      const compacted = compactImage2PanelReferences(latestAfterMain);
-      const available = Math.max(0, maxRefs - compacted.referenceImages.length);
-      if (available === 0) return;
-      const toProcess = imageFiles.slice(0, available);
-      const registered = await dispatchReferenceAppendFiles(
-        toProcess,
-        compacted.referenceImages.length
-      );
-      const newImages = await compressImagesInBatches(toProcess, { batchSize: 2 });
-      let working: NodeData = { ...latestAfterMain };
-      for (const img of newImages) {
-        const c = compactImage2PanelReferences(working);
-        if (c.referenceImages.length >= maxRefs) break;
-        working = {
-          ...working,
-          ...patchImage2ReferenceAtRefSlot(working, c.referenceImages.length, img),
-        };
+      if (isNano) {
+        const compactedRefs = [...(latestAfterMain.referenceImages || [])].filter(
+          (u) => String(u || '').trim()
+        );
+        const available = Math.max(0, maxStandardRefImages - compactedRefs.length);
+        if (available === 0) return;
+        const toProcess = imageFiles.slice(0, available);
+        const registered = await dispatchReferenceAppendFiles(
+          toProcess,
+          compactedRefs.length
+        );
+        const newImages = await compressImagesInBatches(toProcess, { batchSize: 2 });
+        const nextRefs = [...compactedRefs, ...newImages];
+        const nextLabels = alignReferenceImageLabels(nextRefs, latestAfterMain.referenceImageLabels);
+        onUpdate(
+          withReferenceLocalRefsInPatch(
+            {
+              referenceImages: nextRefs.slice(0, maxStandardRefImages),
+              referenceImageLabels: nextLabels.slice(0, maxStandardRefImages),
+            },
+            registered
+          )
+        );
+      } else {
+        const maxRefs = image2MaxReferenceSlots(latestAfterMain);
+        const compacted = compactImage2PanelReferences(latestAfterMain);
+        const available = Math.max(0, maxRefs - compacted.referenceImages.length);
+        if (available === 0) return;
+        const toProcess = imageFiles.slice(0, available);
+        const registered = await dispatchReferenceAppendFiles(
+          toProcess,
+          compacted.referenceImages.length
+        );
+        const newImages = await compressImagesInBatches(toProcess, { batchSize: 2 });
+        let working: NodeData = { ...latestAfterMain };
+        for (const img of newImages) {
+          const c = compactImage2PanelReferences(working);
+          if (c.referenceImages.length >= maxRefs) break;
+          working = {
+            ...working,
+            ...patchImage2ReferenceAtRefSlot(working, c.referenceImages.length, img),
+          };
+        }
+        const finalCompact = compactImage2PanelReferences(working);
+        onUpdate(
+          withReferenceLocalRefsInPatch(
+            {
+              referenceImages: finalCompact.referenceImages,
+              referenceImageLabels: finalCompact.referenceImageLabels,
+            },
+            registered
+          )
+        );
       }
-      const finalCompact = compactImage2PanelReferences(working);
-      onUpdate(
-        withReferenceLocalRefsInPatch(
-          {
-            referenceImages: finalCompact.referenceImages,
-            referenceImageLabels: finalCompact.referenceImageLabels,
-          },
-          registered
-        )
-      );
       return;
     }
 
@@ -4355,6 +4395,7 @@ function NodeInspector({
         nextRefs,
         -1
       );
+      // §11.90l：对标 Banana 面板 — 参考图仅存于顶层数据，无需同步快照。
       const patch = withReferenceLocalRefsInPatch(
         {
           referenceImages: nextRefs,
@@ -4397,6 +4438,9 @@ function NodeInspector({
   };
 
   const removeRefImage = (index: number) => {
+    // [DEBUG-SEEDANCE-REF-FILES] 追踪删除前 imageLocalRef 状态
+    const dBeforeRemove = nodeDataRef.current;
+    
     window.dispatchEvent(new CustomEvent('flowgen:register-original-image', { detail: { nodeId, referenceRemoveIndex: index } }));
     if (isKelingOmni) {
       const tab = klingOmniTab === 'frames' ? 'multi' : klingOmniTab;
@@ -4424,42 +4468,68 @@ function NodeInspector({
       );
       if (removedRef) void deleteLocalMediaRef(removedRef);
       updateKlingOmniRefImages(tab, newRefs, { elementIds: newEids });
-      onUpdate({ [localRefField]: localRefs } as Partial<NodeData>);
+      const omniPatch = { [localRefField]: localRefs } as Partial<NodeData>;
+      mergeNodeDataRef(omniPatch);
+      onUpdate(omniPatch);
       return;
     }
+    // §11.90o：对标 Banana 面板 —— 删除必须基于 nodeDataRef.current（最新一致快照），
+    // 而非 props data。referenceImages（onUpdate 写入）与 referenceImageLocalRefs
+    // （FlowEditor attachLocalReferenceRefs 的 setNodes 写入）来自两条异步链路，
+    // props 快照里两数组可能长度/内容不一致，同下标 splice 会「refs 删 A 图、
+    // localRefs 删 B 的 ref」，deleteLocalMediaRef 误删无辜 IDB blob → 刷新 blob-miss 丢图。
+    const dCur = nodeDataRef.current;
     const removed = removeReferenceImageAt(
-      data.referenceImages || [],
-      data.referenceImageLabels,
+      dCur.referenceImages || [],
+      dCur.referenceImageLabels,
       index
     );
     const { localRefs, removedRef } = removeReferenceImageLocalRefAtIndex(
-      data.referenceImageLocalRefs,
+      dCur.referenceImageLocalRefs,
       index
     );
     if (removedRef) void deleteLocalMediaRef(removedRef);
     const eids = getStandardRefElementIds();
     const paddedEids = [...eids];
-    while (paddedEids.length < (data.referenceImages || []).length) paddedEids.push(undefined);
+    while (paddedEids.length < (dCur.referenceImages || []).length) paddedEids.push(undefined);
     paddedEids.splice(index, 1);
+    // §11.90m：对标 Banana 面板（compactImage2PanelReferences + compactImage2PanelLocalRefs）——
+    // 删除后重新压紧 referenceImages（过滤空槽），并按槽位严格对齐
+    // referenceImageLabels / referenceImageLocalRefs / referenceElementIds。
+    // 旧逻辑仅 splice 各数组，空槽/localRefs 错位会持续累积，导致刷新后
+    // hydrateAllPanelReferenceLocalRefs 按 i 下标从 IDB 取到错误槽位的 blob，
+    // 表现为「图片1和图片2一样 / 图片6和图片7一样」。Banana 每次删除都压紧，故无此问题。
+    const compacted = compactSeedancePanelReferences({
+      referenceImages: removed.referenceImages,
+      referenceImageLabels: removed.referenceImageLabels,
+      referenceImageLocalRefs: localRefs,
+      referenceElementIds: paddedEids,
+    });
+    // [DEBUG-SEEDANCE-REF-FILES] 追踪删除后 compaction 结果
+    
     const syncedLabels = syncGenericReferenceImageLabelsToSlotOrdinals(
-      removed.referenceImages,
-      removed.referenceImageLabels,
-      data.imagePreview,
-      getNodeInspectorPromptText(data)
+      compacted.referenceImages,
+      compacted.referenceImageLabels,
+      dCur.imagePreview,
+      getNodeInspectorPromptText(dCur)
     );
     const merged = {
-      ...data,
-      referenceImages: removed.referenceImages,
+      ...dCur,
+      referenceImages: compacted.referenceImages,
       referenceImageLabels: syncedLabels,
     };
     const promptPatch = buildPromptPictureOrdinalRepairPatch(merged, projectAssetLabelRows);
-    onUpdate({
-      referenceImages: removed.referenceImages,
+    // §11.90l：对标 Banana 面板 — 参考图仅存于顶层数据，删除时无需同步快照。
+    const patch = {
+      referenceImages: compacted.referenceImages,
       referenceImageLabels: syncedLabels,
-      referenceImageLocalRefs: localRefs,
-      referenceElementIds: paddedEids,
+      referenceImageLocalRefs: compacted.referenceImageLocalRefs,
+      referenceElementIds: compacted.referenceElementIds,
       ...promptPatch,
-    });
+    };
+    // §11.90g：删除后同步 nodeDataRef，防止后续 addOne 读取到旧数据（含已删除 slot）
+    mergeNodeDataRef(patch);
+    onUpdate(patch);
   };
 
   const removeImage2RefSlot = (slotIdx: number) => {
@@ -4595,6 +4665,7 @@ function NodeInspector({
         projectedIdx,
         meta?.canvasSourceNodeId
       );
+      // §11.90l：对标 Banana 面板 — 参考图仅存于顶层数据，无需同步快照。
       const patch = withReferenceLocalRefsInPatch(
         {
           referenceImages: cappedRefs,
@@ -4689,14 +4760,89 @@ function NodeInspector({
     const audioFiles = files.filter((f) => f.type.startsWith('audio/'));
 
     const d0 = nodeDataRef.current;
+
+    // §11.90m.6：对标 Banana 面板（isNano 分支 L4165-L4225），首张无主图时做主图 + attachLocalMainRef
+    // 原逻辑 Seedance 拖入图片全部写入 referenceImages，从不设置 imageLocalRef + IDB 主图备份，
+    // 导致刷新后 pickPersistableMainPreviewUrl 无数据可恢复，主图全部丢失。
+    const main = resolvePanelMainSlotPreviewUrl(d0);
+    // §11.90r：movNode/OUTPUT 已有主视频（imagePreview 为视频 URL）时，拖入图片不覆盖主视频，
+    // 全部作为参考图写入 referenceImages。
+    const hasMainVideo = isLikelyMainVideoUrl(d0.imagePreview);
+    const needsMain = !hasMainVideo && (!main || isLikelyMainVideoUrl(main));
+    // [DEBUG-SEEDANCE-REF-FILES] 追踪拖入前主图状态
+    
+    if (needsMain && imageFiles.length > 0) {
+      const first = imageFiles[0];
+      const restImages = imageFiles.slice(1);
+      const mainUrl = await compressImageForPreview(first).catch(() => '');
+      if (!mainUrl) return;
+      const mainPatch: Partial<NodeData> = {
+        imagePreview: mainUrl,
+        panelMainSlotVisible: undefined,
+        panelMainImageUrl: undefined,
+        projectAssetId: undefined,
+      };
+      // 剩余图片作为参考图（含 localRefs）
+      let refPatch: Partial<NodeData> = {};
+      if (restImages.length > 0) {
+        const registered = await dispatchReferenceAppendFiles(restImages, 0);
+        const refUrls = await compressImagesInBatches(restImages, { batchSize: 2 });
+        const refLabels = restImages.map((f) => f.name || '');
+        refPatch = withReferenceLocalRefsInPatch(
+          { referenceImages: refUrls.slice(0, 9), referenceImageLabels: refLabels.slice(0, 9) },
+          registered
+        );
+      }
+      // 视频/音频处理（保持原逻辑）
+      let movs = [...(d0.referenceMovs || [])];
+      for (const vf of videoFiles) {
+        if (movs.length >= 3) break;
+        const previewUrl = safeCreateObjectURL(vf);
+        if (!previewUrl) continue;
+        const posterDataUrl = await createVideoPosterLite(vf);
+        movs = [...movs, { url: previewUrl, ...(posterDataUrl ? { posterDataUrl } : {}) }];
+      }
+      movs = movs.slice(0, 3);
+      let auds = [...(d0.referenceAudios || [])];
+      const audRoom = Math.max(0, 3 - auds.length);
+      const audTake = audioFiles.slice(0, audRoom);
+      if (audTake.length > 0) {
+        window.dispatchEvent(
+          new CustomEvent('flowgen:register-original-image', { detail: { nodeId, referenceAudioAppend: audTake } })
+        );
+        const nextAudioItems = audTake
+          .map((f) => {
+            const url = safeCreateObjectURL(f);
+            return url ? { url } : null;
+          })
+          .filter((x): x is { url: string } => Boolean(x));
+        auds = [...auds, ...nextAudioItems].slice(0, 3);
+      }
+      // 单次 onUpdate 合并主图 + 参考图 + 视频/音频
+      onUpdate({ ...mainPatch, ...refPatch, referenceMovs: movs, referenceAudios: auds });
+      // [DEBUG-SEEDANCE-REF-FILES] 追踪 onUpdate 之后、dispatchEvent 之前的状态
+      
+      // §10.73：先 onUpdate 设置 imagePreview，再 dispatchEvent 触发 attachLocalMainRef
+      // 确保 getNodes() 读到的是已更新的 imagePreview（非资产库 URL）
+      window.dispatchEvent(
+        new CustomEvent('flowgen:register-original-image', {
+          detail: { nodeId, file: first, type: 'main' },
+        })
+      );
+      
+      return;
+    }
+
+    // 已有主图 → 全部图片作为参考图（保持原逻辑）
     const refs = [...(d0.referenceImages || [])];
     const imgSlots = Math.max(0, 9 - refs.length);
     let nextImages = refs;
     let nextLabels = [...(d0.referenceImageLabels || [])];
     while (nextLabels.length < refs.length) nextLabels.push('');
+    let refPatch: Partial<NodeData> = {};
     if (imgSlots > 0 && imageFiles.length > 0) {
       const toProcess = imageFiles.slice(0, imgSlots);
-      await dispatchReferenceAppendFiles(toProcess, refs.length);
+      const registered = await dispatchReferenceAppendFiles(toProcess, refs.length);
       try {
         const newImages = await Promise.all(toProcess.map((f) => compressImageForPreview(f)));
         nextImages = [...refs];
@@ -4744,6 +4890,11 @@ function NodeInspector({
           nextLabels = appended.referenceImageLabels;
         }
       }
+      // §11.90m：已有主图分支也必须包含 referenceImageLocalRefs，
+      // 对标「首张无主图做主图」分支的 withReferenceLocalRefsInPatch 逻辑。
+      // 旧代码忽略 dispatchReferenceAppendFiles 返回值，导致 onUpdate 缺失
+      // referenceImageLocalRefs，刷新后 hydration 从旧 localRefs 恢复错误图片。
+      refPatch = withReferenceLocalRefsInPatch({}, registered);
     }
 
     let movs = [...(d0.referenceMovs || [])];
@@ -4776,6 +4927,7 @@ function NodeInspector({
       referenceImageLabels: nextLabels.slice(0, 9),
       referenceMovs: movs,
       referenceAudios: auds,
+      ...refPatch,
     });
   };
 
@@ -5605,8 +5757,9 @@ function NodeInspector({
                                         onChange={handleMainUpload}
                                     />
                             <div className="rounded-lg border border-gray-800 bg-gray-950/40 p-3 flex flex-col gap-3">
-                                <div className="text-[10px] text-red-300 px-2 py-2 leading-relaxed text-center bg-red-500/10 border border-red-500/30 rounded-lg shrink-0">
-                                    ⚠ 添加首帧图，或者同时添加首尾帧图，并文字描述场景过渡、运镜轨迹或角色动作。
+                                <div className="text-[10px] text-red-300 px-2 py-2 leading-relaxed text-left bg-red-500/10 border border-red-500/30 rounded-lg shrink-0 space-y-1">
+                                    <p className="text-center">⚠ 添加首帧图，或者同时添加首尾帧图，并文字描述场景过渡、运镜轨迹或角色动作。</p>
+                                    <p className="text-amber-300 font-semibold">⚠ 图片要求：JPG/JPEG/PNG；宽高比 1:2.5~2.5:1；宽高 ≥ 300px；单张 ≤ 10MB。比例超出范围将被官方拒绝。</p>
                                 </div>
                                 <div className="grid grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] gap-2 items-stretch h-24">
                                     <FrameDropZone
@@ -5660,9 +5813,12 @@ function NodeInspector({
                                 </button>
                             </div>
                             )}
-                            <div className="text-[10px] text-red-300 px-2 py-2 leading-relaxed bg-red-500/10 border border-red-500/30 rounded-lg">
+                            <div className="text-[10px] text-red-300 px-2 py-2 leading-relaxed bg-red-500/10 border border-red-500/30 rounded-lg space-y-1">
                                 {klingOmniTab === 'multi' && (
-                                  <p className="text-center">⚠ 上传 1-7 张参考图或主体，你可以自由组合人物、角色、道具、服装、场景等元素。</p>
+                                  <>
+                                    <p className="text-center">⚠ 上传 1-7 张参考图或主体，你可以自由组合人物、角色、道具、服装、场景等元素。</p>
+                                    <p className="text-amber-300 font-semibold">⚠ 图片要求：JPG/JPEG/PNG；宽高比 1:2.5~2.5:1；宽高 ≥ 300px；单张 ≤ 10MB。比例超出范围将被官方拒绝。</p>
+                                  </>
                                 )}
                                 {(klingOmniTab === 'instruction' || klingOmniTab === 'video') && (
                                   <div className="space-y-0.5">
@@ -5673,7 +5829,8 @@ function NodeInspector({
                                       <p>⚠ 基于 3-10s 视频作为参考，配合文字/图片/主体，续写下一分镜；或复刻视频动作/运镜，生成全新画面，拖入内容支持图片和视频。</p>
                                     )}
                                     <p>● 仅支持 1 段 MP4/MOV（3-10s，720-2160px，24-60fps，≤200MB；输出 24fps）</p>
-                            </div>
+                                    <p className="text-amber-300 font-semibold">⚠ 图片要求：JPG/JPEG/PNG；宽高比 1:2.5~2.5:1；宽高 ≥ 300px；单张 ≤ 10MB。比例超出范围将被官方拒绝。</p>
+                                  </div>
                                 )}
                             </div>
                             {klingOmniTab !== 'multi' && stableOmniTabVideoDisplayUrl && (
@@ -5863,8 +6020,9 @@ function NodeInspector({
             ) : isJimeng ? (
                 /* === 即梦3.0 Pro UI === */
                 <div className="p-4 flex flex-col gap-3">
-                            <div className="text-[10px] text-red-300 px-2 py-2 leading-relaxed text-center bg-red-500/10 border border-red-500/30 rounded-lg">
-                                ⚠ 支持 JPG/PNG；首帧必选（即梦 API 仅单图图生）；单张 ≤ 4.7MB。创意描述请用 @首帧图 或 @主图。
+                            <div className="text-[10px] text-red-300 px-2 py-2 leading-relaxed text-left bg-red-500/10 border border-red-500/30 rounded-lg space-y-1">
+                                <p className="text-center">⚠ 支持 JPG/PNG；首帧必选（即梦 API 仅单图图生）；单张 ≤ 4.7MB。创意描述请用 @首帧图 或 @主图。</p>
+                                <p className="text-amber-300 font-semibold">⚠ 比例建议：首帧图比例宜与所选视频比例（16:9/4:3/1:1/3:4/9:16/21:9）接近；不一致时官方服务端会居中裁切，可能丢失画面边缘。图片长边:短边 ≤ 3，最短边 ≥ 320px，最大 4096×4096。</p>
                             </div>
                               <div className="p-2 rounded-lg border border-gray-800 bg-gray-950/40">
                                 <div className="flex items-center justify-between mb-2">
@@ -5967,6 +6125,9 @@ function NodeInspector({
                                     <li>宽、高边长（px）：(300, 6000)</li>
                                     <li>大小：单张 &lt; 30 MB</li>
                                     <li>数量：仅首帧 1 张；首尾帧模式 2 张</li>
+                                    {isSeedance20 && (
+                                        <li className="text-amber-300 font-semibold pt-1">⚠ 比例建议：首尾帧图片比例宜与所选视频比例一致；不一致时模型会自行适配比例，可能影响首帧还原效果。</li>
+                                    )}
                                 </ul>
                             </div>
                             <div className="grid grid-cols-2 gap-2 items-stretch h-24">
@@ -7403,38 +7564,6 @@ function NodeInspector({
                                     onClick={() => onUpdate({ seedanceAspectRatio: '自动匹配' })}
                                     className={`flex-1 py-2 px-3 text-xs font-medium rounded-lg border transition-colors ${
                                         (data.seedanceAspectRatio || '自动匹配') === '自动匹配'
-                                            ? 'bg-blue-600 text-white border-blue-500 shadow-sm shadow-blue-950/30'
-                                            : 'bg-blue-950/25 text-blue-200/70 border-blue-500/25 hover:border-blue-500/45 hover:bg-blue-950/40'
-                                    }`}
-                                >
-                                    自动匹配
-                                </button>
-                            </div>
-                        </div>
-                    )}
-                    {isSeedance20 && seedanceMode === 'reference' && (
-                        <div className="space-y-1">
-                            <div className="flex items-center gap-2 text-gray-400">
-                                <Info size={12} className="text-gray-500 shrink-0" />
-                                <span className="text-[10px] font-bold uppercase tracking-wider">比例策略</span>
-                            </div>
-                            <div className="flex gap-2">
-                                <button
-                                    type="button"
-                                    onClick={() => onUpdate({ seedanceReferenceRatioMode: 'force' })}
-                                    className={`flex-1 py-2 px-3 text-xs font-medium rounded-lg border transition-colors ${
-                                        (data.seedanceReferenceRatioMode || 'force') === 'force'
-                                            ? 'bg-brand-500/20 text-brand-400 border-brand-500/30'
-                                            : 'bg-gray-950 border-gray-700 text-gray-500 hover:border-gray-600'
-                                    }`}
-                                >
-                                    强制比例
-                                </button>
-                                <button
-                                    type="button"
-                                    onClick={() => onUpdate({ seedanceReferenceRatioMode: 'auto' })}
-                                    className={`flex-1 py-2 px-3 text-xs font-medium rounded-lg border transition-colors ${
-                                        data.seedanceReferenceRatioMode === 'auto'
                                             ? 'bg-blue-600 text-white border-blue-500 shadow-sm shadow-blue-950/30'
                                             : 'bg-blue-950/25 text-blue-200/70 border-blue-500/25 hover:border-blue-500/45 hover:bg-blue-950/40'
                                     }`}
