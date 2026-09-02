@@ -29,7 +29,7 @@ export function needsFirstFramePanelModel(
     return true;
   }
   if (
-    (model === 'seedance2.0 (高质量版)' || model === 'seedance2.0 (急速版)') &&
+    (model === 'seedance2.0 (高质量版)' || model === 'seedance2.0 (急速版)' || model === 'seedance2.5') &&
     (ctx.seedanceMode || data.seedanceGenerationMode || 'text') === 'image'
   ) {
     return true;

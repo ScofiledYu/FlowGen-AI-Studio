@@ -1,4 +1,4 @@
-﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿import React, { Suspense, useState, useRef, useCallback, useEffect, useMemo } from 'react';
+﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿import React, { Suspense, useState, useRef, useCallback, useEffect, useMemo } from 'react';
 import ReactFlow, {
   ReactFlowProvider,
   addEdge,
@@ -41,6 +41,7 @@ import {
   isMidJourneyFamilyModel,
   isMidJourneyModel,
   isNanoBanana2Model,
+  SeedanceTaskType,
 } from '../types';
 import {
   BATCH_RUN_NODE_INTERVAL_MS,
@@ -51,7 +52,12 @@ import {
   resolveBatchRunQueueByIds,
   snapshotBatchRunNodeIds,
 } from '../utils/batchRunQueue';
-import { parseSeedanceDurationSeconds, SEEDANCE_DURATION_DEFAULT_LABEL } from '../utils/seedanceDuration';
+import { parseSeedanceDurationSeconds, SEEDANCE_DURATION_DEFAULT_LABEL, SEEDANCE_DURATION_MAX } from '../utils/seedanceDuration';
+import {
+  isSeedance25Model,
+  resolveSeedance25ParameterOverrides,
+  validateSeedance25TaskTypeRun,
+} from '../utils/seedance25TaskType';
 import {
   applyRunPanelFieldsToGenerationParams,
   buildNanoBananaDetailsReferenceImages,
@@ -202,9 +208,11 @@ import {
   buildPromptMediaRefContextForRun,
   resolvePromptPlaceholders,
   resolveSeedancePromptToNativeImageTokens,
+  resolveSeedance25PromptToNativeTokens,
   resolveKlingOmniPromptToNativeImageTokens,
   resolveImageGenPromptToImageTokens,
   resolveJimengPromptStripImageTokens,
+  resolveViduPromptStripImageTokens,
   collectProjectAssetUrlsFromPrompt,
   collectReferencedMediaFromPrompt,
   collectSeedanceReferencedMediaFromPrompt,
@@ -354,7 +362,7 @@ import { ProjectAssetLibrary } from './flowgen/ProjectAssetLibrary';
 import { FlowgenMiniMap } from './flowgen/FlowgenMiniMap';
 import { hasVisibleMiniMapNodes } from '../utils/flowgenMiniMapLayout';
 import { dedupeReferenceImageUrlsForSlotFallback } from '../utils/referenceImageUrlDedupe';
-import { pickVideoResourceUrlFromTaskStatus } from '../utils/taskStatusVideoUrl';
+import { pickVideoResourceUrlFromTaskStatus, pickTranscodedVideoUrlFromTaskStatus, isTranscodedPairOfOriginal } from '../utils/taskStatusVideoUrl';
 import { resolvePreferredNodeDownloadUrl } from '../utils/generatedOutputUrl';
 import { pickImageResourceUrlFromTaskStatus } from '../utils/taskStatusImageUrl';
 import { normalizeNodeRunStateForPersist, prepareNodesAfterWorkspaceLoad, clearRunRecoveryHints, mergeRunPersistPatchesIntoNodes, mergeRunRecoveryFieldsFromLocalSnapshot, reconcileSourceRunStateAfterOutputNodesRemoved, clearStaleRunTaskBeforeFreshRun, buildMainSlotRollbackPatchForRunError } from '../utils/runRecovery';
@@ -1397,6 +1405,7 @@ const OUTPUT_NODE_INHERIT_KEYS: Array<keyof NodeData> = [
   'seedanceGenerationMode',
   'seedanceReferenceRatioMode',
   'seedanceReferenceWebSearch',
+  'seedanceTaskType',
   'image2Style',
   'image2AspectRatio',
   'image2ImageSize',
@@ -1569,7 +1578,7 @@ function nodeDetailsTabSummaryLine(p: {
   jimengGenerationMode?: 'text' | 'image';
 }): string | null {
   const m = (p.model || '').trim();
-  if (['seedance2.0 (高质量版)', 'seedance2.0 (急速版)'].includes(m)) {
+  if (['seedance2.0 (4k版)', 'seedance2.0 (高质量版)', 'seedance2.0 (急速版)', 'seedance2.5'].includes(m)) {
     return `${m} 生成模式：${formatSeedanceGenerationModeForDetails(p.seedanceGenerationMode, m)}`;
   }
   if (m === '可灵3.0 Omni') {
@@ -2052,6 +2061,8 @@ const FlowEditor = ({
   const latestChatSnapshotRef = useRef<PersistedCanvasChatV1 | null>(null);
   const chatByUserRef = useRef<Record<string, PersistedCanvasChatV1>>({});
   const remoteSaveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const remoteSaveInFlightRef = useRef(false);
+  const isImportingRef = useRef(false);
   const lastRemoteWorkspaceSigRef = useRef('');
   /** 离开画布前最后一次有效图（防卸载后延迟保存读到空 getNodes） */
   const latestRemoteGraphRef = useRef<{
@@ -2321,6 +2332,7 @@ const FlowEditor = ({
     if (!serverProjectId) return;
     if (!getStoredUser()) return;
     if (!isEditorMountedRef.current && !options?.force) return;
+    remoteSaveInFlightRef.current = true;
     let nodesToSave = graphOverride?.nodes ?? getNodes();
     if (pendingRunPersistPatchesRef.current.size > 0) {
       nodesToSave = mergeRunPersistPatchesIntoNodes(
@@ -2459,7 +2471,7 @@ const FlowEditor = ({
             ? serverPayload.graph.nodes.length
             : 0;
           const localNodeCount = nodesToSave.length;
-          if (serverNodeCount > localNodeCount && !allowEmptyGraph) {
+          if (serverNodeCount > localNodeCount && !allowEmptyGraph && !options?.force) {
             console.warn(
               '[flowgen] workspace save skipped after conflict: server has more nodes',
               { serverNodeCount, localNodeCount }
@@ -2485,6 +2497,8 @@ const FlowEditor = ({
           })
         );
       }
+    } finally {
+      remoteSaveInFlightRef.current = false;
     }
   }, [
     serverProjectId,
@@ -2501,6 +2515,8 @@ const FlowEditor = ({
     if (!serverProjectId) return;
     if (!getStoredUser()) return;
     if (!isEditorMountedRef.current) return;
+    if (isImportingRef.current) return; // 导入中：完全抑制防抖保存，避免与 force 保存的版本号竞争
+    if (remoteSaveInFlightRef.current) return; // 保存进行中，跳过；保存完成后下次 state 变更会重新调度
     if (remoteSaveTimerRef.current) clearTimeout(remoteSaveTimerRef.current);
     remoteSaveTimerRef.current = setTimeout(() => {
       remoteSaveTimerRef.current = null;
@@ -5588,7 +5604,7 @@ const FlowEditor = ({
                  const targetNode = currentNodes.find(n => n.id === edge.target);
                  if (targetNode && targetNode.type === NodeType.MOV && targetNode.data.imagePreview) {
                      if (targetNode.data.imagePreview.match(/\.(mov|mp4|webm)/i) || targetNode.data.imagePreview.startsWith('blob:')) {
-                         playlist.push(targetNode.data.imagePreview);
+                         playlist.push(isTranscodedPairOfOriginal((targetNode.data.generationParams as { transcodedVideoUrl?: string } | undefined)?.transcodedVideoUrl, targetNode.data.imagePreview) ? (targetNode.data.generationParams as { transcodedVideoUrl?: string }).transcodedVideoUrl! : targetNode.data.imagePreview); // HEVC 成片连播优先同源 H.264 转码版（§16.27）；下载仍走原版
                      }
                  }
              });
@@ -6016,7 +6032,7 @@ const FlowEditor = ({
           id: node.id,
           type: node.type,
           position: node.position,
-          data: node.data,
+          data: sanitizePersistValueDeep(node.data),
         })),
         edges: edgesToExport.map((edge) => ({
           id: edge.id,
@@ -7058,6 +7074,9 @@ const FlowEditor = ({
       let generatedImages: string[] = [];
       // 批量并发任务部分失败的错误详情收集（runParallelGenerationTasks 返回 { urls, errors }）
       let partialGenerationErrors: string[] = [];
+      /** HEVC 成片（如 seedance2.0 4K）的网关 H.264 转码版：finalUrl → transcodedVideoUrl。
+       *  写入 gp.transcodedVideoUrl 供浏览器在线预览；下载/链式引用仍走 outputUrl 原版。 */
+      const seedanceTranscodedByFinalUrl = new Map<string, string>();
       let image2ProbedOutputSize: string | undefined;
       const runTaskIds: string[] = [];
       let jimengFirstFrameUrlForUi: string | undefined;
@@ -7648,7 +7667,7 @@ const FlowEditor = ({
                     aspectRatio: nextData.aspectRatio,
                     numberOfImages: nextData.numberOfImages,
                 };
-            } else if (['seedance1.5-pro', 'seedance2.0 (高质量版)', 'seedance2.0 (急速版)'].includes(selected)) {
+            } else if (['seedance1.5-pro', 'seedance2.0 (4k版)', 'seedance2.0 (高质量版)', 'seedance2.0 (急速版)', 'seedance2.5'].includes(selected)) {
                 (currentConfigs as any)[selected] = {
                     prompt: getNodeInspectorPromptText(nextData),
                     negativePrompt: nextData.negativePrompt,
@@ -7669,6 +7688,7 @@ const FlowEditor = ({
                     seedanceGenerationMode: nextData.seedanceGenerationMode,
                     seedanceReferenceRatioMode: nextData.seedanceReferenceRatioMode,
                     seedanceReferenceWebSearch: nextData.seedanceReferenceWebSearch,
+                    seedanceTaskType: nextData.seedanceTaskType,
                     seedanceTabConfigs: nextData.seedanceTabConfigs,
                     referenceImages: nextData.referenceImages ? [...nextData.referenceImages] : undefined,
                     referenceMovs: nextData.referenceMovs ? [...nextData.referenceMovs] : undefined,
@@ -7678,17 +7698,19 @@ const FlowEditor = ({
             return currentConfigs;
         };
 
-        /** Seedance：上传前约束边长 300～6000px、宽高比 0.4～2.5（资产库原图常 >6000px） */
+        /** Seedance：上传前等比缩放约束边长/字节（不做宽高比裁切；极端比例交由豆包 API 报错） */
         const prepareLocalImageSrc = async (
             src: string,
-            extra?: { seedanceRatioLabel?: string | null }
+            _extra?: { seedanceRatioLabel?: string | null }
         ): Promise<string> => {
             const s = String(src || '').trim();
             if (!s) return s;
             const isSeedanceModel = [
                 'seedance1.5-pro',
+                'seedance2.0 (4k版)',
                 'seedance2.0 (高质量版)',
                 'seedance2.0 (急速版)',
+                'seedance2.5',
             ].includes(model);
             if (!isSeedanceModel) return s;
             if (
@@ -7699,8 +7721,7 @@ const FlowEditor = ({
               try {
                 const blob = await getAssetFileBlob(flowgenAssetFileUrlFromMediaUrl(s));
                 const fit = await prepareImageForSeedanceModelUpload(
-                  new File([blob], 'seedance-asset.jpg', { type: blob.type || 'image/jpeg' }),
-                  { targetRatioLabel: extra?.seedanceRatioLabel }
+                  new File([blob], 'seedance-asset.jpg', { type: blob.type || 'image/jpeg' })
                 );
                     logPreloadDebug({
                         model,
@@ -7718,9 +7739,7 @@ const FlowEditor = ({
             }
             if (s.includes('aitop100app-1251510006')) {
                 try {
-                    const fit = await prepareImageForSeedanceModelUpload(s, {
-                      targetRatioLabel: extra?.seedanceRatioLabel,
-                    });
+                    const fit = await prepareImageForSeedanceModelUpload(s);
                     logPreloadDebug({
                         model,
                         stage: 'seedance-image-fit',
@@ -7736,9 +7755,7 @@ const FlowEditor = ({
                 }
             }
             try {
-                const fit = await prepareImageForSeedanceModelUpload(s, {
-                  targetRatioLabel: extra?.seedanceRatioLabel,
-                });
+                const fit = await prepareImageForSeedanceModelUpload(s);
                 logPreloadDebug({
                     model,
                     stage: 'seedance-image-fit',
@@ -9587,12 +9604,7 @@ const FlowEditor = ({
                 viduMediaPlan,
                 projectAssetResolveOptsRef.current
             );
-            const prompt = resolvePromptPlaceholders(
-                rawViduPrompt,
-                currentNode.data,
-                viduCtx,
-                viduPrOpts
-            );
+            const prompt = resolveViduPromptStripImageTokens(rawViduPrompt, viduPrOpts);
             const originalsVidu = getOriginals(idToRun);
             let firstFrameImage: string | undefined;
             let lastFrameImage: string | undefined;
@@ -9733,13 +9745,13 @@ const FlowEditor = ({
             }
         }
         // --- seedance1.5-pro 图生视频（豆包 Seedance，参考 doubao_video_test.py）---
-        else if (['seedance1.5-pro', 'seedance2.0 (高质量版)', 'seedance2.0 (急速版)'].includes(model)) {
+        else if (['seedance1.5-pro', 'seedance2.0 (4k版)', 'seedance2.0 (高质量版)', 'seedance2.0 (急速版)', 'seedance2.5'].includes(model)) {
             let prompt =
               getCanonicalInspectorPromptText(
                 runStartDataSnapshot,
                 projectAssetResolveOptsRef.current.projectAssets
               ) || '镜头缓缓推进，人物自然走动';
-            const isSeedance20Model = ['seedance2.0 (高质量版)', 'seedance2.0 (急速版)'].includes(model);
+            const isSeedance20Model = ['seedance2.0 (4k版)', 'seedance2.0 (高质量版)', 'seedance2.0 (急速版)', 'seedance2.5'].includes(model);
             const gp = (currentNode.data.generationParams || {}) as GenerationParams;
             const seedanceMode: 'text' | 'image' | 'reference' =
               isSeedance20Model
@@ -10042,13 +10054,23 @@ const FlowEditor = ({
             const rawSeedanceRes = (
               currentNode.data.seedanceResolution || getSeedanceDefaultResolution(model)
             ).trim();
-            const resolution: '480p' | '720p' | '1080p' =
-              rawSeedanceRes === '1080p' || rawSeedanceRes === '720p' || rawSeedanceRes === '480p'
-                ? (rawSeedanceRes as '480p' | '720p' | '1080p')
+            const resolution: '480p' | '720p' | '1080p' | '4k' =
+              rawSeedanceRes === '4k' || rawSeedanceRes === '1080p' || rawSeedanceRes === '720p' || rawSeedanceRes === '480p'
+                ? (rawSeedanceRes as '480p' | '720p' | '1080p' | '4k')
                 : getSeedanceDefaultResolution(model);
-            const seedanceApiResolution: '480p' | '720p' | '1080p' =
-              resolution === '1080p' && model !== 'seedance2.0 (高质量版)' ? '720p' : resolution;
-            const durationNum = parseSeedanceDurationSeconds(currentNode.data.seedanceDuration);
+            const seedanceApiResolution: '480p' | '720p' | '1080p' | '4k' =
+              model === 'seedance2.0 (4k版)' ? '4k' : // 4k版固定使用4k
+              resolution === '4k' && model !== 'seedance2.0 (4k版)' ? '1080p' :
+              resolution === '1080p' && model !== 'seedance2.0 (4k版)' && model !== 'seedance2.0 (高质量版)' && model !== 'seedance2.5' ? '720p' : resolution;
+            const durationNum = parseSeedanceDurationSeconds(
+              currentNode.data.seedanceDuration,
+              model === 'seedance2.5' && currentNode.data.seedanceTaskType !== 'video_edit' ? 30 : SEEDANCE_DURATION_MAX
+            );
+            /** seedance2.5：任务模式（仅参考生 tab；默认 normal） */
+            const seedance25TaskType: SeedanceTaskType =
+              model === 'seedance2.5' && seedanceMode === 'reference'
+                ? ((currentNode.data.seedanceTaskType || 'normal') as SeedanceTaskType)
+                : 'normal';
             let ratio = ratioLabelForNorm;
             const camerafixed = isSeedance20Model ? false : (currentNode.data.seedanceFixedCamera ?? false);
             const generateAudio = currentNode.data.seedanceGenerateAudio ?? false;
@@ -10304,9 +10326,14 @@ const FlowEditor = ({
               if (uploadedMovs.length > 0) referenceVideosPayload = uploadedMovs;
               if (uploadedMovs.length > 0) {
                 const refDurationSec = await getVideoDurationSeconds(uploadedMovs[0]);
-                if (refDurationSec != null && (refDurationSec < 2 || refDurationSec > 15)) {
+                // 对照火山官方文档 82379/2607688：2.0 参考视频 2-15s；2.5 为 2-30s（视频编辑 4-30s）
+                const refMinSec = model === 'seedance2.5' && seedance25TaskType === 'video_edit' ? 4 : 2;
+                const refMaxSec = model === 'seedance2.5' ? 30 : 15;
+                if (refDurationSec != null && (refDurationSec < refMinSec || refDurationSec > refMaxSec)) {
                   throw new Error(
-                    `${model}：参考生视频要求时长 2-15 秒，当前约 ${refDurationSec.toFixed(2)} 秒，请更换素材或先剪辑。`
+                    model === 'seedance2.5'
+                      ? `${model}：参考视频要求时长 ${refMinSec}-30 秒，当前约 ${refDurationSec.toFixed(2)} 秒，请更换素材或先剪辑。`
+                      : `${model}：参考生视频要求时长 2-15 秒，当前约 ${refDurationSec.toFixed(2)} 秒，请更换素材或先剪辑。`
                   );
                 }
               }
@@ -10482,7 +10509,10 @@ const FlowEditor = ({
             // 82379/2291680 教程），不再展开为「（面板参考…视作 [图N]）」长括号自然语言说明，
             // 避免丢失豆包要求的结构化「图片N」标记导致多图对齐失效。
             // 1.5-pro 仅支持首帧/首尾帧（靠 startImage 字段，无多图参考），保持原 resolvePromptPlaceholders。
-            if (isSeedance20Model) {
+            if (isSeedance25Model(model)) {
+              // Seedance 2.5：用官方 @videoN/@imageN 原生引用（视频编辑/延长必须保留视频引用）
+              prompt = resolveSeedance25PromptToNativeTokens(prompt, seedanceResolveOptsForRun);
+            } else if (isSeedance20Model) {
               prompt = resolveSeedancePromptToNativeImageTokens(prompt, seedanceResolveOptsForRun);
             } else {
               prompt = resolvePromptPlaceholders(
@@ -10524,25 +10554,58 @@ const FlowEditor = ({
               });
             }
             const seedanceModelId =
-              model === 'seedance2.0 (急速版)'
-                ? 'DOUBAO_SEEDANCE_2_0_FAST'
-                : model === 'seedance2.0 (高质量版)'
-                  ? 'DOUBAO_SEEDANCE_2_0'
-                  : 'DOUBAO_SEEDANCE_1_5_PRO';
+              model === 'seedance2.5'
+                ? 'DOUBAO_SEEDANCE_2_5'
+                : model === 'seedance2.0 (4k版)'
+                  ? 'DOUBAO_SEEDANCE_2_0_4K'
+                  : model === 'seedance2.0 (急速版)'
+                    ? 'DOUBAO_SEEDANCE_2_0_FAST'
+                    : model === 'seedance2.0 (高质量版)'
+                      ? 'DOUBAO_SEEDANCE_2_0'
+                      : 'DOUBAO_SEEDANCE_1_5_PRO';
+
+            // seedance2.5 视频编辑/延长：运行前校验（参考视频数量 + 提示词关键词），避免浪费积分
+            if (seedance25TaskType !== 'normal') {
+              const taskTypeError = validateSeedance25TaskTypeRun({
+                taskType: seedance25TaskType,
+                prompt,
+                referenceVideoCount: (referenceVideosPayload || []).length,
+              });
+              if (taskTypeError) {
+                throw new Error(`seedance2.5 任务模式校验失败：${taskTypeError}`);
+              }
+            }
+            // seedance2.5 视频编辑/延长：parameters 覆写（ratio=adaptive；edit 固定 -1，extend [4,30]）
+            const seedance25Params = resolveSeedance25ParameterOverrides(
+              seedance25TaskType,
+              ratioOverrideByReferenceVideo || ratio,
+              durationNum
+            );
 
             const seedanceGenerateCount = resolvePanelGenerateCount(currentNode.data);
+            /** 联网搜索（仅 2.0 系列参考生 tab）：tools.type=web_search，仅开启时传；
+             * 2.5 不支持联网搜索（AiTop tools 为 2.0 专有参数），面板已移除开关；
+             * 历史快照 seedanceReferenceWebSearch=true 的 2.5 节点同样强制不传 */
+            const seedanceWebSearchOn =
+              isSeedance20Model &&
+              !isSeedance25Model(model) &&
+              seedanceMode === 'reference' &&
+              (currentNode.data.seedanceReferenceWebSearch ?? false) &&
+              seedance25TaskType === 'normal';
             const seedancePayload = {
                 model: seedanceModelId,
                 prompt,
                 ...(startUrl ? { startImage: startUrl } : {}),
                 ...(endUrl ? { endImage: endUrl } : {}),
                 resolution: seedanceApiResolution,
-                ratio: ratioOverrideByReferenceVideo || ratio,
-                duration: durationNum,
+                ratio: seedance25Params.ratio,
+                duration: seedance25Params.duration,
                 camerafixed,
                 generateAudio,
                 seed: -1,
                 generateNum: 1,
+                ...(seedance25TaskType !== 'normal' ? { taskType: seedance25TaskType } : {}),
+                ...(seedanceWebSearchOn ? { tools: { type: 'web_search' } } : {}),
                 ...(referenceAudiosPayload ? { referenceAudios: referenceAudiosPayload } : {}),
                 ...(referenceVideosPayload ? { referenceVideos: referenceVideosPayload } : {}),
                 ...(referenceImagesPayload ? { referenceImages: referenceImagesPayload } : {}),
@@ -10551,14 +10614,16 @@ const FlowEditor = ({
             const pollCfg =
               seedanceModelId === 'DOUBAO_SEEDANCE_2_0_FAST'
                 ? { maxAttempts: 720, intervalMs: 5000 }
-                : seedanceModelId === 'DOUBAO_SEEDANCE_2_0'
+                : seedanceModelId === 'DOUBAO_SEEDANCE_2_0' || seedanceModelId === 'DOUBAO_SEEDANCE_2_5'
                   ? { maxAttempts: 3600, intervalMs: 10000 }
                   : { maxAttempts: 240, intervalMs: 5000 };
             const pollSeedanceTask = async (taskId: string): Promise<string> => {
                 let attempts = 0;
                 const maxConsecutiveStatusErrors =
-                  seedanceModelId === 'DOUBAO_SEEDANCE_2_0' ? 18 : 10;
+                  seedanceModelId === 'DOUBAO_SEEDANCE_2_0' || seedanceModelId === 'DOUBAO_SEEDANCE_2_5' ? 18 : 10;
                 let consecutiveStatusErrors = 0;
+                /** 4K/2.5 转码等待计数：网关异步转码，TRANSFER_SUCCESS 时 transcodedVideo 常未就绪（实测滞后 1~6 分钟，14s 4K 更久） */
+                let transcodedWaitAttempts = 0;
                 while (attempts < pollCfg.maxAttempts) {
                     await new Promise((r) => setTimeout(r, pollCfg.intervalMs));
                     attempts++;
@@ -10584,18 +10649,38 @@ const FlowEditor = ({
                     }
                     const resourceUrl = pickVideoResourceUrlFromTaskStatus(statusData);
                     if (status === 'TRANSFER_SUCCESS' && resourceUrl) {
-                        return isAitopCosUrl(resourceUrl)
+                        const transcoded = pickTranscodedVideoUrlFromTaskStatus(statusData);
+                        // 4K 版 / 2.5 成分为 HEVC：网关异步转码，transcodedVideo 未就绪时继续轮询等待（最多 48 次 ≈ 8 分钟，覆盖 14s+ 长片转码）；
+                        // videoJobStatus=IGNORE 表示无需转码直接放行；超时兜底按原版返回（与旧版行为一致，避免死等）
+                        if (
+                            (model === 'seedance2.0 (4k版)' || model === 'seedance2.5') &&
+                            !transcoded &&
+                            (statusData as { videoJobStatus?: string | null }).videoJobStatus !== 'IGNORE' &&
+                            transcodedWaitAttempts < 48
+                        ) {
+                            transcodedWaitAttempts++;
+                            continue;
+                        }
+                        const finalUrl = isAitopCosUrl(resourceUrl)
                             ? resourceUrl
                             : await stabilizeVideoResourceUrl(resourceUrl, {
                                   modelTag: model,
                                   taskId,
                               });
+                        if (transcoded && isAitopCosUrl(transcoded)) {
+                            seedanceTranscodedByFinalUrl.set(finalUrl, transcoded);
+                        }
+                        return finalUrl;
                     }
                     if (
                         (status === 'SUCCESS' || status === '2' || status === '5') &&
                         resourceUrl &&
                         isAitopCosUrl(resourceUrl)
                     ) {
+                        const transcoded = pickTranscodedVideoUrlFromTaskStatus(statusData);
+                        if (transcoded && isAitopCosUrl(transcoded)) {
+                            seedanceTranscodedByFinalUrl.set(resourceUrl, transcoded);
+                        }
                         return resourceUrl;
                     }
                 }
@@ -11053,7 +11138,7 @@ const FlowEditor = ({
             !skipFrameSlotsInRefImages &&
             (currentModelName.includes('可灵') ||
             currentModelName === 'vidu 2.0' ||
-            ['seedance1.5-pro', 'seedance2.0 (高质量版)', 'seedance2.0 (急速版)'].includes(currentModelName))
+            ['seedance1.5-pro', 'seedance2.0 (4k版)', 'seedance2.0 (高质量版)', 'seedance2.0 (急速版)', 'seedance2.5'].includes(currentModelName))
         ) {
             const f = snapForGp.data.firstFrameImageUrl || snapForGp.data.firstFrameImage;
             const l = snapForGp.data.lastFrameImageUrl || snapForGp.data.lastFrameImage;
@@ -11265,8 +11350,8 @@ const FlowEditor = ({
             generationParams.lastFrameImage = snapForGp.data.lastFrameImage;
             generationParams.firstFrameImageUrl = snapForGp.data.firstFrameImageUrl;
             generationParams.lastFrameImageUrl = snapForGp.data.lastFrameImageUrl;
-        } else if (['seedance1.5-pro', 'seedance2.0 (高质量版)', 'seedance2.0 (急速版)'].includes(currentModelName)) {
-            const isSeedance20Model = ['seedance2.0 (高质量版)', 'seedance2.0 (急速版)'].includes(currentModelName);
+        } else if (['seedance1.5-pro', 'seedance2.0 (4k版)', 'seedance2.0 (高质量版)', 'seedance2.0 (急速版)', 'seedance2.5'].includes(currentModelName)) {
+            const isSeedance20Model = ['seedance2.0 (4k版)', 'seedance2.0 (高质量版)', 'seedance2.0 (急速版)', 'seedance2.5'].includes(currentModelName);
             const modeSnap = (snapForGp.data.seedanceGenerationMode || 'text') as 'text' | 'image' | 'reference';
             const rawAsp = snapForGp.data.seedanceAspectRatio;
             const appliedAsp =
@@ -11277,8 +11362,15 @@ const FlowEditor = ({
             generationParams.numberOfImages = snapForGp.data.numberOfImages || '1条';
             generationParams.seedanceResolution =
               snapForGp.data.seedanceResolution || getSeedanceDefaultResolution(currentModelName);
+            /** seedance2.5 参考生 + 视频编辑/延长：API 侧比例锁定 adaptive */
+            const seedance25TaskTypeSnap =
+              currentModelName === 'seedance2.5' && modeSnap === 'reference'
+                ? ((snapForGp.data.seedanceTaskType || 'normal') as SeedanceTaskType)
+                : 'normal';
             generationParams.seedanceAspectRatio =
-              isSeedance20Model && modeSnap !== 'image'
+              seedance25TaskTypeSnap !== 'normal'
+                ? 'adaptive'
+                : isSeedance20Model && modeSnap !== 'image'
                 ? normalizeSeedanceAspectForTextRef(
                     appliedAsp || (rawAsp === '自动匹配' || !rawAsp ? undefined : rawAsp)
                   )
@@ -11297,6 +11389,10 @@ const FlowEditor = ({
                   (snapForGp.data as { seedanceImageWebSearch?: boolean }).seedanceImageWebSearch ??
                   false)
               : undefined;
+            generationParams.seedanceTaskType =
+              currentModelName === 'seedance2.5'
+                ? ((snapForGp.data.seedanceTaskType || 'normal') as SeedanceTaskType)
+                : undefined;
             generationParams.firstFrameImage = snapForGp.data.firstFrameImage;
             generationParams.lastFrameImage = snapForGp.data.lastFrameImage;
             generationParams.firstFrameImageUrl = snapForGp.data.firstFrameImageUrl;
@@ -11446,6 +11542,10 @@ const FlowEditor = ({
                             ...generationParams,
                             ...(isMidJourneyFamilyModel(currentModelName) ? { seedanceGenerationMode: 'reference' as const } : {}),
                             outputUrl: generatedImages[idx],
+                            // HEVC 成片（如 seedance2.0 4K）的网关 H.264 转码版：在线预览用；下载/链式引用仍走 outputUrl 原版
+                            ...(seedanceTranscodedByFinalUrl.get(generatedImages[idx])
+                                ? { transcodedVideoUrl: seedanceTranscodedByFinalUrl.get(generatedImages[idx]) }
+                                : {}),
                         },
                         taskId: generationParams.taskId,
                         // 创意描述 / 图片 / 视频 / 音频 / 首尾帧参考不继承到 OUTPUT 面板（仅保留在 generationParams 快照供 Node Details）
@@ -11499,8 +11599,10 @@ const FlowEditor = ({
         // 运行节点保留本次快照（含 Omni tab、参考图列表），便于 Node Details 与面板一致；不覆盖 klingOmni* 拖入状态
         const framePersistModels = [
             'seedance1.5-pro',
+            'seedance2.0 (4k版)',
             'seedance2.0 (高质量版)',
             'seedance2.0 (急速版)',
+            'seedance2.5',
             'vidu 2.0',
             '即梦3.0 Pro',
         ];
@@ -11560,7 +11662,22 @@ const FlowEditor = ({
             const nextData: NodeData = {
               ...n.data,
               ...runPanelPreviewPatch,
-              generationParams: { ...(n.data.generationParams || {}), ...generationParams },
+              generationParams: {
+                ...(n.data.generationParams || {}),
+                ...generationParams,
+                // §16.16：新快照不含 outputUrl，合并回写时旧 gp 残留的派生 outputUrl（=本次输入源视频）
+                // 会使 Node Details SOURCE 与 Reference Videos 主视频显示同一 URL；此处显式写入本次真实成片
+                ...(generatedImages[0] ? { outputUrl: generatedImages[0] } : {}),
+                // HEVC 成片（如 seedance2.0 4K）的网关 H.264 转码版：在线预览用；下载仍走 outputUrl 原版。
+                // §16.27：MOV/OUTPUT 运行节点的 gp.transcodedVideoUrl 语义为「imagePreview 原片的转码版」，
+                // 已有旧值（上次产出写入）则不覆盖——否则被本次新产出转码版顶替后与 imagePreview（原视频）错位，
+                // 播放源同源校验失败回退 HEVC 原片黑屏；INPUT/PROCESSOR 始终写入（播放本次产出用）
+                ...(generatedImages[0] && seedanceTranscodedByFinalUrl.get(generatedImages[0]) &&
+                  ((currentNode.type !== NodeType.MOV && currentNode.type !== NodeType.OUTPUT) ||
+                    !(n.data.generationParams as { transcodedVideoUrl?: string } | undefined)?.transcodedVideoUrl)
+                  ? { transcodedVideoUrl: seedanceTranscodedByFinalUrl.get(generatedImages[0]) }
+                  : {}),
+              },
               generatedAt: generationParams.generatedAt ?? n.data.generatedAt,
               taskId: generationParams.taskId,
               ...(generationParams.seedanceAspectRatio
@@ -11639,7 +11756,7 @@ const FlowEditor = ({
                           n.data.seedanceGenerationMode ||
                           'text') as 'text' | 'image' | 'reference';
                         const isSeedanceRefPersist =
-                          ['seedance2.0 (高质量版)', 'seedance2.0 (急速版)'].includes(
+                          ['seedance2.0 (4k版)', 'seedance2.0 (高质量版)', 'seedance2.0 (急速版)', 'seedance2.5'].includes(
                             currentModelName
                           ) && modeSnap === 'reference';
                         if (isSeedanceRefPersist && seedanceReferenceSnapshot) {
@@ -11792,7 +11909,7 @@ const FlowEditor = ({
                           };
                         }
                         if (
-                          ['seedance2.0 (高质量版)', 'seedance2.0 (急速版)'].includes(
+                          ['seedance2.0 (4k版)', 'seedance2.0 (高质量版)', 'seedance2.0 (急速版)', 'seedance2.5'].includes(
                             currentModelName
                           ) &&
                           modeSnap === 'image' &&
@@ -13077,7 +13194,7 @@ const FlowEditor = ({
       }
 
       const dataToSave = {
-        nodes: await inlineNodeMediaPosters(getNodes()),
+        nodes: (await inlineNodeMediaPosters(getNodes())).map((n) => sanitizePersistValueDeep(n) as typeof n),
         edges: getEdges(),
         storyboardImages: storyboardImages,
         savedAt: new Date().toISOString()
@@ -13175,16 +13292,25 @@ const FlowEditor = ({
   ]);
 
   const applyImportedProjectJson = useCallback(
-    (parsed: { nodes?: RFNode[]; edges?: Edge[]; storyboardImages?: string[] }, sourceFileName: string) => {
+    async (parsed: { nodes?: RFNode[]; edges?: Edge[]; storyboardImages?: string[] }, sourceFileName: string) => {
       onProjectNameChange?.(sourceFileName.replace(/\.json$/i, ''));
       setSaveFileName(sourceFileName.replace(/\.json$/i, ''));
 
       try {
 
-          // B3: 清理旧版 /pr/ 无效路径标识（后端无此路由，导入后必 404）
+          // §11.90x：导入一开始即上锁，并等待任何进行中的远程保存完成。
+          // 防止预同步版本号后、force 保存前有并发保存落盘，导致版本跳跃产生 409。
+          isImportingRef.current = true;
+          while (remoteSaveInFlightRef.current) {
+            await new Promise((r) => setTimeout(r, 50));
+          }
+
+          // B3: 清理旧版 /pr/ 无效路径标识 + blob: 临时 URL（跨浏览器/跨服务器无效）
           const cleanLegacyPrPath = (val: unknown): unknown => {
             if (typeof val === 'string') {
-              return /\/flowgen-api\/pr\/[A-Za-z0-9]+:\d+/.test(val) ? '' : val;
+              if (/\/flowgen-api\/pr\/[A-Za-z0-9]+:\d+/.test(val)) return '';
+              if (val.startsWith('blob:')) return '';
+              return val;
             }
             if (Array.isArray(val)) return val.map(cleanLegacyPrPath);
             if (val && typeof val === 'object') {
@@ -13366,8 +13492,26 @@ const FlowEditor = ({
             fitViewOnImportedNodes();
           }
 
+          // §11.90w：预同步服务端 workspace 版本号，避免 force 保存时因版本过期导致 409
+          // 场景：强制刷新页面后导入 JSON，workspaceVersionRef 可能尚未被 hydration useEffect 更新
+          // 或服务端版本已在 hydration 后被其他标签页递增，导致首次 PUT 发送过期版本号
+          if (serverProjectId) {
+            try {
+              const ws = await getWorkspace(serverProjectId);
+              workspaceVersionRef.current = ws.version;
+            } catch {
+              // 预同步失败不阻塞导入，后续 force 保存自带版本冲突重试机制
+            }
+          }
+
           // 不依赖 React 提交时机：用已算好的图立即写入服务端，避免清空后导入仍保存空画布
+          isImportingRef.current = true;
           persistImportedGraphSnapshot(normalizedImportedNodes, finalEdges, mergedImages);
+          // 延迟清除 isImportingRef，确保懒加载分批揭示（hydrateGraphWithLazyReveal 的 rAF 链）
+          // 触发的所有 useEffect 都被抑制，避免与 force 保存的版本号竞争产生 409
+          setTimeout(() => {
+            isImportingRef.current = false;
+          }, REMOTE_WORKSPACE_SAVE_DEBOUNCE_MS + 3000);
           
         const posHint =
           currentNodes.length > 0
@@ -13393,6 +13537,7 @@ const FlowEditor = ({
       persistImportedGraphSnapshot,
       fitView,
       screenToFlowPosition,
+      serverProjectId,
     ]
   );
 
@@ -13943,7 +14088,7 @@ const FlowEditor = ({
       sanitizeModelName.includes('可灵') ||
       sanitizeModelName.includes('Keling') ||
       sanitizeModelName === 'vidu 2.0' ||
-      ['seedance1.5-pro', 'seedance2.0 (高质量版)', 'seedance2.0 (急速版)', '即梦3.0 Pro'].includes(
+      ['seedance1.5-pro', 'seedance2.0 (4k版)', 'seedance2.0 (高质量版)', 'seedance2.0 (急速版)', 'seedance2.5', '即梦3.0 Pro'].includes(
         sanitizeModelName
       );
     /** 视频截帧多为 canvas 导出的 JPEG data URL，易混入 referenceImages 快照；仅视频链路做该过滤，避免误伤 image 2 本地参考图 */
@@ -14020,7 +14165,7 @@ const FlowEditor = ({
         return sanitizeRefImagesForDetails([ff, lf].filter(Boolean));
       }
       const seedanceImageMode =
-        ['seedance1.5-pro', 'seedance2.0 (高质量版)', 'seedance2.0 (急速版)'].includes(
+        ['seedance1.5-pro', 'seedance2.0 (4k版)', 'seedance2.0 (高质量版)', 'seedance2.0 (急速版)', 'seedance2.5'].includes(
           sanitizeModelName
         ) &&
         ((previewNode.data.seedanceGenerationMode ??
@@ -14188,7 +14333,7 @@ const FlowEditor = ({
       const modelForSeedanceRef = String(g?.model || d?.selectedModel || '').trim();
       const seedanceGenMode = String(d.seedanceGenerationMode || g.seedanceGenerationMode || 'text');
       const isSeedance20RefDetails =
-        (modelForSeedanceRef === 'seedance2.0 (高质量版)' || modelForSeedanceRef === 'seedance2.0 (急速版)') &&
+        (modelForSeedanceRef === 'seedance2.0 (4k版)' || modelForSeedanceRef === 'seedance2.0 (高质量版)' || modelForSeedanceRef === 'seedance2.0 (急速版)' || modelForSeedanceRef === 'seedance2.5') &&
         seedanceGenMode === 'reference';
       const isDetailsRunLikeNode =
         previewNode.type === NodeType.INPUT || previewNode.type === NodeType.PROCESSOR;
@@ -14407,7 +14552,7 @@ const FlowEditor = ({
     const isOutputNode = previewNode.type === NodeType.MOV || previewNode.type === NodeType.OUTPUT;
     // §11.67: Seedance 参考生 MOV 节点的 gp.outputUrl 可能与参考视频 URL 相同，不应过滤
     const isSeedanceRefOutput =
-      (modelStr === 'seedance2.0 (高质量版)' || modelStr === 'seedance2.0 (急速版)') &&
+      (modelStr === 'seedance2.0 (4k版)' || modelStr === 'seedance2.0 (高质量版)' || modelStr === 'seedance2.0 (急速版)' || modelStr === 'seedance2.5') &&
       String(previewNode.data.seedanceGenerationMode || (gp as any)?.seedanceGenerationMode || '') === 'reference';
     // 展示层去重：按“规范化 URL”去重；同资源时优先保留 http(s) 而非 blob
     const baseRefMovs: Array<{ url: string; posterDataUrl?: string }> = (() => {
@@ -14478,7 +14623,7 @@ const FlowEditor = ({
         const g0 = previewNode.data.generationParams as any;
         const seedanceMode0 = String(d0.seedanceGenerationMode || g0?.seedanceGenerationMode || 'text');
         const isSeedance20RefFallback =
-          (modelStr === 'seedance2.0 (高质量版)' || modelStr === 'seedance2.0 (急速版)') &&
+          (modelStr === 'seedance2.0 (4k版)' || modelStr === 'seedance2.0 (高质量版)' || modelStr === 'seedance2.0 (急速版)' || modelStr === 'seedance2.5') &&
           seedanceMode0 === 'reference';
         if (isSeedance20RefFallback && isOutputNode) {
           return dedupeReferenceMovsByUrl(out);
@@ -14688,7 +14833,7 @@ const FlowEditor = ({
     const isKeling = modelForMediaBranch.includes('可灵') || modelForMediaBranch.includes('Keling');
     const isJimeng = modelForMediaBranch.includes('即梦');
     const isVidu = modelForMediaBranch === 'vidu 2.0';
-    const isSeedance = ['seedance1.5-pro', 'seedance2.0 (高质量版)', 'seedance2.0 (急速版)'].includes(modelForMediaBranch);
+    const isSeedance = ['seedance1.5-pro', 'seedance2.0 (4k版)', 'seedance2.0 (高质量版)', 'seedance2.0 (急速版)', 'seedance2.5'].includes(modelForMediaBranch);
     const resolveFramePair = () => {
       const d: any = previewNode.data;
       const g: any = previewNode.data.generationParams;
@@ -15085,6 +15230,19 @@ const FlowEditor = ({
             referenceMovs: baseRefMovs,
           };
         }
+        // §16.15 防泄漏：本节点自带本次运行快照（gp.taskId 与节点一致）且快照无参考图时，
+        // 以快照为准显示空，禁止回退祖先/面板数据（否则上游节点的参考图会泄漏到本节点 Details，
+        // 如视频延长 movNode 误显示上游 Input Picture 节点的 7 槽参考图）。
+        const ownRunTaskId = String((gp as { taskId?: string } | undefined)?.taskId || '').trim();
+        const nodeTaskIdForRefGuard = String(previewNode.data.taskId || '').trim();
+        if (ownRunTaskId && ownRunTaskId === nodeTaskIdForRefGuard) {
+          return {
+            ...withoutFirstFrameFieldsWhenRefVideo(baseParams, true),
+            referenceImages: [],
+            referenceImageDetailItems: [],
+            referenceMovs: baseRefMovs,
+          };
+        }
         const panelSource: Partial<NodeData> =
           isOutputLikeForDetails && ancestorData
             ? { ...ancestorData, selectedModel: modelStr, seedanceGenerationMode: 'reference' }
@@ -15253,7 +15411,7 @@ const FlowEditor = ({
       }
     : {};
 
-  const nodeDetailsHeroUrl = previewNode
+  const nodeDetailsHeroUrlRaw = previewNode
     ? resolveNodeDetailsHeroImageUrl(previewNode.data, {
         referenceImageDetailItems: (
           previewParams as { referenceImageDetailItems?: Array<{ url: string; label: string }> }
@@ -15261,6 +15419,21 @@ const FlowEditor = ({
         projectAssets: projectAssetLabelRows,
       })
     : undefined;
+
+  // HEVC 成片（如 seedance2.0 4K）浏览器无法解码：Details 主预览优先网关 H.264 转码版；
+  // 仅当前 hero 为视频且转码版与其同源（§16.27 transcode-{uuid}↔{uuid}）时替换——
+  // MOV 再生成场景 gp.transcodedVideoUrl 属新产出，与 hero（原视频）不同源则不替换；
+  // 图片节点 hero 不受影响；下载仍走 outputUrl 原版
+  const nodeDetailsHeroTranscoded = (
+    previewNode?.data.generationParams as { transcodedVideoUrl?: string } | undefined
+  )?.transcodedVideoUrl;
+  const nodeDetailsHeroUrl =
+    nodeDetailsHeroTranscoded &&
+    nodeDetailsHeroUrlRaw &&
+    (previewNode?.type === NodeType.MOV || isVideoPreviewUrl(nodeDetailsHeroUrlRaw)) &&
+    isTranscodedPairOfOriginal(nodeDetailsHeroTranscoded, nodeDetailsHeroUrlRaw)
+      ? nodeDetailsHeroTranscoded
+      : nodeDetailsHeroUrlRaw;
 
   const sourceUrlForDetails = previewNode
     ? resolveNodeDetailsSourceUrl(previewNode.data, previewNode.type as NodeType)
@@ -15774,7 +15947,7 @@ const FlowEditor = ({
                                         const isNanoParams = isNanoBanana2Model(model);
                                         const isImage2Params = isImage2Model(model);
                                         const isMjParams = isMidJourneyFamilyModel(model);
-                                        const isSeedanceParams = ['seedance1.5-pro', 'seedance2.0 (高质量版)', 'seedance2.0 (急速版)'].includes(model);
+                                        const isSeedanceParams = ['seedance1.5-pro', 'seedance2.0 (高质量版)', 'seedance2.0 (急速版)', 'seedance2.5'].includes(model);
                                         const items: { label: string; value: string | number | undefined }[] = [
                                             { label: 'Model', value: model || undefined },
                                             { label: 'Task ID', value: (previewParams as any).taskId },
@@ -15875,6 +16048,17 @@ const FlowEditor = ({
                                                             runSeedanceMode,
                                                             model
                                                         ),
+                                                    }]
+                                                    : []),
+                                                ...(model === 'seedance2.5' &&
+                                                  (previewParams as GenerationParams).seedanceTaskType &&
+                                                  (previewParams as GenerationParams).seedanceTaskType !== 'normal'
+                                                    ? [{
+                                                        label: '任务模式',
+                                                        value:
+                                                          (previewParams as GenerationParams).seedanceTaskType === 'video_edit'
+                                                            ? '视频编辑'
+                                                            : '视频延长',
                                                     }]
                                                     : []),
                                                 {

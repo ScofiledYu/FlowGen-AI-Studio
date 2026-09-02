@@ -209,7 +209,7 @@ export function nodeUsesHiddenMainPreviewSlot(data: Partial<NodeData>): boolean 
   const multiRef =
     model === MODEL_NANO_BANANA_2 ||
     model === MODEL_IMAGE_2 ||
-    ((model === 'seedance2.0 (高质量版)' || model === 'seedance2.0 (急速版)') &&
+    ((model === 'seedance2.0 (高质量版)' || model === 'seedance2.0 (急速版)' || model === 'seedance2.5') &&
       (data.seedanceGenerationMode || 'text') === 'reference');
   if (!multiRef) return false;
   if (data.panelMainSlotVisible === false) return true;
@@ -239,7 +239,7 @@ export function resolveNodeDetailsHeroImageUrl(
   const isHistoryPreview = !!(data as any)._historyOutputNodeId;
   const isSeedanceRef =
     typeof data.selectedModel === 'string' &&
-    (data.selectedModel.includes('seedance2.0') || data.selectedModel.includes('seedance1.5')) &&
+    (data.selectedModel.includes('seedance2.0') || data.selectedModel.includes('seedance2.5') || data.selectedModel.includes('seedance1.5')) &&
     data.seedanceGenerationMode === 'reference';
   if (!isHistoryPreview && isLikelyMainVideoUrl(main) && isSeedanceRef && data.referenceMovs?.length) {
     const refMovUrl = String(data.referenceMovs[0]?.url || '').trim();
@@ -991,8 +991,8 @@ export function buildGenerationParamsFromRunSnapshot(
     generationParams.lastFrameImage = snap.lastFrameImage;
     generationParams.firstFrameImageUrl = snap.firstFrameImageUrl;
     generationParams.lastFrameImageUrl = snap.lastFrameImageUrl;
-  } else if (['seedance1.5-pro', 'seedance2.0 (高质量版)', 'seedance2.0 (急速版)'].includes(modelName)) {
-    const isSeedance20Model = ['seedance2.0 (高质量版)', 'seedance2.0 (急速版)'].includes(modelName);
+  } else if (['seedance1.5-pro', 'seedance2.0 (高质量版)', 'seedance2.0 (急速版)', 'seedance2.5'].includes(modelName)) {
+    const isSeedance20Model = ['seedance2.0 (高质量版)', 'seedance2.0 (急速版)', 'seedance2.5'].includes(modelName);
     const modeSnap = (
       (runCapture.seedanceGenerationMode as 'text' | 'image' | 'reference' | undefined) ||
       snap.seedanceGenerationMode ||
@@ -1027,6 +1027,10 @@ export function buildGenerationParamsFromRunSnapshot(
           (snap as { seedanceImageWebSearch?: boolean }).seedanceImageWebSearch ??
           false)
       : undefined;
+    generationParams.seedanceTaskType =
+      modelName === 'seedance2.5'
+        ? ((snap.seedanceTaskType || 'normal') as GenerationParams['seedanceTaskType'])
+        : undefined;
     generationParams.firstFrameImage = snap.firstFrameImage;
     generationParams.lastFrameImage = snap.lastFrameImage;
     generationParams.firstFrameImageUrl = snap.firstFrameImageUrl;
@@ -2226,7 +2230,7 @@ export function expectedProcessorReferenceImagesFromPanel(data: Partial<NodeData
     model === '可灵 2.5 Turbo' ||
     model === 'vidu 2.0' ||
     model === 'seedance1.5-pro' ||
-    ['seedance2.0 (高质量版)', 'seedance2.0 (急速版)'].includes(model)
+    ['seedance2.0 (高质量版)', 'seedance2.0 (急速版)', 'seedance2.5'].includes(model)
   ) {
     return buildReferenceImageDetailItemsFromPanel(data).map((i) => i.url);
   }

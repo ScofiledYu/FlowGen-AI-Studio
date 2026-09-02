@@ -33,12 +33,14 @@ function readSrc(rel: string): string {
 
 console.log('\n=== 1. 模型白名单契约 ===\n');
 
-ok('白名单长度 = 5', TEXT_GEN_NODE_MODELS.length === 5, TEXT_GEN_NODE_MODELS.join(' | '));
+ok('白名单长度 = 7', TEXT_GEN_NODE_MODELS.length === 7, TEXT_GEN_NODE_MODELS.join(' | '));
 ok('含 Nano Banana 2.0', (TEXT_GEN_NODE_MODELS as readonly string[]).includes(MODEL_NANO_BANANA_2));
 ok('含 image 2', (TEXT_GEN_NODE_MODELS as readonly string[]).includes(MODEL_IMAGE_2));
 ok('含 MidJourney', (TEXT_GEN_NODE_MODELS as readonly string[]).includes(MODEL_MIDJOURNEY));
+ok('含 seedance2.0 (4k版)', (TEXT_GEN_NODE_MODELS as readonly string[]).includes('seedance2.0 (4k版)'));
 ok('含 seedance2.0 (高质量版)', (TEXT_GEN_NODE_MODELS as readonly string[]).includes('seedance2.0 (高质量版)'));
 ok('含 seedance2.0 (急速版)', (TEXT_GEN_NODE_MODELS as readonly string[]).includes('seedance2.0 (急速版)'));
+ok('含 seedance2.5', (TEXT_GEN_NODE_MODELS as readonly string[]).includes('seedance2.5'));
 ok(
   '白名单除 MidJourney（Text Node 专属）外 ⊆ 面板可选模型（运行链路完全复用）',
   TEXT_GEN_NODE_MODELS.filter((m) => m !== MODEL_MIDJOURNEY).every((m) =>
@@ -165,8 +167,8 @@ ok(
 console.log('\n=== 5. S 级保护：普通节点路径不受影响 ===\n');
 
 ok(
-  'INSPECTOR_SELECTABLE_MODELS 仍为 6 项（未增删）',
-  INSPECTOR_SELECTABLE_MODELS.length === 6,
+  'INSPECTOR_SELECTABLE_MODELS 为 8 项（含 seedance2.0 4k版）',
+  INSPECTOR_SELECTABLE_MODELS.length === 8,
   INSPECTOR_SELECTABLE_MODELS.join(' | ')
 );
 ok(

@@ -8,8 +8,6 @@ export const SEEDANCE_IMAGE_MIN_SIDE = 301;
 export const SEEDANCE_IMAGE_MAX_SIDE = 5999;
 /** 与 prepareCanvasNodeImagePreview 最长边一致，本地拖入能过、资产库原图也走同一档 */
 export const SEEDANCE_IMAGE_UPLOAD_MAX_DIMENSION = 1536;
-export const SEEDANCE_IMAGE_MIN_ASPECT = 0.4;
-export const SEEDANCE_IMAGE_MAX_ASPECT = 2.5;
 export const SEEDANCE_IMAGE_MAX_BYTES = 30 * 1024 * 1024;
 
 function resolveImageUrlForLoad(src: string): string {
@@ -91,58 +89,18 @@ export type SeedanceImageFitResult = {
   bytes?: number;
 };
 
-const TARGET_RATIO_BY_LABEL: Record<string, number> = {
-  '21:9': 21 / 9,
-  '16:9': 16 / 9,
-  '4:3': 4 / 3,
-  '1:1': 1,
-  '3:4': 3 / 4,
-  '9:16': 9 / 16,
-  '9:21': 9 / 21,
-};
-
-function targetAspectFromLabel(label?: string | null): number | undefined {
-  const t = String(label || '').trim();
-  if (!t || t === '自动匹配') return undefined;
-  return TARGET_RATIO_BY_LABEL[t];
-}
-
-/** 将图片裁切/缩放到 Seedance 允许的像素与宽高比范围，返回 JPEG data URL */
+/** 将图片等比缩放到 Seedance 允许的像素范围（绝不做宽高比裁切，保持原构图），返回 JPEG data URL */
 export async function prepareImageForSeedanceModelUpload(
-  input: File | string,
-  options?: { targetRatioLabel?: string | null }
+  input: File | string
 ): Promise<SeedanceImageFitResult> {
   const img = await loadImageElement(input);
   const nw = img.naturalWidth;
   const nh = img.naturalHeight;
   if (!nw || !nh) throw new Error('Invalid image dimensions');
 
-  let sx = 0;
-  let sy = 0;
-  let sw = nw;
-  let sh = nh;
-  const ar = nw / nh;
-  if (ar > SEEDANCE_IMAGE_MAX_ASPECT + 1e-6) {
-    sw = Math.round(nh * SEEDANCE_IMAGE_MAX_ASPECT);
-    sx = Math.floor((nw - sw) / 2);
-  } else if (ar < SEEDANCE_IMAGE_MIN_ASPECT - 1e-6) {
-    sh = Math.round(nw / SEEDANCE_IMAGE_MIN_ASPECT);
-    sy = Math.floor((nh - sh) / 2);
-  }
-
-  const targetAr = targetAspectFromLabel(options?.targetRatioLabel);
-  if (targetAr != null && Number.isFinite(targetAr) && targetAr > 0) {
-    const curAr = sw / sh;
-    if (curAr > targetAr + 0.008) {
-      const newSw = Math.max(1, Math.round(sh * targetAr));
-      sx = sx + Math.floor((sw - newSw) / 2);
-      sw = newSw;
-    } else if (curAr < targetAr - 0.008) {
-      const newSh = Math.max(1, Math.round(sw / targetAr));
-      sy = sy + Math.floor((sh - newSh) / 2);
-      sh = newSh;
-    }
-  }
+  // 不做任何宽高比裁切：极端比例图片等比缩放后原样上传，由豆包 API 侧校验并报错。
+  const sw = nw;
+  const sh = nh;
 
   let tw = sw;
   let th = sh;
@@ -163,14 +121,14 @@ export async function prepareImageForSeedanceModelUpload(
     th = Math.max(1, Math.round(th * capped));
   }
 
-  const resized = tw !== nw || th !== nh || sw !== nw || sh !== nh;
+  const resized = tw !== nw || th !== nh;
 
   const canvas = document.createElement('canvas');
   canvas.width = tw;
   canvas.height = th;
   const ctx = canvas.getContext('2d');
   if (!ctx) throw new Error('Canvas 2d not available');
-  ctx.drawImage(img, sx, sy, sw, sh, 0, 0, tw, th);
+  ctx.drawImage(img, 0, 0, sw, sh, 0, 0, tw, th);
 
   const qualities = [0.92, 0.85, 0.78, 0.7, 0.62, 0.54, 0.46, 0.38];
   let best: { dataUrl: string; bytes: number } | null = null;

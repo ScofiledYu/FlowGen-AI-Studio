@@ -9,6 +9,7 @@ import {
   sanitizeAiTopTaskFailureMessage,
 } from './aitopTaskRecovery';
 import { isAitopCosUrl } from './aitopCosMediaUrl';
+import { pickTranscodedVideoUrlFromTaskStatus } from './taskStatusVideoUrl';
 import { isLikelyVideoMediaUrl, isVideoPreviewUrl } from './hydratePersistedNodePreviews';
 import {
   pickSeedanceReferencePanelSnapshot,
@@ -796,7 +797,9 @@ export function prepareNodesAfterWorkspaceLoad(
 export async function fetchCompletedAiTopTaskUrls(
   taskIds: string[],
   getTaskStatus: (taskId: string) => Promise<unknown>,
-  model?: string
+  model?: string,
+  /** HEVC 任务（如 seedance2.0 4K）成功时回调网关 H.264 转码版 URL（供在线预览；下载仍走原版） */
+  onTranscodedVideo?: (taskId: string, url: string) => void
 ): Promise<string[] | null> {
   const urls: string[] = [];
   for (const taskId of taskIds) {
@@ -817,10 +820,14 @@ export async function fetchCompletedAiTopTaskUrls(
     const resourceUrl = extractResourceUrlFromTaskStatus(statusData);
     if (!resourceUrl) return null;
     if (String(status) === 'TRANSFER_SUCCESS') {
+      const transcoded = pickTranscodedVideoUrlFromTaskStatus(statusData);
+      if (transcoded && isAitopCosUrl(transcoded)) onTranscodedVideo?.(taskId, transcoded);
       urls.push(resourceUrl);
       continue;
     }
     if (isTerminalTaskSuccess(status, resourceUrl) && isAitopCosUrl(resourceUrl)) {
+      const transcoded = pickTranscodedVideoUrlFromTaskStatus(statusData);
+      if (transcoded && isAitopCosUrl(transcoded)) onTranscodedVideo?.(taskId, transcoded);
       urls.push(resourceUrl);
       continue;
     }
@@ -829,12 +836,33 @@ export async function fetchCompletedAiTopTaskUrls(
   return urls.length === taskIds.length ? urls : null;
 }
 
+/**
+ * 恢复路径：是否把恢复媒体直接写回运行节点自身（而非新建下游节点）。
+ * §16.26：MOV 已有成片（imagePreview 为视频 URL）时返回 false——按"运行源已有内容"
+ * 走 buildRecoveryGraphUpdates 新建下游节点，避免新产出覆盖 MOV 原视频（5555.json 实测：
+ * 中间 MOV 跑 2.5 延长途中刷新页面，恢复后原视频被新产出覆盖、与下游节点重复）。
+ * 空 MOV 占位 / OUTPUT 视频节点维持写回自身。
+ */
+export function shouldWriteRecoveryIntoRunNode(node: RFNode): boolean {
+  const d = node.data as NodeData | undefined;
+  if (node.type === NodeType.MOV) {
+    const preview = String(d?.imagePreview || '');
+    return !/\.(mov|mp4|webm)/i.test(preview);
+  }
+  return (
+    node.type === NodeType.OUTPUT &&
+    /\.(mov|mp4|webm)/i.test(String(d?.imageName || ''))
+  );
+}
+
 /** 刷新后：为已存在的 MOV/OUTPUT 视频节点写回 imagePreview */
 export function applyRecoveryToOutputNode(
   nodes: RFNode[],
   outputNodeId: string,
   mediaUrls: string[],
-  taskIdJoined: string
+  taskIdJoined: string,
+  /** HEVC 成片（如 seedance2.0 4K）的网关 H.264 转码版：写入 gp 供在线预览；下载仍走原版 */
+  transcodedVideoUrl?: string
 ): RFNode[] {
   const mediaUrl = mediaUrls[0];
   if (!mediaUrl) return nodes;
@@ -846,6 +874,7 @@ export function applyRecoveryToOutputNode(
       generatedAt: generatedAtIso,
       taskId: taskIdJoined,
       model: n.data.generationParams?.model || n.data.selectedModel,
+      ...(transcodedVideoUrl ? { transcodedVideoUrl } : {}),
     } as GenerationParams;
     return {
       ...n,
@@ -1170,7 +1199,7 @@ export function mergeRecoveryGenerationParamsFromRunNode(
     return merged;
   }
 
-  if (!['seedance2.0 (高质量版)', 'seedance2.0 (急速版)'].includes(model)) {
+  if (!['seedance2.0 (高质量版)', 'seedance2.0 (急速版)', 'seedance2.5'].includes(model)) {
     return merged;
   }
 
@@ -1184,6 +1213,7 @@ export function mergeRecoveryGenerationParamsFromRunNode(
   merged.seedanceGenerateAudio = prev.seedanceGenerateAudio ?? d.seedanceGenerateAudio;
   merged.seedanceReferenceRatioMode =
     prev.seedanceReferenceRatioMode ?? d.seedanceReferenceRatioMode;
+  merged.seedanceTaskType = prev.seedanceTaskType ?? d.seedanceTaskType;
 
   if (mode !== 'reference') return merged;
 

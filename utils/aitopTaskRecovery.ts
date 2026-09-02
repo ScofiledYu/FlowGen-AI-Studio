@@ -1,5 +1,6 @@
 import { isAitopCosUrl } from './aitopCosMediaUrl';
 import { pickMediaResourceUrlFromTaskStatus } from './taskStatusImageUrl';
+import { pickTranscodedVideoUrlFromTaskStatus } from './taskStatusVideoUrl';
 
 export const AITOP_TASK_FAIL_STATUSES = new Set(['3', 'FAIL', '6', 'TRANSFER_FAIL']);
 export const AITOP_TASK_SUCCESS_STATUSES = new Set(['TRANSFER_SUCCESS', 'SUCCESS', '2', '5']);
@@ -22,7 +23,7 @@ export function seedancePollConfigForModel(model?: string): AiTopPollConfig {
   if (model === 'seedance2.0 (急速版)') {
     return { maxAttempts: 720, intervalMs: 5000 };
   }
-  if (model === 'seedance2.0 (高质量版)') {
+  if (model === 'seedance2.0 (高质量版)' || model === 'seedance2.5') {
     return { maxAttempts: 3600, intervalMs: 10000 };
   }
   return { maxAttempts: 240, intervalMs: 5000 };
@@ -87,6 +88,8 @@ export type PollAiTopTaskOptions = {
   /** 视频恢复：SUCCESS 且仍是 ark-acg 时继续等 TRANSFER_SUCCESS */
   requireAitopCos?: boolean;
   model?: string;
+  /** HEVC 任务（如 seedance2.0 4K）成功时回调网关 H.264 转码版 URL（供在线预览；下载仍走原版） */
+  onTranscodedVideo?: (url: string) => void;
 };
 
 /**
@@ -139,6 +142,8 @@ export async function pollAiTopTaskUntilResourceUrl(
       ) {
         continue;
       }
+      const transcoded = pickTranscodedVideoUrlFromTaskStatus(statusData);
+      if (transcoded && isAitopCosUrl(transcoded)) options.onTranscodedVideo?.(transcoded);
       return resourceUrl;
     }
 

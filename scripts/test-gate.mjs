@@ -69,6 +69,12 @@ const steps = [
   { label: 'mov-node-drag-image-no-clobber-video', cmd: 'npm', args: ['run', 'test:mov-node-drag-image-no-clobber-video'] },
   // §11.90u 面板图片隔离 & 主图持久化（防回归：image2/Omni 拖图后切模型主图丢失、跨模型参考图泄漏）
   { label: 'panel-image-isolation-guard', cmd: 'npm', args: ['run', 'test:panel-image-isolation-guard'] },
+  // §16 Seedance 2.5：taskType/normal/视频编辑/视频延长 API 参数 + 联网搜索禁用 + prompt 引用（防回归）
+  { label: 'seedance25-api-mock', cmd: 'npm', args: ['run', 'test:seedance25-api-mock'] },
+  // §16.24 4K HEVC 成片：transcodedVideo 提取 + 恢复路径 gp 写入（防回归）
+  { label: 'transcoded-video-url', cmd: 'npm', args: ['run', 'test:transcoded-video-url'] },
+  // §16.26 MOV 中间节点运行中刷新恢复：已有成片不被新产出覆盖（防回归）
+  { label: 'mov-recovery-keep-original', cmd: 'npm', args: ['run', 'test:mov-recovery-keep-original'] },
 ];
 
 console.log('=== FlowGen test:gate（回归门禁）===\n');

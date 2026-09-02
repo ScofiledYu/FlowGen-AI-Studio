@@ -420,7 +420,7 @@ export function buildReferenceImageDetailItemsFromPanel(
     items.push({ url: main, label });
   };
 
-  if (['seedance2.0 (高质量版)', 'seedance2.0 (急速版)'].includes(model)) {
+  if (['seedance2.0 (高质量版)', 'seedance2.0 (急速版)', 'seedance2.5'].includes(model)) {
     const mode = data.seedanceGenerationMode || 'text';
     if (mode === 'reference') {
       const mentionsMain = promptMentionsMainImageForNodeData(data);
@@ -1746,7 +1746,7 @@ export function buildPromptMediaRefContextFromNode(data: NodeData): PromptMediaR
   const isJimeng = model === '即梦3.0 Pro';
   const isVidu = model === 'vidu 2.0';
   const isSeedance15 = model === 'seedance1.5-pro';
-  const isSeedance20 = model === 'seedance2.0 (高质量版)' || model === 'seedance2.0 (急速版)';
+  const isSeedance20 = model === 'seedance2.0 (高质量版)' || model === 'seedance2.0 (急速版)' || model === 'seedance2.5';
   const isSeedance = isSeedance15 || isSeedance20;
   const isKelingNonOmni =
     (model.includes('可灵') || model.includes('Keling')) && !isKelingOmni;
@@ -2233,6 +2233,96 @@ export function resolveSeedancePromptToNativeImageTokens(
 }
 
 /**
+ * Seedance 2.5 提交 API 专用：把 prompt 中 @ 引用标记转为豆包官方原生「@videoN / @imageN」格式。
+ *
+ * 为什么需要（对照火山引擎官方文档 82379/2607688 Seedance 2.5 教程）：
+ *   官方视频编辑示例「@video1 中加一些小动物；把 @video1 的人物修改为 @image1」、
+ *   视频延长示例「向后延长 @video1…」——2.5 要求 prompt 用 @videoN / @imageN 引用，
+ *   序号对应 referenceVideos / referenceImages 数组顺序。
+ *   Seedance 2.0 的「图片N」中文标记不适用于 2.5；2.0 的 @主视频「移除」规则在 2.5
+ *   会丢失视频引用导致视频编辑/延长任务被判「请求参数错误」。
+ *
+ * 行为：
+ *   - @主视频 / @视频N / @视频（简写）→ @video{videoIndex}
+ *   - @图片N / @主图 / @主体 / @资产:名 / @图片（简写）→ @image{imageIndex}
+ *   - @音频N / @音频（简写）→ @audio{audioIndex}
+ *   - @首帧图 / @尾帧图 → 起始画面 / 结束画面（首尾帧通过 startImage/endImage 字段传递）
+ *   - 未命中 map 的 @标记 → 保留原样
+ */
+export function resolveSeedance25PromptToNativeTokens(
+  prompt: string,
+  opts: ResolvePromptPlaceholdersOptions | undefined
+): string {
+  if (!prompt) return prompt;
+  const projectAssets = opts?.projectAssets;
+  const matches = matchAllPromptMediaTokens(prompt, projectAssets);
+  if (matches.length === 0) return prompt;
+  let out = prompt;
+  const imgMap = opts?.referenceImageIndexByToken;
+  const vidMap = opts?.referenceVideoIndexByToken;
+  const audMap = opts?.referenceAudioIndexByToken;
+  const hasImgMap = !!imgMap && imgMap.size > 0;
+  const hasVidMap = !!vidMap && vidMap.size > 0;
+  const hasAudMap = !!audMap && audMap.size > 0;
+  const sorted = [...matches].sort((a, b) => b.index - a.index);
+  for (const { token, index } of sorted) {
+    const replace = (replacement: string | undefined) => {
+      if (replacement != null) {
+        out = out.slice(0, index) + replacement + out.slice(index + token.length);
+      }
+    };
+
+    // 视频引用 → @videoN
+    if (token === '@主视频') {
+      const idx = hasVidMap ? vidMap.get(token) : undefined;
+      // @主视频 兜底为 @video1（主视频即 referenceVideos[0]）
+      replace(idx != null && idx >= 1 ? `@video${idx}` : '@video1');
+      continue;
+    }
+    if (token === '@视频' || /^@视频(\d+)$/.test(token)) {
+      const ordToken = token === '@视频' ? '@视频1' : token;
+      const idx = hasVidMap ? vidMap.get(token) ?? vidMap.get(ordToken) : undefined;
+      // 若 map 缺失视频，但 prompt 本身已是 @视频N，直接保留原样（不能瞎编序号）
+      if (idx == null || idx < 1) continue;
+      replace(`@video${idx}`);
+      continue;
+    }
+
+    // 首尾帧 → 自然语言
+    if (token === '@首帧图') {
+      replace('起始画面');
+      continue;
+    }
+    if (token === '@尾帧图') {
+      replace('结束画面');
+      continue;
+    }
+
+    // 音频引用 → @audioN
+    if (token === '@音频' || /^@音频(\d+)$/.test(token)) {
+      const ordToken = token === '@音频' ? '@音频1' : token;
+      const idx = hasAudMap ? audMap.get(token) ?? audMap.get(ordToken) : undefined;
+      if (idx == null || idx < 1) continue;
+      replace(`@audio${idx}`);
+      continue;
+    }
+
+    // 图片引用 → @imageN
+    if (!hasImgMap) continue;
+    let idx = imgMap.get(token);
+    if (idx == null && (token === '@主图' || token === '@主体' || token === '@图片')) {
+      idx = imgMap.get('@图片1');
+    }
+    if (idx != null && idx >= 1) {
+      replace(`@image${idx}`);
+      continue;
+    }
+    // 其余未命中标记保留原样
+  }
+  return out;
+}
+
+/**
  * 通用基础：把 prompt 中 @图片N / @主图 / @资产:名 / @主体 等引用标记，
  * 替换为指定格式的原生标记。各模型通过 formatToken(imageIndex) 指定格式。
  *
@@ -2392,6 +2482,59 @@ export function resolveJimengPromptStripImageTokens(
       continue;
     }
     // 其余未命中标记保留原样（避免误删用户正文 / 未知名 @资产 等）
+  }
+  return out;
+}
+
+/**
+ * vidu 2.0 提交 API 专用：移除 prompt 中所有 @引用标记，转为纯自然语言。
+ *
+ * 为什么需要（对照 vidu 官方 API 文档 platform.vidu.com/docs/image-to-video）：
+ *   vidu 2.0 图生视频的图片通过 images 字段传递（首帧，或首帧+尾帧），prompt 为纯自然语言
+ *   描述首帧到尾帧的过渡。原 resolvePromptPlaceholders 把 @主图/@首帧图 展开成
+ *   「（面板参考…视作 [图N]）」长文本，污染 prompt。
+ *
+ * 行为：
+ *   - @首帧图 → 「起始画面」、@尾帧图 → 「结束画面」（保留语义，首尾帧通过 images 字段传递）
+ *   - @主图 / @主体 / @图片 / @图片N / @主视频 / @视频N / @音频N / @资产:名 → 移除标记
+ *   - 未命中标记保留原样
+ */
+export function resolveViduPromptStripImageTokens(
+  prompt: string,
+  opts: ResolvePromptPlaceholdersOptions | undefined
+): string {
+  if (!prompt) return prompt;
+  const projectAssets = opts?.projectAssets;
+  const matches = matchAllPromptMediaTokens(prompt, projectAssets);
+  if (matches.length === 0) return prompt;
+  let out = prompt;
+  // 从后往前替换，避免 index 位移
+  const sorted = [...matches].sort((a, b) => b.index - a.index);
+  for (const { token, index } of sorted) {
+    if (token === '@首帧图') {
+      out = out.slice(0, index) + '起始画面' + out.slice(index + token.length);
+      continue;
+    }
+    if (token === '@尾帧图') {
+      out = out.slice(0, index) + '结束画面' + out.slice(index + token.length);
+      continue;
+    }
+    // 其余媒体引用标记全部移除（纯自然语言）
+    if (
+      token === '@主图' ||
+      token === '@主体' ||
+      token === '@图片' ||
+      token === '@主视频' ||
+      token === '@视频' ||
+      /^@图片\d+$/.test(token) ||
+      /^@视频\d+$/.test(token) ||
+      /^@音频\d*$/.test(token) ||
+      token.startsWith('@资产:')
+    ) {
+      out = out.slice(0, index) + out.slice(index + token.length);
+      continue;
+    }
+    // 其余未命中标记保留原样
   }
   return out;
 }
@@ -3217,11 +3360,15 @@ export function collectReferencedMediaFromPrompt(
     }
   }
 
-  const maxImages = 9;
+  // 上限对照火山官方文档 82379/2607688：2.0 为 9图/3视频/3音频；seedance2.5 为 30图/10视频/10音频
+  const isSeedance25 = String(data.selectedModel || '').trim() === 'seedance2.5';
+  const maxImages = isSeedance25 ? 30 : 9;
+  const maxVideos = isSeedance25 ? 10 : 3;
+  const maxAudios = isSeedance25 ? 10 : 3;
   return {
     images: images.slice(0, maxImages),
-    videos: videos.slice(0, 3),
-    audios: audios.slice(0, 3),
+    videos: videos.slice(0, maxVideos),
+    audios: audios.slice(0, maxAudios),
   };
 }
 
@@ -3387,7 +3534,7 @@ export function getNodeInspectorPromptText(data: NodeData): string {
     if (tab === 'video') return data.klingOmniVideoPrompt ?? data.prompt ?? '';
     return data.klingOmniFramesPrompt ?? data.prompt ?? '';
   }
-  if (model === 'seedance2.0 (高质量版)' || model === 'seedance2.0 (急速版)') {
+  if (model === 'seedance2.0 (高质量版)' || model === 'seedance2.0 (急速版)' || model === 'seedance2.5') {
     const mode = (data.seedanceGenerationMode || 'text') as 'text' | 'image' | 'reference';
     return data.seedanceTabConfigs?.[mode]?.prompt ?? data.prompt ?? '';
   }
@@ -3919,7 +4066,7 @@ export function buildNodePromptUpdatePatch(data: NodeData, prompt: string): Part
     else patch.klingOmniFramesPrompt = prompt;
     return patch;
   }
-  if (model === 'seedance2.0 (高质量版)' || model === 'seedance2.0 (急速版)') {
+  if (model === 'seedance2.0 (高质量版)' || model === 'seedance2.0 (急速版)' || model === 'seedance2.5') {
     const mode = (data.seedanceGenerationMode || 'text') as 'text' | 'image' | 'reference';
     const tabs = { ...(data.seedanceTabConfigs || {}) };
     const cur = { ...(tabs[mode] || {}) };

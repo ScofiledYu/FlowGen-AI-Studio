@@ -20,6 +20,7 @@ import {
   nodeIsUploadPhaseRefreshPending,
   prepareNodesAfterWorkspaceLoad,
   shouldTriggerAiTopRunRecovery,
+  shouldWriteRecoveryIntoRunNode,
 } from '../utils/runRecovery';
 import { NodeType } from '../types';
 import type { NodeData } from '../types';
@@ -167,8 +168,13 @@ export function useAiTopRunRecovery(params: UseAiTopRunRecoveryParams): void {
           latestRunNode.type === NodeType.MOV ||
           /\.(mov|mp4|webm)/i.test(String(latestRunNode.data?.imageName || ''));
 
+        let recoveredTranscodedUrl: string | undefined;
+        const onTranscodedVideo = (url: string) => {
+          // HEVC 成片（如 seedance2.0 4K）的网关 H.264 转码版：取首个即可（与主预览 mediaUrls[0] 对应）
+          if (!recoveredTranscodedUrl) recoveredTranscodedUrl = url;
+        };
         let mediaUrls: string[] =
-          (await fetchCompletedAiTopTaskUrls(taskIds, getTaskStatus, model)) || [];
+          (await fetchCompletedAiTopTaskUrls(taskIds, getTaskStatus, model, (_tid, t) => onTranscodedVideo(t))) || [];
 
         const needsPolling = mediaUrls.length === 0;
         const requireAitopCos = treatAsVideo;
@@ -180,8 +186,9 @@ export function useAiTopRunRecovery(params: UseAiTopRunRecoveryParams): void {
               pollConfig: pollCfg,
               requireAitopCos,
               model,
-              maxConsecutiveErrors: model.includes('seedance2.0 (高质量版)') ? 18 : 10,
+              maxConsecutiveErrors: model.includes('seedance2.0 (高质量版)') || model.includes('seedance2.5') ? 18 : 10,
               onProgress: bumpRecoveryProgress,
+              onTranscodedVideo,
             });
             mediaUrls.push(rawUrl);
           }
@@ -207,14 +214,12 @@ export function useAiTopRunRecovery(params: UseAiTopRunRecoveryParams): void {
         }
 
         const joined = taskIds.join(', ');
-        const isOutputVideo =
-          latestRunNode.type === NodeType.MOV ||
-          (latestRunNode.type === NodeType.OUTPUT &&
-            /\.(mov|mp4|webm)/i.test(String(latestRunNode.data?.imageName || '')));
+        // §16.26：MOV 已有成片时恢复改为新建下游节点（不覆盖原视频）；空 MOV/OUTPUT 视频节点写回自身
+        const isOutputVideo = shouldWriteRecoveryIntoRunNode(latestRunNode);
 
         if (isOutputVideo) {
           setNodes((nds) =>
-            applyRecoveryToOutputNode(nds, nodeId, mediaUrls, joined)
+            applyRecoveryToOutputNode(nds, nodeId, mediaUrls, joined, recoveredTranscodedUrl)
           );
         } else {
           const { nodes: nextNodes, edges: nextEdges } = buildRecoveryGraphUpdates({

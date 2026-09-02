@@ -150,7 +150,7 @@ export function seedanceReferenceCompactRefsIncludeMainLabel(
   data: Partial<NodeData>
 ): boolean {
   const model = String(data.selectedModel || data.generationParams?.model || '').trim();
-  if (!['seedance2.0 (高质量版)', 'seedance2.0 (急速版)'].includes(model)) return false;
+  if (!['seedance2.0 (高质量版)', 'seedance2.0 (急速版)', 'seedance2.5'].includes(model)) return false;
   const mode = (data.seedanceGenerationMode ||
     data.generationParams?.seedanceGenerationMode ||
     'text') as string;
@@ -190,7 +190,7 @@ export function resolveCanvasNodePreviewUrl(
     // MOV/视频节点：Seedance 参考生画布缩略图优先展示参考视频（@主视频），与 PREVIEW MODE 一致
     if (preview && isLikelyMainVideoUrl(preview)) {
       const isSeedanceRef = typeof data.selectedModel === 'string' &&
-        (data.selectedModel.includes('seedance2.0') || data.selectedModel.includes('seedance1.5')) &&
+        (data.selectedModel.includes('seedance2.0') || data.selectedModel.includes('seedance2.5') || data.selectedModel.includes('seedance1.5')) &&
         data.seedanceGenerationMode === 'reference';
       if (isSeedanceRef && data.referenceMovs?.length) {
         const refMovUrl = String(data.referenceMovs[0]?.url || '').trim();
@@ -231,7 +231,7 @@ export function resolveCanvasNodePreviewUrl(
     // MOV/视频节点：Seedance 参考生画布缩略图优先展示参考视频
     if (preview && isLikelyMainVideoUrl(preview)) {
       const isSeedanceRef = typeof data.selectedModel === 'string' &&
-        (data.selectedModel.includes('seedance2.0') || data.selectedModel.includes('seedance1.5')) &&
+        (data.selectedModel.includes('seedance2.0') || data.selectedModel.includes('seedance2.5') || data.selectedModel.includes('seedance1.5')) &&
         data.seedanceGenerationMode === 'reference';
       if (isSeedanceRef && data.referenceMovs?.length) {
         const refMovUrl = String(data.referenceMovs[0]?.url || '').trim();
@@ -285,7 +285,7 @@ export function resolvePanelMainSlotPreviewUrl(data: Partial<NodeData>): string 
 /** seedance2.0 参考生模式（与 seedanceReferenceCompactRefsIncludeMainLabel 判定一致） */
 export function isSeedance20ReferenceMode(data: Partial<NodeData>): boolean {
   const model = String(data.selectedModel || data.generationParams?.model || '').trim();
-  if (!['seedance2.0 (高质量版)', 'seedance2.0 (急速版)'].includes(model)) return false;
+  if (!['seedance2.0 (高质量版)', 'seedance2.0 (急速版)', 'seedance2.5'].includes(model)) return false;
   const mode = (data.seedanceGenerationMode ||
     data.generationParams?.seedanceGenerationMode ||
     'text') as string;
@@ -561,7 +561,7 @@ export const PANEL_MAIN_IMAGE_SLOT_SCENARIOS: PanelMainImageSlotScenario[] = [
 /** Nano / image2 / 可灵3.0 Omni：旧版运行后曾隐藏主图格；重新选中节点时按需恢复（legacy panelMainSlotVisible=false） */
 export function nodeModelUsesPanelMainImageRestore(model: string | undefined): boolean {
   const m = String(model || '').trim();
-  return isNanoBanana2Model(m) || isImage2Model(m) || m === '可灵3.0 Omni' || m === 'seedance2.0 (高质量版)' || m === 'seedance2.0 (急速版)';
+  return isNanoBanana2Model(m) || isImage2Model(m) || m === '可灵3.0 Omni' || m === 'seedance2.0 (高质量版)' || m === 'seedance2.0 (急速版)' || m === 'seedance2.5';
 }
 
 /** 重新选中节点编辑：恢复运行后隐藏的主图格与备份主图（仅当创意描述仍 @主图/@主体 或尚无图片类 @ 时） */
@@ -1343,7 +1343,7 @@ export function repairSeedanceReferenceGenerationParamsFromPanel(
   data: Partial<NodeData>
 ): GenerationParams | undefined {
   const model = String(data.selectedModel || data.generationParams?.model || '').trim();
-  if (!['seedance2.0 (高质量版)', 'seedance2.0 (急速版)'].includes(model)) return undefined;
+  if (!['seedance2.0 (高质量版)', 'seedance2.0 (急速版)', 'seedance2.5'].includes(model)) return undefined;
   const mode = (data.seedanceGenerationMode ||
     data.generationParams?.seedanceGenerationMode ||
     'text') as string;

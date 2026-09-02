@@ -15,8 +15,9 @@ const RATIO_SET = new Set<string>(SEEDANCE_TEXT_REF_ASPECT_RATIOS);
 /** Seedance 2.0 面板默认分辨率 */
 export function getSeedanceDefaultResolution(
   model: string | undefined
-): '480p' | '720p' | '1080p' {
-  if (model === 'seedance2.0 (高质量版)') return '1080p';
+): '480p' | '720p' | '1080p' | '4k' {
+  if (model === 'seedance2.0 (4k版)') return '4k'; // 4k版仅支持4k
+  if (model === 'seedance2.0 (高质量版)' || model === 'seedance2.5') return '1080p';
   if (model === 'seedance2.0 (急速版)') return '720p';
   return '480p';
 }
@@ -26,7 +27,7 @@ export function getSeedanceDefaultAspectRatio(
   model: string | undefined
 ): SeedanceAspectRatioSetting {
   if (model === 'seedance1.5-pro') return '自动匹配';
-  if (model === 'seedance2.0 (高质量版)' || model === 'seedance2.0 (急速版)') return '16:9';
+  if (model === 'seedance2.0 (4k版)' || model === 'seedance2.0 (高质量版)' || model === 'seedance2.0 (急速版)' || model === 'seedance2.5') return '16:9';
   return '1:1';
 }
 
@@ -39,8 +40,10 @@ export function normalizeSeedanceAspectForTextRef(
 }
 
 const SEEDANCE20_MODELS = new Set([
+  'seedance2.0 (4k版)',
   'seedance2.0 (高质量版)',
   'seedance2.0 (急速版)',
+  'seedance2.5',
 ]);
 
 export function isSeedance20Model(model: string | undefined): boolean {
@@ -62,17 +65,17 @@ export function getSeedance20PanelDefaultsPatch(data: {
   seedanceResolution?: string;
   seedanceAspectRatio?: string;
 }): Partial<{
-  seedanceResolution: '480p' | '720p' | '1080p';
+  seedanceResolution: '480p' | '720p' | '1080p' | '4k';
   seedanceAspectRatio: SeedanceAspectRatioSetting;
 }> | null {
   const model = data.selectedModel;
   if (!isSeedance20Model(model)) return null;
 
   const patch: Partial<{
-    seedanceResolution: '480p' | '720p' | '1080p';
+    seedanceResolution: '480p' | '720p' | '1080p' | '4k';
     seedanceAspectRatio: SeedanceAspectRatioSetting;
   }> = {};
-  const curRes = data.seedanceResolution?.trim() as '480p' | '720p' | '1080p' | undefined;
+  const curRes = data.seedanceResolution?.trim() as '480p' | '720p' | '1080p' | '4k' | undefined;
 
   if (!curRes) {
     patch.seedanceResolution = getSeedanceDefaultResolution(model);

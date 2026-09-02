@@ -49,11 +49,11 @@ export interface GenerationParams {
   viduClarity?: string;
   /** vidu 2.0：运动幅度 自动/小/中/大 */
   viduMotionRange?: string;
-  /** Seedance：分辨率（1.5 / 急速为 480p|720p；高质量版可为 1080p） */
+  /** Seedance：分辨率（1.5 / 急速为 480p|720p；高质量版/4k版可为 1080p；4k版可为 4k） */
   seedanceResolution?: string;
   /** seedance1.5-pro：视频比例 自动匹配 */
   seedanceAspectRatio?: string;
-  /** Seedance：时长（秒字符串，1.5 / 2.0 均为 4s–15s） */
+  /** Seedance：时长（秒字符串，1.5 / 2.0 为 4s–15s；2.5 常规生成/视频延长为 4s–30s） */
   seedanceDuration?: string;
   /** seedance1.5-pro：是否生成音频 */
   seedanceGenerateAudio?: boolean;
@@ -65,6 +65,8 @@ export interface GenerationParams {
   seedanceReferenceRatioMode?: SeedanceReferenceRatioMode;
   /** seedance2.0「参考生视频」tab：联网搜索开关 */
   seedanceReferenceWebSearch?: boolean;
+  /** seedance2.5：任务模式（仅参考生 tab 生效；video_edit/video_extend 需 ≥1 参考视频） */
+  seedanceTaskType?: SeedanceTaskType;
   /** 可灵3.0 Omni：音画同步 */
   klingAudioSync?: boolean;
   /** 可灵：首尾帧（供 Node Details 与 output/thumbnail 一致展示） */
@@ -126,10 +128,12 @@ export interface GenerationParams {
   outputUrls?: string[];
   /** 任务结果 resourceUrl 别名（部分模型网关字段） */
   resourceUrl?: string;
+  /** AiTop 网关 H.264 转码版 URL（仅 HEVC 源任务返回，如 seedance2.0 4K；用于浏览器在线预览，下载仍走 outputUrl 原版） */
+  transcodedVideoUrl?: string;
 }
 
-/** Seedance 视频时长标签（1.5 / 2.0 滑杆均为 4–15 秒） */
-export type SeedanceDurationLabel = `${4 | 5 | 6 | 7 | 8 | 9 | 10 | 11 | 12 | 13 | 14 | 15}s`;
+/** Seedance 视频时长标签（1.5 / 2.0 滑杆为 4–15 秒；seedance2.5 视频延长可达 30 秒） */
+export type SeedanceDurationLabel = `${4 | 5 | 6 | 7 | 8 | 9 | 10 | 11 | 12 | 13 | 14 | 15 | 16 | 17 | 18 | 19 | 20 | 21 | 22 | 23 | 24 | 25 | 26 | 27 | 28 | 29 | 30}s`;
 
 /** Seedance 2.0 文生/参考生视频可选比例 */
 export type SeedanceTextRefAspectRatio = '1:1' | '16:9' | '4:3' | '21:9' | '9:16' | '3:4';
@@ -138,6 +142,8 @@ export type SeedanceTextRefAspectRatio = '1:1' | '16:9' | '4:3' | '21:9' | '9:16
 export type SeedanceAspectRatioSetting = '自动匹配' | SeedanceTextRefAspectRatio;
 /** seedance2.0 参考生视频：比例策略 */
 export type SeedanceReferenceRatioMode = 'force' | 'auto';
+/** seedance2.5：任务模式（normal 常规生成 / video_edit 视频编辑 / video_extend 视频延长），仅参考生 tab 生效 */
+export type SeedanceTaskType = 'normal' | 'video_edit' | 'video_extend';
 
 /** 侧栏 / selectedModel 使用的 Nano 图生模型名（对接 AiTop platform: NANO_BANANA_2_FLASH） */
 export const MODEL_NANO_BANANA_2 = 'Nano Banana 2.0';
@@ -282,14 +288,19 @@ export const MJ_DEFAULT_VERSION_MIDJOURNEY = MJ_DEFAULT_VERSION_REALISTIC;
 /** @deprecated 旧常量别名，建议改用 MJ_DEFAULT_VERSION_CARTOON */
 export const MJ_DEFAULT_VERSION_NIJI = MJ_DEFAULT_VERSION_CARTOON;
 
+/** seedance2.0 (4k版) 模型名（面板与 selectedModel 一致） */
+export const MODEL_SEEDANCE_2_0_4K = 'seedance2.0 (4k版)';
+
 /** 属性面板 Model 下拉可选模型（新节点） */
 export const INSPECTOR_SELECTABLE_MODELS = [
   MODEL_NANO_BANANA_2,
   MODEL_IMAGE_2,
   '可灵3.0 Omni',
   '即梦3.0 Pro',
+  'seedance2.0 (4k版)',
   'seedance2.0 (高质量版)',
   'seedance2.0 (急速版)',
+  'seedance2.5',
 ] as const;
 
 /** 已从面板下线、旧工程仍可能 persisted 的模型 */
@@ -313,8 +324,10 @@ export const TEXT_GEN_NODE_MODELS = [
   MODEL_NANO_BANANA_2,
   MODEL_IMAGE_2,
   MODEL_MIDJOURNEY,
+  MODEL_SEEDANCE_2_0_4K,
   'seedance2.0 (高质量版)',
   'seedance2.0 (急速版)',
+  'seedance2.5',
 ] as const;
 
 /** 是否为 Text Node 文生面板可选模型 */
@@ -464,15 +477,17 @@ export interface NodeData {
   viduMotionRange?: '自动' | '小' | '中' | '大'; // 运动幅度
 
   // seedance1.5-pro 专用
-  seedanceResolution?: '480p' | '720p' | '1080p'; // 1080p 仅 seedance2.0 高质量版
+  seedanceResolution?: '480p' | '720p' | '1080p' | '4k'; // 1080p 仅 seedance2.0 高质量版/4k版；4k 仅 seedance2.0 4k版
   seedanceAspectRatio?: SeedanceAspectRatioSetting;
-  /** 时长（滑杆 4–15 秒，1.5 / 2.0 共用） */
+  /** 时长（滑杆 4–15 秒，1.5 / 2.0 共用；2.5 常规生成/视频延长为 4–30 秒） */
   seedanceDuration?: SeedanceDurationLabel;
   seedanceGenerateAudio?: boolean;         // 生成音频
   seedanceFixedCamera?: boolean;            // 固定镜头
   seedanceGenerationMode?: 'text' | 'image' | 'reference';
   seedanceReferenceRatioMode?: SeedanceReferenceRatioMode;
   seedanceReferenceWebSearch?: boolean;
+  /** seedance2.5：任务模式（仅参考生 tab；video_edit/video_extend 需 ≥1 参考视频） */
+  seedanceTaskType?: SeedanceTaskType;
   /** seedance2.0：三 tab 独立配置快照 */
   seedanceTabConfigs?: {
     text?: { prompt?: string; negativePrompt?: string };
@@ -789,6 +804,8 @@ export interface NodeData {
       seedanceGenerationMode?: 'text' | 'image' | 'reference';
       seedanceReferenceRatioMode?: SeedanceReferenceRatioMode;
       seedanceReferenceWebSearch?: boolean;
+      /** seedance2.5 任务模式（2.0 型号快照兼容字段，正常运行不使用） */
+      seedanceTaskType?: SeedanceTaskType;
       seedanceTabConfigs?: NodeData['seedanceTabConfigs'];
       referenceImages?: string[];
       referenceImageLabels?: string[];
@@ -817,6 +834,68 @@ export interface NodeData {
       seedanceGenerationMode?: 'text' | 'image' | 'reference';
       seedanceReferenceRatioMode?: SeedanceReferenceRatioMode;
       seedanceReferenceWebSearch?: boolean;
+      /** seedance2.5 任务模式（2.0 型号快照兼容字段，正常运行不使用） */
+      seedanceTaskType?: SeedanceTaskType;
+      seedanceTabConfigs?: NodeData['seedanceTabConfigs'];
+      referenceImages?: string[];
+      referenceImageLabels?: string[];
+      referenceElementIds?: (string | undefined)[];
+      referenceImageLocalRefs?: string[];
+      referenceMovs?: { url: string; posterDataUrl?: string }[];
+      referenceAudios?: { url: string }[];
+    };
+    'seedance2.0 (4k版)'?: {
+      prompt?: string;
+      negativePrompt?: string;
+      firstFrameImage?: string;
+      lastFrameImage?: string;
+      firstFrameImageUrl?: string;
+      lastFrameImageUrl?: string;
+      firstFrameLocalRef?: string;
+      lastFrameLocalRef?: string;
+      firstFrameImageLabel?: string;
+      lastFrameImageLabel?: string;
+      numberOfImages?: string;
+      /** 4k版固定 4k；互切时从其他型号降级适配 */
+      seedanceResolution?: '480p' | '720p' | '1080p' | '4k';
+      seedanceAspectRatio?: SeedanceAspectRatioSetting;
+      seedanceDuration?: SeedanceDurationLabel;
+      seedanceGenerateAudio?: boolean;
+      seedanceFixedCamera?: boolean;
+      seedanceGenerationMode?: 'text' | 'image' | 'reference';
+      seedanceReferenceRatioMode?: SeedanceReferenceRatioMode;
+      seedanceReferenceWebSearch?: boolean;
+      /** seedance2.5 任务模式（2.0 型号快照兼容字段，正常运行不使用） */
+      seedanceTaskType?: SeedanceTaskType;
+      seedanceTabConfigs?: NodeData['seedanceTabConfigs'];
+      referenceImages?: string[];
+      referenceImageLabels?: string[];
+      referenceElementIds?: (string | undefined)[];
+      referenceImageLocalRefs?: string[];
+      referenceMovs?: { url: string; posterDataUrl?: string }[];
+      referenceAudios?: { url: string }[];
+    };
+    'seedance2.5'?: {
+      prompt?: string;
+      negativePrompt?: string;
+      firstFrameImage?: string;
+      lastFrameImage?: string;
+      firstFrameImageUrl?: string;
+      lastFrameImageUrl?: string;
+      firstFrameLocalRef?: string;
+      lastFrameLocalRef?: string;
+      firstFrameImageLabel?: string;
+      lastFrameImageLabel?: string;
+      numberOfImages?: string;
+      seedanceResolution?: '480p' | '720p' | '1080p';
+      seedanceAspectRatio?: SeedanceAspectRatioSetting;
+      seedanceDuration?: SeedanceDurationLabel;
+      seedanceGenerateAudio?: boolean;
+      seedanceFixedCamera?: boolean;
+      seedanceGenerationMode?: 'text' | 'image' | 'reference';
+      seedanceReferenceRatioMode?: SeedanceReferenceRatioMode;
+      seedanceReferenceWebSearch?: boolean;
+      seedanceTaskType?: SeedanceTaskType;
       seedanceTabConfigs?: NodeData['seedanceTabConfigs'];
       referenceImages?: string[];
       referenceImageLabels?: string[];

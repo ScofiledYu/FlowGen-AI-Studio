@@ -236,7 +236,7 @@ export function buildPromptMediaRefContextFromNode(data) {
   const isJimeng = model === '即梦3.0 Pro';
   const isVidu = model === 'vidu 2.0';
   const isSeedance15 = model === 'seedance1.5-pro';
-  const isSeedance20 = model === 'seedance2.0 (高质量版)' || model === 'seedance2.0 (急速版)';
+  const isSeedance20 = model === 'seedance2.0 (高质量版)' || model === 'seedance2.0 (急速版)' || model === 'seedance2.5';
   const isSeedance = isSeedance15 || isSeedance20;
   const isKelingNonOmni =
     (model.includes('可灵') || model.includes('Keling')) && !isKelingOmni;

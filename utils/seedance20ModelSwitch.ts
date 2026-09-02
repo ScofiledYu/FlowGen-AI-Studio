@@ -2,8 +2,10 @@ import type { NodeData } from '../types';
 import { getSeedanceDefaultResolution } from './seedanceAspectRatio';
 
 export const SEEDANCE20_VARIANT_MODELS = [
+  'seedance2.0 (4k版)',
   'seedance2.0 (高质量版)',
   'seedance2.0 (急速版)',
+  'seedance2.5',
 ] as const;
 
 export type Seedance20VariantModel = (typeof SEEDANCE20_VARIANT_MODELS)[number];
@@ -69,11 +71,26 @@ export function buildSeedanceModelConfigSnapshot(
 ): SeedanceModelConfigSnapshot {
   const tabs = snapshotSeedanceTabConfigsWithLivePanel(data, promptText);
   let seedanceResolution = data.seedanceResolution;
-  if (
-    (model === 'seedance2.0 (急速版)' || model === 'seedance1.5-pro') &&
-    seedanceResolution === '1080p'
-  ) {
-    seedanceResolution = '720p';
+  // 型号切换时分辨率适配目标型号能力上限
+  if (model === 'seedance2.0 (4k版)') {
+    seedanceResolution = '4k'; // 4k版固定4k
+  } else if (model === 'seedance2.5') {
+    // 2.5 支持 1080p，从 4k 降级为 1080p
+    if (seedanceResolution === '4k') seedanceResolution = '1080p';
+    if (seedanceResolution !== '1080p' && seedanceResolution !== '720p' && seedanceResolution !== '480p') {
+      seedanceResolution = '1080p';
+    }
+  } else if (model === 'seedance2.0 (高质量版)') {
+    // 高质量版支持 1080p，从 4k 降级为 1080p
+    if (seedanceResolution === '4k') seedanceResolution = '1080p';
+    if (seedanceResolution !== '1080p' && seedanceResolution !== '720p' && seedanceResolution !== '480p') {
+      seedanceResolution = '1080p';
+    }
+  } else if (model === 'seedance2.0 (急速版)' || model === 'seedance1.5-pro') {
+    // 急速版/1.5 最高 720p
+    if (seedanceResolution === '1080p' || seedanceResolution === '4k') {
+      seedanceResolution = '720p';
+    }
   }
   return {
     prompt: promptText,
@@ -95,6 +112,7 @@ export function buildSeedanceModelConfigSnapshot(
     seedanceGenerationMode: data.seedanceGenerationMode,
     seedanceReferenceRatioMode: data.seedanceReferenceRatioMode,
     seedanceReferenceWebSearch: data.seedanceReferenceWebSearch,
+    seedanceTaskType: data.seedanceTaskType,
     seedanceTabConfigs: tabs,
     referenceImages: data.referenceImages?.length ? [...data.referenceImages] : undefined,
     referenceImageLabels: data.referenceImageLabels?.length
@@ -112,8 +130,8 @@ export function buildSeedanceModelConfigSnapshot(
 }
 
 /**
- * 急速 ↔ 高质量：以当前面板为准同步到目标型号（创意描述、时长、三 tab、参考素材等）。
- * 分辨率仍遵守型号上限（急速版 1080p → 720p）。
+ * Seedance 全系列互切（4k版/高质量版/急速版/2.5）：以当前面板为准同步到目标型号。
+ * 分辨率按目标型号能力上限适配（4k→2.5/高质量版 降级 1080p；→急速版 降级 720p）。
  */
 export function resolveSeedanceConfigForModelSwitch(options: {
   data: NodeData;
@@ -130,11 +148,17 @@ export function resolveSeedanceConfigForModelSwitch(options: {
   if (!base.seedanceResolution) {
     base.seedanceResolution = getSeedanceDefaultResolution(toModel);
   }
-  if (
-    (toModel === 'seedance2.0 (急速版)' || toModel === 'seedance1.5-pro') &&
-    base.seedanceResolution === '1080p'
-  ) {
-    base.seedanceResolution = '720p';
+  // 型号切换时分辨率适配目标型号能力上限
+  if (toModel === 'seedance2.0 (4k版)') {
+    base.seedanceResolution = '4k'; // 4k版固定4k
+  } else if (toModel === 'seedance2.5') {
+    if (base.seedanceResolution === '4k') base.seedanceResolution = '1080p';
+  } else if (toModel === 'seedance2.0 (高质量版)') {
+    if (base.seedanceResolution === '4k') base.seedanceResolution = '1080p';
+  } else if (toModel === 'seedance2.0 (急速版)' || toModel === 'seedance1.5-pro') {
+    if (base.seedanceResolution === '1080p' || base.seedanceResolution === '4k') {
+      base.seedanceResolution = '720p';
+    }
   }
   return base;
 }

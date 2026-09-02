@@ -1291,7 +1291,7 @@ function buildNegativePromptPatchForChatNode(node: Node, selectedText: string): 
     return patch;
   }
 
-  if (['seedance2.0 (????)', 'seedance2.0 (???)'].includes(model)) {
+  if (['seedance2.0 (????)', 'seedance2.0 (???)', 'seedance2.5'].includes(model)) {
     const prev = (d.seedanceTabConfigs || {}) as Record<string, Record<string, unknown>>;
     const next: Record<string, Record<string, unknown>> = { ...prev };
     for (const mode of ['text', 'image', 'reference'] as const) {

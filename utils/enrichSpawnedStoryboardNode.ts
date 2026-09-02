@@ -167,7 +167,7 @@ function enrichSpawnedSeedanceImageMode(
 }
 
 function isSeedance20Model(model: string): boolean {
-  return model === 'seedance2.0 (高质量版)' || model === 'seedance2.0 (急速版)';
+  return model === 'seedance2.0 (高质量版)' || model === 'seedance2.0 (急速版)' || model === 'seedance2.5';
 }
 
 /** 分镜克隆：取模板参考格（参考 tab 优先），URL 规范化，底栏与上游展示一致 */

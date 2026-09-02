@@ -59,7 +59,7 @@ export function shouldPreserveSeedanceReferencePanelBeforePromptRefs(
   data: Partial<NodeData>,
   model: string
 ): boolean {
-  if (model !== 'seedance2.0 (高质量版)' && model !== 'seedance2.0 (急速版)') return false;
+  if (model !== 'seedance2.0 (高质量版)' && model !== 'seedance2.0 (急速版)' && model !== 'seedance2.5') return false;
   const mode = data.seedanceGenerationMode ?? data.generationParams?.seedanceGenerationMode;
   if (mode !== 'reference') return false;
   const gpModel = String(data.generationParams?.model || '').trim();

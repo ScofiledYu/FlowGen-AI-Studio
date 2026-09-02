@@ -307,8 +307,10 @@ function parseSeconds(raw: string): number | null {
 function isSeedanceModel(model: string): boolean {
   return (
     model === 'seedance1.5-pro' ||
+    model === 'seedance2.0 (4k版)' ||
     model === 'seedance2.0 (高质量版)' ||
-    model === 'seedance2.0 (急速版)'
+    model === 'seedance2.0 (急速版)' ||
+    model === 'seedance2.5'
   );
 }
 
@@ -332,7 +334,8 @@ export function applyShotDurationToNodeData(
   const model = templateData.selectedModel || '';
 
   if (isSeedanceModel(model)) {
-    const label = formatSeedanceDurationLabel(sec);
+    // seedance2.5 视频延长时长可达 30s，其余模型按 4-15s 钳位
+    const label = formatSeedanceDurationLabel(sec, model === 'seedance2.5' ? 30 : undefined);
     return { patch: { seedanceDuration: label }, spawnHighlight: 'green' };
   }
 

@@ -12,6 +12,8 @@ import {
   pickReferenceImagePosterUrl,
 } from '../../utils/hydratePersistedNodePreviews';
 import { resolveCanvasNodePreviewUrl } from '../../utils/referencedMediaRun';
+import { pickTranscodedVideoUrlFromTaskStatus, isTranscodedPairOfOriginal } from '../../utils/taskStatusVideoUrl';
+import { getTaskStatus } from '../../services/aitop';
 import { resolvePreferredNodeDownloadUrl } from '../../utils/generatedOutputUrl';
 import { remoteMediaUrlPreferSameOriginProxy, resolveDownloadFetchUrl } from '../../utils/remoteMediaFetch';
 import { resolveNodeDownloadFilename } from '../../utils/nodeDownloadFilename';
@@ -633,12 +635,89 @@ const CustomNode = ({ id, data, type, selected }: NodeProps) => {
   }, [displayImagePreview, canvasMainPreviewUrl, lodPreviewFallbackFile, previewLod]);
   const previewLodImageClass = canvasPreviewLodImageClass(previewLod);
   // 主预览为视频 URL 时（含 processor 上误写的 mp4）：走 <video> + 代理，避免 <img> 裂图
-  const mainVideoUrl =
+  // HEVC 成片（如 seedance2.0 4K）浏览器无法解码：播放/截帧优先网关 H.264 转码版（gp.transcodedVideoUrl）；
+  // 下载与链式引用仍走 imagePreview / outputUrl 原版
+  // §16.27：imagePreview 为视频时转码版仅「同源」（transcode-{uuid}↔{uuid}）才优先——
+  // MOV 再生成场景 gp.transcodedVideoUrl 属本次新产出，与 imagePreview（原视频）不同源，
+  // 无条件优先会误播新产出（6666.json）；imagePreview 非视频（INPUT/PROCESSOR 图片主图）保持现状直接用
+  const gpTranscodedVideoUrl = (
+    data.generationParams as { transcodedVideoUrl?: string } | undefined
+  )?.transcodedVideoUrl;
+  const previewIsVideoMedia = Boolean(
     displayImagePreview &&
     isLikelyVideoMediaUrl(displayImagePreview, { nodeType: type, imageName: data.imageName })
-      ? displayImagePreview
+  );
+  const playableMainVideoUrl = previewIsVideoMedia
+    ? (isTranscodedPairOfOriginal(gpTranscodedVideoUrl, displayImagePreview)
+        ? gpTranscodedVideoUrl
+        : displayImagePreview)
+    : gpTranscodedVideoUrl || displayImagePreview;
+  const mainVideoUrl =
+    playableMainVideoUrl &&
+    isLikelyVideoMediaUrl(playableMainVideoUrl, { nodeType: type, imageName: data.imageName })
+      ? playableMainVideoUrl
       : '';
   const mainVideoDisplaySrc = mainVideoUrl ? resolveUrlForVideoCapture(mainVideoUrl) : '';
+  /** 存量 4K HEVC 节点补救：gp 无 transcodedVideoUrl 时按 taskId 补查网关转码版写回 gp
+   *  （修复前生成的 4K 节点免重跑；写回后 mainVideoUrl 自动切换为转码版即可在线播放） */
+  const transcodedBackfillTriedRef = useRef(false);
+  useEffect(() => {
+    if (transcodedBackfillTriedRef.current) return;
+    const gp = data.generationParams as
+      | { transcodedVideoUrl?: string; taskId?: string; model?: string }
+      | undefined;
+    if (!mainVideoUrl || gp?.transcodedVideoUrl) return;
+    // 白名单：4K 版 / seedance2.5 成分为 HEVC（实测均有网关转码版）；其余模型不补查
+    const isHevcModel = (m?: string) => m === 'seedance2.0 (4k版)' || m === 'seedance2.5';
+    if (!isHevcModel(data.selectedModel) && !isHevcModel(gp?.model)) return;
+    const taskId = String(gp?.taskId || data.taskId || '').split(',')[0].trim();
+    if (!taskId) return;
+    transcodedBackfillTriedRef.current = true;
+    let cancelled = false;
+    let timer: number | undefined;
+    // 网关转码异步（实测滞后 1~6 分钟）：转码未就绪时每 60s 自动重试（最多 5 次），就绪即写回 gp；
+    // videoJobStatus=IGNORE（H.264 无需转码）或次数用尽后停止，不影响其他功能
+    const attempt = async (retriesLeft: number): Promise<void> => {
+      try {
+        const statusData = await getTaskStatus(taskId);
+        if (cancelled) return;
+        const transcoded = pickTranscodedVideoUrlFromTaskStatus(statusData);
+        if (transcoded) {
+          setNodes((nds) =>
+            nds.map((n) =>
+              n.id === id
+                ? {
+                    ...n,
+                    data: {
+                      ...n.data,
+                      generationParams: {
+                        ...(n.data.generationParams || {}),
+                        transcodedVideoUrl: transcoded,
+                      },
+                    },
+                  }
+                : n
+            )
+          );
+          return;
+        }
+        const vjs = (statusData as { videoJobStatus?: string | null } | null)?.videoJobStatus;
+        if (retriesLeft > 0 && vjs !== 'IGNORE') {
+          timer = window.setTimeout(() => void attempt(retriesLeft - 1), 60000);
+        }
+      } catch {
+        // 查询异常（网络抖动等）：剩余次数内同样重试
+        if (!cancelled && retriesLeft > 0) {
+          timer = window.setTimeout(() => void attempt(retriesLeft - 1), 60000);
+        }
+      }
+    };
+    void attempt(5);
+    return () => {
+      cancelled = true;
+      if (timer !== undefined) window.clearTimeout(timer);
+    };
+  }, [id, mainVideoUrl, data.generationParams, data.selectedModel, data.taskId, setNodes]);
   const toRenderableSrc = useCallback((raw?: string | null) => {
     const base = resolveDisplayMediaUrl(raw);
     if (!base) return '';

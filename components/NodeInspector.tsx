@@ -210,6 +210,7 @@ import {
   isMidJourneyModel,
   isLegacyMidJourneyFamilyModel,
   isNanoBanana2Model,
+  type SeedanceTaskType,
 } from '../types';
 import {
   IMAGE2_ASPECT_OPTIONS,
@@ -269,6 +270,12 @@ import {
   type SeedanceModelConfigSnapshot,
   snapshotSeedanceTabConfigsWithLivePanel,
 } from '../utils/seedance20ModelSwitch';
+import {
+  isSeedance25Model,
+  SEEDANCE25_TASK_TYPE_OPTIONS,
+  SEEDANCE25_EDIT_KEYWORDS,
+  SEEDANCE25_EXTEND_KEYWORDS,
+} from '../utils/seedance25TaskType';
 import {
   compressImageForPreview,
   normalizeInspectorIngestImageUrl,
@@ -1188,10 +1195,26 @@ function NodeInspector({
   const isJimeng = data.selectedModel === '即梦3.0 Pro';
   const isVidu = data.selectedModel === 'vidu 2.0';
   const isSeedance15 = data.selectedModel === 'seedance1.5-pro';
-  const isSeedance20 = ['seedance2.0 (高质量版)', 'seedance2.0 (急速版)'].includes(data.selectedModel || '');
-  const isSeedance20HighQuality = data.selectedModel === 'seedance2.0 (高质量版)';
+  const isSeedance20 = ['seedance2.0 (4k版)', 'seedance2.0 (高质量版)', 'seedance2.0 (急速版)', 'seedance2.5'].includes(data.selectedModel || '');
+  const isSeedance20HighQuality = data.selectedModel === 'seedance2.0 (4k版)' || data.selectedModel === 'seedance2.0 (高质量版)' || isSeedance25Model(data.selectedModel);
+  /** seedance2.0 (4k版)：支持 4k 分辨率 */
+  const isSeedance204k = data.selectedModel === 'seedance2.0 (4k版)';
   const isSeedance = isSeedance15 || isSeedance20;
   const seedanceMode = data.seedanceGenerationMode || 'reference';
+  /** seedance2.5：任务模式（仅参考生 tab；默认 normal） */
+  const seedanceTaskType = data.seedanceTaskType || 'normal';
+  /** seedance2.5 视频编辑/延长：比例锁定 adaptive（仅参考生 tab） */
+  const seedance25RatioLocked = isSeedance25Model(data.selectedModel) && seedanceMode === 'reference' && seedanceTaskType !== 'normal';
+  /** seedance2.5 视频编辑：时长固定 -1（隐藏时长滑杆） */
+  const seedance25VideoEdit = isSeedance25Model(data.selectedModel) && seedanceMode === 'reference' && seedanceTaskType === 'video_edit';
+  /** seedance2.5 常规生成/视频延长：时长上限 30s；视频编辑固定 -1；其余 4–15s */
+  const seedanceDurationMax = isSeedance25Model(data.selectedModel)
+    ? (seedanceMode === 'reference' && seedanceTaskType === 'video_edit' ? SEEDANCE_DURATION_MAX : 30)
+    : SEEDANCE_DURATION_MAX;
+  /** 参考生素材槽位上限：2.0 为 9图/3视频/3音频；seedance2.5 按官方文档放开为 30图/10视频/10音频 */
+  const seedanceMaxRefImages = isSeedance25Model(data.selectedModel) ? 30 : 9;
+  const seedanceMaxRefMovs = isSeedance25Model(data.selectedModel) ? 10 : 3;
+  const seedanceMaxRefAudios = isSeedance25Model(data.selectedModel) ? 10 : 3;
   /** Text Node（文生节点）：纯文生图/文生视频；面板隐藏媒体区、模型限定白名单、seedance2.0 仅文生 tab */
   const isTextGenNode = Boolean(data.textGenNode);
 
@@ -1452,10 +1475,10 @@ function NodeInspector({
     return main;
   }, [nodeType, data.imagePreview, data.selectedModel, seedanceMode, klingOmniTab]);
 
-  /** 1080p 仅高质量版：旧数据或切换模型后纠正 */
+  /** 1080p 仅高质量版/4k版：旧数据或切换模型后纠正 */
   useEffect(() => {
     if (!isSeedance || isSeedance20HighQuality) return;
-    if (data.seedanceResolution !== '1080p') return;
+    if (data.seedanceResolution !== '1080p' && data.seedanceResolution !== '4k') return;
     onUpdate({ seedanceResolution: '720p' });
   }, [isSeedance, isSeedance20HighQuality, data.seedanceResolution, onUpdate]);
 
@@ -3092,7 +3115,7 @@ function NodeInspector({
       } else if (isSeedance20VariantModel(oldModel || '')) {
         (currentModelConfigs as any)[oldModel as string] = buildSeedanceModelConfigSnapshot(
           data,
-          oldModel as 'seedance2.0 (高质量版)' | 'seedance2.0 (急速版)',
+          oldModel as string,
           getInspectorPromptValue()
         );
       } else if (oldModel === 'seedance1.5-pro') {
@@ -3435,7 +3458,7 @@ function NodeInspector({
         updateData.jimengImages = undefined;
         updateData.jimengResolution = undefined;
         updateData.jimengVideoRatio = undefined;
-      } else if (['seedance1.5-pro', 'seedance2.0 (高质量版)', 'seedance2.0 (急速版)'].includes(model)) {
+      } else if (['seedance1.5-pro', 'seedance2.0 (4k版)', 'seedance2.0 (高质量版)', 'seedance2.0 (急速版)', 'seedance2.5'].includes(model)) {
         const savedTarget = ((currentModelConfigs as any)[model] || {}) as Partial<SeedanceModelConfigSnapshot>;
         const seedanceConfig = resolveSeedanceConfigForModelSwitch({
           data,
@@ -3462,11 +3485,15 @@ function NodeInspector({
         updateData.numberOfImages = seedanceConfig.numberOfImages || '1条';
         updateData.seedanceResolution =
           seedanceConfig.seedanceResolution || getSeedanceDefaultResolution(model);
-        if (
-          (model === 'seedance2.0 (急速版)' || model === 'seedance1.5-pro') &&
-          updateData.seedanceResolution === '1080p'
-        ) {
-          updateData.seedanceResolution = '720p';
+        // 型号切换时分辨率适配目标型号能力上限
+        if (model === 'seedance2.0 (4k版)') {
+          updateData.seedanceResolution = '4k'; // 4k版固定4k
+        } else if (model === 'seedance2.5' || model === 'seedance2.0 (高质量版)') {
+          if (updateData.seedanceResolution === '4k') updateData.seedanceResolution = '1080p';
+        } else if (model === 'seedance2.0 (急速版)' || model === 'seedance1.5-pro') {
+          if (updateData.seedanceResolution === '1080p' || updateData.seedanceResolution === '4k') {
+            updateData.seedanceResolution = '720p';
+          }
         }
         updateData.seedanceAspectRatio =
           seedanceConfig.seedanceAspectRatio ?? getSeedanceDefaultAspectRatio(model);
@@ -3486,6 +3513,8 @@ function NodeInspector({
           seedanceConfig.seedanceReferenceWebSearch ??
           (seedanceConfig as { seedanceImageWebSearch?: boolean }).seedanceImageWebSearch ??
           false;
+        updateData.seedanceTaskType =
+          (seedanceConfig as { seedanceTaskType?: SeedanceTaskType }).seedanceTaskType ?? 'normal';
         updateData.seedanceGenerationMode =
           model === 'seedance1.5-pro'
             ? 'image'
@@ -3562,7 +3591,7 @@ function NodeInspector({
           aspectRatio: '16:9',
           numberOfImages: '1条',
         });
-      } else if (['seedance1.5-pro', 'seedance2.0 (高质量版)', 'seedance2.0 (急速版)'].includes(model)) {
+      } else if (['seedance1.5-pro', 'seedance2.0 (4k版)', 'seedance2.0 (高质量版)', 'seedance2.0 (急速版)', 'seedance2.5'].includes(model)) {
         const defaultSeedanceGenerateAudio = false;
         onUpdate({
           selectedModel: model,
@@ -3574,6 +3603,7 @@ function NodeInspector({
           seedanceFixedCamera: false,
           seedanceReferenceRatioMode: 'force',
           seedanceReferenceWebSearch: false,
+          seedanceTaskType: 'normal',
           seedanceGenerationMode: model === 'seedance1.5-pro' ? 'image' : isTextGenNode ? 'text' : 'reference',
           seedanceTabConfigs: {},
           referenceImages: [],
@@ -4582,9 +4612,9 @@ function NodeInspector({
   const addSeedanceReferenceVideoUrl = (videoUrl: string) => {
     if (!videoUrl) return;
     const current = [...(data.referenceMovs || [])];
-    // Seedance 2.0 参考生视频：最多 3 条视频，重复 URL 不重复添加
+    // Seedance 参考生视频：2.0 最多 3 条 / 2.5 最多 10 条，重复 URL 不重复添加
     if (current.some((m) => m.url === videoUrl)) return;
-    if (current.length >= 3) return;
+    if (current.length >= seedanceMaxRefMovs) return;
     onUpdate({ referenceMovs: [...current, { url: videoUrl }] });
   };
 
@@ -4610,7 +4640,7 @@ function NodeInspector({
     const d = nodeDataRef.current;
     if (isPanelRefDuplicateOfMainImageSlot(url, d, projectAssetLabelRows)) return;
     const cur = [...(d.referenceImages || [])];
-    if (cur.length >= 9) return;
+    if (cur.length >= seedanceMaxRefImages) return;
     const curLabels = alignReferenceImageLabels(cur, d.referenceImageLabels);
     const dedupeOpts = {
       incomingLabel: meta?.assetName,
@@ -4653,11 +4683,11 @@ function NodeInspector({
       if (!next.added) return;
       const registered = await registerEphemeralPanelRefToLocalStore(url, projectedIdx);
       const oldEids = getStandardRefElementIds();
-      const cappedRefs = next.referenceImages.slice(0, 9);
+      const cappedRefs = next.referenceImages.slice(0, seedanceMaxRefImages);
       const cappedLabels = alignReferenceImageLabels(
         cappedRefs,
         next.referenceImageLabels
-      ).slice(0, 9);
+      ).slice(0, seedanceMaxRefImages);
       const nextEids = buildPanelRefElementIdsAfterWrite(
         refs,
         oldEids,
@@ -4789,22 +4819,22 @@ function NodeInspector({
         const refUrls = await compressImagesInBatches(restImages, { batchSize: 2 });
         const refLabels = restImages.map((f) => f.name || '');
         refPatch = withReferenceLocalRefsInPatch(
-          { referenceImages: refUrls.slice(0, 9), referenceImageLabels: refLabels.slice(0, 9) },
+          { referenceImages: refUrls.slice(0, seedanceMaxRefImages), referenceImageLabels: refLabels.slice(0, seedanceMaxRefImages) },
           registered
         );
       }
       // 视频/音频处理（保持原逻辑）
       let movs = [...(d0.referenceMovs || [])];
       for (const vf of videoFiles) {
-        if (movs.length >= 3) break;
+        if (movs.length >= seedanceMaxRefMovs) break;
         const previewUrl = safeCreateObjectURL(vf);
         if (!previewUrl) continue;
         const posterDataUrl = await createVideoPosterLite(vf);
         movs = [...movs, { url: previewUrl, ...(posterDataUrl ? { posterDataUrl } : {}) }];
       }
-      movs = movs.slice(0, 3);
+      movs = movs.slice(0, seedanceMaxRefMovs);
       let auds = [...(d0.referenceAudios || [])];
-      const audRoom = Math.max(0, 3 - auds.length);
+      const audRoom = Math.max(0, seedanceMaxRefAudios - auds.length);
       const audTake = audioFiles.slice(0, audRoom);
       if (audTake.length > 0) {
         window.dispatchEvent(
@@ -4816,7 +4846,7 @@ function NodeInspector({
             return url ? { url } : null;
           })
           .filter((x): x is { url: string } => Boolean(x));
-        auds = [...auds, ...nextAudioItems].slice(0, 3);
+        auds = [...auds, ...nextAudioItems].slice(0, seedanceMaxRefAudios);
       }
       // 单次 onUpdate 合并主图 + 参考图 + 视频/音频
       onUpdate({ ...mainPatch, ...refPatch, referenceMovs: movs, referenceAudios: auds });
@@ -4835,7 +4865,7 @@ function NodeInspector({
 
     // 已有主图 → 全部图片作为参考图（保持原逻辑）
     const refs = [...(d0.referenceImages || [])];
-    const imgSlots = Math.max(0, 9 - refs.length);
+    const imgSlots = Math.max(0, seedanceMaxRefImages - refs.length);
     let nextImages = refs;
     let nextLabels = [...(d0.referenceImageLabels || [])];
     while (nextLabels.length < refs.length) nextLabels.push('');
@@ -4847,7 +4877,7 @@ function NodeInspector({
         const newImages = await Promise.all(toProcess.map((f) => compressImageForPreview(f)));
         nextImages = [...refs];
         for (const img of newImages) {
-          if (nextImages.length >= 9) break;
+          if (nextImages.length >= seedanceMaxRefImages) break;
           const appended = tryAppendReferenceImageWithLabel(
             nextImages,
             nextLabels,
@@ -4877,7 +4907,7 @@ function NodeInspector({
         );
         nextImages = [...refs];
         for (const img of fallback) {
-          if (nextImages.length >= 9) break;
+          if (nextImages.length >= seedanceMaxRefImages) break;
           const appended = tryAppendReferenceImageWithLabel(
             nextImages,
             nextLabels,
@@ -4899,15 +4929,15 @@ function NodeInspector({
 
     let movs = [...(d0.referenceMovs || [])];
     for (const vf of videoFiles) {
-      if (movs.length >= 3) break;
+      if (movs.length >= seedanceMaxRefMovs) break;
       const previewUrl = safeCreateObjectURL(vf);
       if (!previewUrl) continue;
       const posterDataUrl = await createVideoPosterLite(vf);
       movs = [...movs, { url: previewUrl, ...(posterDataUrl ? { posterDataUrl } : {}) }];
     }
-    movs = movs.slice(0, 3);
+    movs = movs.slice(0, seedanceMaxRefMovs);
     let auds = [...(d0.referenceAudios || [])];
-    const audRoom = Math.max(0, 3 - auds.length);
+    const audRoom = Math.max(0, seedanceMaxRefAudios - auds.length);
     const audTake = audioFiles.slice(0, audRoom);
     if (audTake.length > 0) {
       window.dispatchEvent(
@@ -4919,12 +4949,12 @@ function NodeInspector({
           return url ? { url } : null;
         })
         .filter((x): x is { url: string } => Boolean(x));
-      auds = [...auds, ...nextAudioItems].slice(0, 3);
+      auds = [...auds, ...nextAudioItems].slice(0, seedanceMaxRefAudios);
     }
 
     onUpdate({
       referenceImages: nextImages,
-      referenceImageLabels: nextLabels.slice(0, 9),
+      referenceImageLabels: nextLabels.slice(0, seedanceMaxRefImages),
       referenceMovs: movs,
       referenceAudios: auds,
       ...refPatch,
@@ -6162,19 +6192,87 @@ function NodeInspector({
 
                     {seedanceMode === 'reference' && (
                         <>
-                            {/* 说明区：默认展开（更精简） */}
+                            {/* seedance2.5：任务模式（常规生成 / 视频编辑 / 视频延长） */}
+                            {isSeedance25Model(data.selectedModel) && (
+                                <div className="space-y-1.5">
+                                    <div className="flex items-center gap-2 text-gray-400">
+                                        <Film size={12} />
+                                        <span className="text-[10px] font-bold uppercase tracking-wider">任务模式</span>
+                                    </div>
+                                    <div className="grid grid-cols-3 gap-1.5">
+                                        {SEEDANCE25_TASK_TYPE_OPTIONS.map((opt) => (
+                                            <button
+                                                key={opt.id}
+                                                type="button"
+                                                onClick={() => onUpdate({ seedanceTaskType: opt.id })}
+                                                className={`py-2 px-1 text-xs font-semibold rounded-lg border transition-colors ${
+                                                    seedanceTaskType === opt.id
+                                                        ? 'bg-blue-600 text-white border-blue-500 shadow-sm shadow-blue-950/35'
+                                                        : 'bg-blue-950/25 text-blue-200/75 border-blue-500/25 hover:border-blue-500/45 hover:bg-blue-950/40'
+                                                }`}
+                                            >
+                                                {opt.label}
+                                            </button>
+                                        ))}
+                                    </div>
+                                    <p className="text-[10px] text-gray-500 leading-relaxed">
+                                        {SEEDANCE25_TASK_TYPE_OPTIONS.find((o) => o.id === seedanceTaskType)?.hint}
+                                    </p>
+                                </div>
+                            )}
+                            {/* 说明区：默认展开；2.0 与 2.5 上限不同，2.5 按任务模式分三套要求 */}
                             <div className="text-[10px] text-red-300 px-2 py-1.5 leading-relaxed bg-red-500/10 border border-red-500/30 rounded-lg">
-                              <p className="font-medium">
-                                ⚠ 参考生视频素材：图片≤9、视频≤3、音频≤3（拖入即可）
-                              </p>
-                              <p className="text-gray-400/90 mt-1">
-                                本地文件：拖到下方虚线区或「图片」格；画布节点/资产库：按住<strong className="text-gray-300">鼠标中键</strong>拖到此处。
-                              </p>
-                              <div className="mt-1.5 space-y-1.5 text-gray-300/80">
-                                <p>图片：JPEG/PNG；宽高比 0.4～2.5；边长 300～6000px；单张 &lt; 30MB</p>
-                                <p>视频：MP4/MOV；480p/720p；单段 2～15s，总时长 ≤ 15s；单个 &lt; 50MB；FPS 24～60</p>
-                                <p>音频：WAV/MP3；单段 2～15s，总时长 ≤ 15s；单个 &lt; 15MB</p>
-                              </div>
+                              {!isSeedance25Model(data.selectedModel) ? (
+                                <>
+                                  <p className="font-medium">⚠ 参考生视频素材：图片≤9、视频≤3、音频≤3（拖入即可）</p>
+                                  <p className="text-gray-400/90 mt-1">
+                                    本地文件：拖到下方虚线区或「图片」格；画布节点/资产库：按住<strong className="text-gray-300">鼠标中键</strong>拖到此处。
+                                  </p>
+                                  <div className="mt-1.5 space-y-1.5 text-gray-300/80">
+                                    <p>图片：JPEG/PNG；宽高比 0.4～2.5；边长 300～6000px；单张 &lt; 30MB</p>
+                                    <p>视频：MP4/MOV；480p/720p；单段 2～15s，总时长 ≤ 15s；单个 &lt; 200MB；FPS 24～60</p>
+                                    <p>音频：WAV/MP3；单段 2～15s，总时长 ≤ 15s；单个 &lt; 15MB</p>
+                                  </div>
+                                </>
+                              ) : seedanceTaskType === 'video_edit' ? (
+                                <>
+                                  <p className="font-medium">⚠ 视频编辑（Seedance 2.5）：需 ≥1 个参考视频，比例自适应、时长由参考视频决定</p>
+                                  <p className="text-gray-400/90 mt-1">
+                                    本地文件：拖到下方虚线区或「视频」格；画布节点/资产库：按住<strong className="text-gray-300">鼠标中键</strong>拖到此处。
+                                  </p>
+                                  <div className="mt-1.5 space-y-1.5 text-gray-300/80">
+                                    <p>提示词：须包含 {SEEDANCE25_EDIT_KEYWORDS.join('、')} 中的至少一项</p>
+                                    <p>视频：MP4/MOV；480p/720p；单段 4～30s；单个 &lt; 200MB；FPS 24～60</p>
+                                    <p>图片：JPEG/PNG；宽高比 0.4～2.5；边长 300～6000px；单张 &lt; 30MB（可选，替换主体等）</p>
+                                    <p>音频：WAV/MP3；单段 2～30s；单个 &lt; 15MB（可选，音轨编辑）</p>
+                                  </div>
+                                </>
+                              ) : seedanceTaskType === 'video_extend' ? (
+                                <>
+                                  <p className="font-medium">⚠ 视频延长（Seedance 2.5）：需 ≥1 个参考视频，比例自适应、时长 4～30s</p>
+                                  <p className="text-gray-400/90 mt-1">
+                                    本地文件：拖到下方虚线区或「视频」格；画布节点/资产库：按住<strong className="text-gray-300">鼠标中键</strong>拖到此处。
+                                  </p>
+                                  <div className="mt-1.5 space-y-1.5 text-gray-300/80">
+                                    <p>提示词：须包含 {SEEDANCE25_EXTEND_KEYWORDS.join('、')} 中的至少一项</p>
+                                    <p>视频：MP4/MOV；480p/720p；单段 2～30s；单个 &lt; 200MB；FPS 24～60</p>
+                                    <p>图片：JPEG/PNG；宽高比 0.4～2.5；边长 300～6000px；单张 &lt; 30MB（可选）</p>
+                                    <p>音频：WAV/MP3；单段 2～30s；单个 &lt; 15MB（可选）</p>
+                                  </div>
+                                </>
+                              ) : (
+                                <>
+                                  <p className="font-medium">⚠ 参考生视频素材（Seedance 2.5）：图片≤30、视频≤10、音频≤10（拖入即可）</p>
+                                  <p className="text-gray-400/90 mt-1">
+                                    本地文件：拖到下方虚线区或「图片」格；画布节点/资产库：按住<strong className="text-gray-300">鼠标中键</strong>拖到此处。
+                                  </p>
+                                  <div className="mt-1.5 space-y-1.5 text-gray-300/80">
+                                    <p>图片：JPEG/PNG；宽高比 0.4～2.5；边长 300～6000px；单张 &lt; 30MB</p>
+                                    <p>视频：MP4/MOV；480p/720p；单段 2～30s，总时长 ≤ 30s；单个 &lt; 200MB；FPS 24～60</p>
+                                    <p>音频：WAV/MP3；单段 2～30s，总时长 ≤ 30s；单个 &lt; 15MB</p>
+                                  </div>
+                                </>
+                              )}
                             </div>
                             <div
                               data-flowgen-media-drop="1"
@@ -7462,9 +7560,11 @@ function NodeInspector({
                             <span className="text-[10px] font-bold uppercase tracking-wider">分辨率</span>
                         </div>
                         <div className="flex gap-2 flex-wrap">
-                            {(isSeedance20HighQuality
-                              ? (['480p', '720p', '1080p'] as const)
-                              : (['480p', '720p'] as const)
+                            {(isSeedance204k
+                              ? (['4k'] as const)
+                              : isSeedance20HighQuality
+                                ? (['480p', '720p', '1080p'] as const)
+                                : (['480p', '720p'] as const)
                             ).map((q) => (
                                 <button
                                     key={q}
@@ -7494,6 +7594,12 @@ function NodeInspector({
                                     </div>
                                 </div>
                                 <div className="flex-1 min-w-0 space-y-1.5">
+                                    {seedance25RatioLocked ? (
+                                        <div className="py-2 px-3 text-xs font-semibold rounded-lg border bg-blue-950/25 text-blue-200/60 border-blue-500/25">
+                                            自适应（adaptive）· 视频编辑/延长模式由参考视频决定
+                                        </div>
+                                    ) : (
+                                    <>
                                     <div className="grid grid-cols-4 gap-1.5">
                                         {SEEDANCE_TEXT_REF_ASPECT_RATIOS.slice(0, 4).map((r) => {
                                             const raw = data.seedanceAspectRatio?.trim();
@@ -7544,6 +7650,8 @@ function NodeInspector({
                                             );
                                         })}
                                     </div>
+                                    </>
+                                    )}
                                 </div>
                             </div>
                         </div>
@@ -7573,7 +7681,19 @@ function NodeInspector({
                             </div>
                         </div>
                     )}
-                    {/* 时长：1.5 Pro / 2.0 均为 4–15s */}
+                    {/* 时长：1.5 Pro / 2.0 均为 4–15s；seedance2.5 视频延长 4–30s；视频编辑固定 -1 隐藏滑杆 */}
+                    {seedance25VideoEdit ? (
+                        <div className="space-y-1">
+                            <div className="flex items-center gap-2 text-gray-400">
+                                <Info size={12} className="text-gray-500 shrink-0" />
+                                <Clock size={12} />
+                                <span className="text-[10px] font-bold uppercase tracking-wider">时长</span>
+                            </div>
+                            <div className="py-2 px-3 text-xs font-semibold rounded-lg border bg-gray-950 border-gray-800 text-gray-500">
+                                由参考视频时长决定（video_edit 固定 -1）
+                            </div>
+                        </div>
+                    ) : (
                     <div className="space-y-1">
                         <div className="flex items-center gap-2 text-gray-400">
                             <Info size={12} className="text-gray-500 shrink-0" />
@@ -7584,21 +7704,22 @@ function NodeInspector({
                             <input
                                 type="range"
                                 min={SEEDANCE_DURATION_MIN}
-                                max={SEEDANCE_DURATION_MAX}
+                                max={seedanceDurationMax}
                                 step={1}
-                                value={parseSeedanceDurationSeconds(data.seedanceDuration)}
+                                value={Math.min(parseSeedanceDurationSeconds(data.seedanceDuration, seedanceDurationMax), seedanceDurationMax)}
                                 onChange={(e) =>
                                     onUpdate({
-                                        seedanceDuration: formatSeedanceDurationLabel(Number(e.target.value)),
+                                        seedanceDuration: formatSeedanceDurationLabel(Number(e.target.value), seedanceDurationMax),
                                     })
                                 }
                                 className="flex-1 h-1.5 bg-gray-700 rounded-lg appearance-none cursor-pointer accent-brand-500"
                             />
                             <span className="text-xs font-mono text-brand-400 w-8 tabular-nums">
-                                {parseSeedanceDurationSeconds(data.seedanceDuration)}s
+                                {Math.min(parseSeedanceDurationSeconds(data.seedanceDuration, seedanceDurationMax), seedanceDurationMax)}s
                             </span>
                         </div>
                     </div>
+                    )}
                     {/* 生成音频 */}
                     <div className="flex items-center justify-between">
                         <span className="text-[10px] font-bold text-gray-400 uppercase tracking-wider">生成音频</span>
@@ -7624,7 +7745,8 @@ function NodeInspector({
                             }`} />
                         </button>
                     </div>
-                    {isSeedance20 && seedanceMode === 'reference' && (
+                    {/* 联网搜索：仅 2.0 系列参考生 tab；2.5 不支持联网（AiTop tools 为 2.0 专有参数），一律隐藏开关 */}
+                    {isSeedance20 && seedanceMode === 'reference' && !isSeedance25Model(data.selectedModel) && (
                         <div className="flex items-center justify-between">
                             <span className="text-[10px] font-bold text-gray-400 uppercase tracking-wider">联网搜索</span>
                             <button

@@ -448,8 +448,16 @@ Inspector 内本地上传视频会用 **`createVideoPosterLite`**（轻量截帧
 |------------------------|----------------------------------------|
 | `seedance2.0 (急速版)` | `DOUBAO_SEEDANCE_2_0_FAST` |
 | `seedance2.0 (高质量版)` | `DOUBAO_SEEDANCE_2_0` |
+| `seedance2.5` | `DOUBAO_SEEDANCE_2_5` |
 
 （Seedance 1.5 为 `DOUBAO_SEEDANCE_1_5_PRO`，与 2.0 共用同一段请求组装，但 1.5 仅 **图生** 路径。）
+
+#### 15.1.1 seedance2.5 任务模式（taskType，2026-08-20 新增）
+
+- `seedance2.5` 面板与 2.0 高质量版一致（三 tab + 1080p），**独立** modelConfigs 快照与面板 IDB 键（不并入 `SEEDANCE20_VARIANT_MODELS` / `usesUnifiedSeedance20PanelLocalRef`）。
+- 参考生 tab 顶部新增「任务模式」选择器（`NodeData.seedanceTaskType`）：`normal` 常规生成（默认）/ `video_edit` 视频编辑 / `video_extend` 视频延长；文生/图生 tab 恒为 normal。
+- 规则（`utils/seedance25TaskType.ts`）：edit/extend 时 `parameters.ratio=adaptive`、edit 固定 `duration=-1`、extend `duration∈[4,30]`；运行前前端拦截校验（≥1 参考视频 + 提示词须含编辑/延长关键词，`validateSeedance25TaskTypeRun`）。
+- `taskType` 作为**顶层参数**提交（仅 2.5 且非 normal 时传，见 `services/aitop.ts` `createDoubaoSeedanceVideoTask`）。轮询档位与高质量版一致（3600×10s、连续失败容忍 18 次）。
 
 ### 15.2 三种生成模式（`seedanceGenerationMode`）
 

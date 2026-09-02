@@ -880,7 +880,9 @@ const mentions = buildInspectorPromptMentionItems(nodeData, projectAssets);
 | **Nano Banana 2** | `Image N`（自然语言）；`@首帧图`→「起始画面」、`@尾帧图`→「结束画面」 | `resolveImageGenPromptToImageTokens` | [Google AI Nano Banana 文档](https://ai.google.dev/gemini-api/docs/image-generation) | 禁止回退为长文本说明；禁止移除 @首帧图/@尾帧图 |
 | **Seedance 1.5-pro** | 长文本说明（保留） | `resolvePromptPlaceholders`（不改） | 仅支持首帧/首尾帧，无多图参考需求 | 禁止改为原生标记 |
 | **Midjourney / Niji** | **纯自然语言**（无 @元素） | `resolvePromptPlaceholders`（plan 为空，原样返回） | [Midjourney Prompt Basics](https://docs.midjourney.com/hc/en-us/articles/32023408776205-Prompt-Basics)、[Character Reference](https://docs.midjourney.com/hc/en-us/articles/32162917505293-Character-Reference) | 禁止在 Midjourney 面板引入 @图片N；图片仅走 `mjSrefUrl`/`mjCrefUrl`/`mjOrefUrl` 三参数 |
+| **Seedance 2.5** | `@videoN` / `@imageN` / `@audioN`（`@主视频`→`@video1` 兜底）；`@首帧图`→「起始画面」、`@尾帧图`→「结束画面」 | `resolveSeedance25PromptToNativeTokens` | [Volcengine 82379/2607688](https://docs.volcengine.com/docs/82379/2607688)（视频编辑/延长示例 `@video1`/`@image1`） | 禁止套用 2.0 的「图片N」中文格式；禁止移除 `@主视频`（视频编辑/延长必须保留视频引用） |
 | **即梦3.0 Pro** | **纯自然语言**；`@首帧图`→「起始画面」，`@图片N`/`@主图`/`@主体`/`@尾帧图`/`@主视频` 移除 | `resolveJimengPromptStripImageTokens` | [Volcengine 85621/1777001](https://www.volcengine.com/docs/85621/1777001) | 禁止回退为长文本说明；仅支持1张首帧图（通过 imageUrls 字段传递） |
+| **vidu 2.0（已下线）** | **纯自然语言**（首尾帧走 images 字段） | `resolveViduPromptStripImageTokens`（2026-08-21 新增，替换原 `resolvePromptPlaceholders`） | [vidu.com docs](https://platform.vidu.com/docs/image-to-video)（prompt 纯自然语言，images 传首帧/尾帧） | 禁止回退为「（面板参考…视作 [图N]）」长文本；`@首帧图`/`@尾帧图` 转「起始画面/结束画面」，其余引用标记移除 |
 
 **必跑门禁脚本：**
 
@@ -892,12 +894,15 @@ const mentions = buildInspectorPromptMentionItems(nodeData, projectAssets);
 | `npx vitest run src/test/utils/resolveImageGenPromptToImageTokens.test.ts` | image2/Nano Banana 单元（13 用例） |
 | `npx vitest run src/test/utils/resolveNativeImageTokensE2E.test.ts` | 三模型 E2E（24 用例，真实 fixture） |
 | `npx vitest run src/test/utils/resolveJimengPromptStripImageTokens.test.ts` | 即梦3.0 Pro 单元（12 用例） |
+| `npx vitest run src/test/utils/resolveSeedance25PromptToNativeTokens.test.ts` | Seedance 2.5 @videoN/@imageN/@audioN 单元（8 用例） |
+| `npx vitest run src/test/utils/resolveViduPromptStripImageTokens.test.ts` | vidu 2.0 纯自然语言 strip 单元（5 用例） |
+| `npm run test:seedance25-api-mock` | Seedance 2.5 API 模拟（38 用例：normal/视频编辑/视频延长/校验拦截/联网搜索 taskType 联动禁用） |
 
 **Agent 自检清单（改 prompt 引用格式前必跑）：**
 
 1. **先核对官方文档**：打开对应厂商官方页面，确认当前官方引用格式（官方可能迭代）
 2. **对照门禁表**：确认要改的模型属于哪一行，引用格式是否与官方一致
-3. **不得跨模型串扰**：三个模型格式互不相同（`图片N` / `@image_N` / `Image N`），禁止用错
+3. **不得跨模型串扰**：六个模型格式互不相同（`图片N` / `@image_N` / `@videoN`/`@imageN`/`@audioN` / `Image N` / 即梦 strip / vidu strip），禁止用错
 4. **Midjourney 特殊规则**：Midjourney 是 Text Node，**面板不支持 @元素**；图片仅通过 `mjSrefUrl`/`mjCrefUrl`/`mjOrefUrl` 三参数传递；prompt 是纯自然语言（官方明确禁止 prompt 中放图片引用标记）
 5. **改完必跑门禁**：上述 5 个脚本全绿，且 `npm run test:gate` 零回归
 6. **向用户汇报时写明**：是否触碰本节门禁表，是否核对过官方文档
@@ -909,13 +914,15 @@ const mentions = buildInspectorPromptMentionItems(nodeData, projectAssets);
 - ❌ 在 Midjourney 面板引入 @图片N 标记
 - ❌ 把可灵3.0 Omni 的 `@image_N` 改为 `图片N` 或 `Image N`
 - ❌ 把 gpt-image-2/Nano Banana 的 `Image N` 改为 `图片N` 或 `@image_N`
+- ❌ 把 Seedance 2.5 的 `@videoN/@imageN/@audioN` 改为 2.0 的中文「图片N」格式
+- ❌ 在 Seedance 2.5 视频编辑/延长任务中传 `tools:{type:"web_search"}`（官方不支持，必报「请求参数错误」）
 - ❌ 删除或跳过本节门禁脚本
 
 **关键模块（改前必读）：**
 
 | 文件 | 函数 | 稳定性 |
 |------|------|--------|
-| `utils/promptMediaRefs.ts` | `resolveSeedancePromptToNativeImageTokens`、`resolveKlingOmniPromptToNativeImageTokens`、`resolveImageGenPromptToImageTokens`、`resolvePromptToNativeImageTokensBase`、`resolvePromptPlaceholders`、`referenceImagePhrase` | S级（仅修语法或本节门禁下改 bug） |
+| `utils/promptMediaRefs.ts` | `resolveSeedancePromptToNativeImageTokens`、`resolveSeedance25PromptToNativeTokens`、`resolveKlingOmniPromptToNativeImageTokens`、`resolveImageGenPromptToImageTokens`、`resolveJimengPromptStripImageTokens`、`resolveViduPromptStripImageTokens`、`resolvePromptToNativeImageTokensBase`、`resolvePromptPlaceholders`、`referenceImagePhrase` | S级（仅修语法或本节门禁下改 bug） |
 | `components/FlowEditor.tsx` | `handleNodeRun` 各模型分支（L7800–L8380） | S级 |
 | `services/aitop.ts` | `createDoubaoSeedanceVideoTask`、`createKlingOmniVideoTask`、`createNanoTask`、`createImage2Task`、`createMjImagineTask` | S级（prompt 透传，禁止改写） |
 
@@ -4601,6 +4608,38 @@ npm run test:llm
 - **风险评估**：极低。守卫仅在「运行后未 @主图」精确组合触发，其余路径行为完全不变；§7.6 端到端门禁用真实数据锁定了完整 patch 链路的最终显示结果。不涉及 S 级稳定模块。
 - **实测提示**：守卫逻辑已由 §7.6 端到端门禁验证生效（`imagePreview`=2a5576c2=@首个元素，≠夏茉）。若浏览器仍显示夏茉，多为旧前端包未刷新（构建于今日 9:17）或 localStorage 历史残留——强制刷新页面（Ctrl+F5）后重新切换 image2→banana 即可验证。
 
+### §11.90y 导入 JSON 预同步 workspace 版本号避免 409 冲突（2026-08-13）
+
+- **问题**：强制刷新页面后导入 JSON，依然报 `PUT /workspace 409 (Conflict)` 版本冲突错误。
+- **根因**：`applyImportedProjectJson` 在调用 `persistImportedGraphSnapshot`（→ `flushRemoteWorkspaceSave` → `saveRemoteWorkspaceNow`）进行 force 保存时，直接使用 `workspaceVersionRef.current` 作为版本号。该 ref 初始值为 0，依赖 hydration useEffect 异步更新。虽然页面加载后 hydration 通常会设置正确值，但在以下场景可能过期：
+  1. 强制刷新后 hydration 尚未完成时导入
+  2. hydration 完成后、导入前有其他标签页递增了服务端版本
+  3. 并发场景下 auto-save 的 PUT 与 force save 的 PUT 使用相同版本号竞争
+  虽然 `saveRemoteWorkspaceNow` 自带版本冲突重试机制（fetch 最新版本后重试），但若重试期间再有并发保存，重试也会失败，最终 409 被记录到控制台。
+- **修复**（最小变更，仅 [FlowEditor.tsx](file:///d:/aaa/flowgen-ai-studio/components/FlowEditor.tsx#L13378-L13388)）：
+  1. 将 `applyImportedProjectJson` 改为 `async` 函数
+  2. 在 `isImportingRef.current = true` 和 `persistImportedGraphSnapshot` 之前，新增预同步逻辑：调用 `getWorkspace(serverProjectId)` 获取服务端最新版本号，更新 `workspaceVersionRef.current`
+  3. 预同步失败不阻塞导入（catch 静默忽略），后续 force 保存仍自带版本冲突重试
+  4. 依赖数组新增 `serverProjectId`
+- **变更记录**：
+  - 修改 `components/FlowEditor.tsx` `applyImportedProjectJson`：函数签名改为 `async`，新增 §11.90y 预同步代码块（L13378-L13388），依赖数组新增 `serverProjectId`
+- **风险评估**：极低。预同步是纯增量逻辑，失败时静默降级到原有重试机制；不涉及 S 级稳定模块；`test:gate` 全部通过（169 项，0 失败）。
+- **实测提示**：强制刷新页面（Ctrl+Shift+R）后导入 JSON，应不再出现 409 冲突。若仍出现，检查浏览器 Network 面板确认是否来自并发 auto-save（可在导入前等待 3 秒消除 auto-save 延迟）。
+
+### §11.90y.1 导入 JSON 进一步消除 409 控制台红字（2026-08-13）
+
+- **问题**：§11.90y 修复后导入功能已正常，但浏览器控制台仍会打印 `PUT /workspace 409 (Conflict)` 红字，用户体验不佳。
+- **根因**：`applyImportedProjectJson` 中 `isImportingRef.current = true` 只在 force 保存前设置。如果导入前恰好有一个自动保存请求正在飞行中（`remoteSaveInFlightRef.current === true`），预同步版本号后、force 保存前该请求可能刚好落盘并递增服务端版本，导致 force 保存第一次 PUT 版本过期，触发 409。虽然客户端会自动重试并成功，但浏览器已把第一次 409 标红。
+- **修复**（最小变更，仅 [FlowEditor.tsx](file:///d:/aaa/flowgen-ai-studio/components/FlowEditor.tsx#L13189-L13196)）：
+  1. 在 `applyImportedProjectJson` 的 `try` 块最开头就设置 `isImportingRef.current = true`，从导入一开始即屏蔽新的防抖保存调度
+  2. 紧接着用 `while (remoteSaveInFlightRef.current) { await sleep(50ms) }` 等待任何正在飞行中的远程保存完成
+  3. 之后再执行原有的 /pr/ + blob: 清理、节点合并、预同步版本号、force 保存流程
+- **变更记录**：
+  - 修改 `components/FlowEditor.tsx` `applyImportedProjectJson`：在 `try` 块开头新增 §11.90y.1 导入锁与等待逻辑（L13189-L13196）
+- **影响范围**：仅 JSON 导入流程；正常编辑、拖拽、节点详情、面板生成结果、自动保存均不受影响。
+- **风险评估**：极低。等待逻辑只阻塞导入开始阶段，通常 <500ms；若保存请求异常，`finally` 会重置 `remoteSaveInFlightRef`，不会永久阻塞；不涉及 S 级稳定模块；`test:gate` 全部通过（169 项，0 失败）。
+- **实测提示**：强制刷新页面后导入 JSON，控制台应不再出现 409 红字。若仍有，请确认 Network 面板中 409 之后是否紧跟 200 的 PUT 重试（属正常重试机制）。
+
 ### §11.91 Seedance 2.0 参考生参考图保留原始比例不裁切 + 图生首尾帧裁切提醒（2026-08-12）
 
 - **现象**：用户反馈 Seedance 2.0 参考生视频上传时会裁切拖入的原始图片；竖向图片选 16:9 视频比例时，图片被居中裁掉上下，丢失画面内容。
@@ -4824,4 +4863,350 @@ npm run test:llm
 | `test:node-details` | ✅ 全部通过 |
 | `test:panel-refs` | ✅ 全部通过 |
 | `seedance20ModelSwitch.test.ts` | ✅ 4 通过 |
+
+---
+
+## 15. 导入 JSON 时 409 版本冲突修复（2026-08-13）
+
+### 15.1 问题背景
+导入 JSON 后立即保存时，`persistImportedGraphSnapshot` 发起的 `force: true` 立即保存与 `setNodes` 触发的 3 秒防抖自动保存产生竞态：防抖保存用过期 `workspaceVersionRef` 发送 PUT，服务器返回 409 版本冲突。
+
+### 15.2 根因
+`applyImportedProjectJson` 中 `setNodes()` 触发 React 副作用 effect（L3618-3622），该 effect 调用 `scheduleRemoteWorkspaceSave()` 设置 3 秒防抖定时器。虽然 `persistImportedGraphSnapshot` 通过 `flushRemoteWorkspaceSave` 清除了已有定时器，但 React 的 effect 在 re-render 后异步触发，会设置新定时器。如果立即保存（含 `backfillPanelReferenceImageLocalRefs` 异步操作）耗时超过 3 秒，防抖保存就会用过期版本号发送 → 409。
+
+### 15.3 修复
+- **文件**：`components/FlowEditor.tsx`
+- 新增 `remoteSaveInFlightRef = useRef(false)` 标志
+- `saveRemoteWorkspaceNow` 开始时置 `true`，`finally` 块置 `false`
+- `scheduleRemoteWorkspaceSave` 检测到 `remoteSaveInFlightRef.current === true` 时跳过（保存完成后下次 state 变更会重新调度）
+- `flushRemoteWorkspaceSave`（force 路径）不检查此标志，确保强制保存不被阻止
+
+### 15.4 风险
+- 🟢 低：仅在保存进行中跳过防抖定时器，保存完成后自动恢复
+- 不影响 `flushRemoteWorkspaceSave` 的 force 路径
+- 不影响离页 keepalive 保存
+
+### 15.5 补充修复：isImportingRef 守卫（2026-08-13）
+- **根因**：`remoteSaveInFlightRef` 仅在保存进行中阻止防抖保存，但 `saveRemoteWorkspaceNow` 的 `finally` 清除标志后，React useEffect 仍会触发 `scheduleRemoteWorkspaceSave`，用 `force: false` + 过期版本号发送 → 409
+- **修复**：
+  - 新增 `isImportingRef = useRef(false)` 标志
+  - `scheduleRemoteWorkspaceSave` 检测到 `isImportingRef.current === true` 时直接返回（完全抑制）
+  - `applyImportedProjectJson` 中 `persistImportedGraphSnapshot` 调用前设置 `isImportingRef.current = true`
+  - `saveRemoteWorkspaceNow` 的 `finally` 块清除 `isImportingRef`（保存完成后恢复）
+- **风险**：🟢 低，仅阻止导入期间的防抖保存，不影响其他场景
+
+### 15.6 补充修复：延迟清除 isImportingRef（2026-08-13）
+- **根因**：`isImportingRef` 在 `saveRemoteWorkspaceNow` 的 `finally` 中立即清除，但 47 节点导入触发 `hydrateGraphWithLazyReveal`（阈值 22），通过 rAF 分批揭示节点，产生多次延迟的 `setNodes` → useEffect。这些 useEffect 在 `finally` 之后才触发，此时 `isImportingRef` 已是 false → 防抖保存通过守卫 → 用过期版本号发送 → 409
+- **修复**：
+  - 从 `saveRemoteWorkspaceNow` 的 `finally` 中移除 `isImportingRef.current = false`
+  - 在 `applyImportedProjectJson` 中 `persistImportedGraphSnapshot` 之后，用 `setTimeout` 延迟 `REMOTE_WORKSPACE_SAVE_DEBOUNCE_MS + 3000`（6秒）后清除
+  - 确保懒加载分批揭示（每批 12 节点，rAF 间隔）的所有 useEffect 都被抑制
+- **风险**：🟢 低，6 秒内编辑操作不会触发自动保存，但 force 保存不受影响；6 秒后自动恢复
+
+---
+
+## 16. 2026-08-20 新增模型 seedance2.5（DOUBAO_SEEDANCE_2_5）
+
+### 16.1 功能范围
+- 面板完全复用 seedance2.0 高质量版（文生/图生/参考生三 tab、1080p、默认 16:9），API model id `DOUBAO_SEEDANCE_2_5`，端点 `/api/v1/video/doubao` 不变。
+- 新增 2.5 专有 `taskType`（顶层参数，仅非 normal 时传）：`normal` 常规生成（默认）/ `video_edit` 视频编辑 / `video_extend` 视频延长。
+- 任务模式选择器位于**参考生 tab 顶部**（仅 2.5 可见）；文生/图生 tab 恒 normal。
+- 参数覆写（`utils/seedance25TaskType.ts`）：edit/extend 时 `parameters.ratio=adaptive`；edit 固定 `duration=-1`（面板隐藏时长滑杆）；extend `duration∈[4,30]`（滑杆上限放宽 30s）。
+- 运行前前端拦截（`validateSeedance25TaskTypeRun`）：edit/extend 需 ≥1 参考视频；提示词须含编辑类（编辑视频/增加/加上/删除/去掉/修改/替换/改成 + 文档示例变体 加/删/添加/去除/消除）或延长类（向前延长/向后延长/延续/续写）关键词，缺失则报错不提交，避免浪费积分。
+
+### 16.2 关键决策
+- **独立快照**：2.5 不并入 `SEEDANCE20_VARIANT_MODELS` 与 `usesUnifiedSeedance20PanelLocalRef`（与 2.0 两型号互切走 modelConfigs 恢复，不共用面板 IDB 键）。
+- `SeedanceDurationLabel` 类型放宽至 30s（仅 2.5 延长模式滑杆可达；其余模型仍被 `SEEDANCE_DURATION_MAX=15` 钳位）。
+- 轮询档位与高质量版一致（3600×10s，连续状态失败容忍 18 次；`aitopTaskRecovery.ts` / `useAiTopRunRecovery.ts` / FlowEditor 三处同步）。
+- 文生节点（Text Node）白名单同步加入 2.5（恒 normal，仅文生 tab）。
+
+### 16.3 改动文件
+- `types.ts`：INSPECTOR_SELECTABLE_MODELS / TEXT_GEN_NODE_MODELS + `'seedance2.5'`；新增 `SeedanceTaskType`；`NodeData.seedanceTaskType`、`GenerationParams.seedanceTaskType`；`modelConfigs['seedance2.5']` 快照（2.0 两型号快照加兼容字段 seedanceTaskType）。
+- `services/aitop.ts`：`DoubaoSeedanceVideoTaskOptions.model` + `'DOUBAO_SEEDANCE_2_5'`；新增 `taskType` 选项；payload 顶层 taskType（仅 2.5 非 normal）。
+- `utils/seedance25TaskType.ts`（新增）：任务模式选项、关键词校验、运行前校验、parameters 覆写。
+- `components/NodeInspector.tsx`：isSeedance20 白名单 + 2.5；参考生 tab 任务模式选择器；edit/extend 比例锁 adaptive；edit 隐藏时长滑杆、extend 上限 30s；模型切换快照/恢复/首次选择含 seedanceTaskType。
+- `components/FlowEditor.tsx`：模型映射 `seedance2.5 → DOUBAO_SEEDANCE_2_5`；运行前校验 + ratio/duration 覆写；generationParams/Node Details「任务模式」行；15+ 处硬编码白名单加 2.5。
+- 工具层白名单（12 文件）：seedanceAspectRatio / referencedMediaRun / promptMediaRefs / nodeDetailsPreview / runRecovery / enrichSpawnedStoryboardNode / firstFramePanel / panelRefPersistence / storyboardTableSpawn / promptPlaceholders.mjs / aitopTaskRecovery / useAiTopRunRecovery。
+- `utils/seedance20ModelSwitch.ts`：`buildSeedanceModelConfigSnapshot` 快照对象 + `seedanceTaskType`（2.5 非 variant，走 savedTargetConfig 恢复路径）。
+
+### 16.4 测试
+- 新增 `src/test/utils/seedance25TaskType.test.ts`（10 条：关键词/校验/adaptive 覆写/extend [4,30] 夹取）。
+- 新增 `scripts/seedance25-tasktype-api-mock-test.ts`（`npm run test:seedance25-api-mock`，29 条）：mock fetch 模拟 normal / video_edit / video_extend 三种场景的完整 API 请求体（校验 → 参数覆写 → `createDoubaoSeedanceVideoTask` 提交），断言 taskType 顶层下发时机、adaptive/-1 覆写、校验拦截不发请求、2.0 型号保护；不发真实请求、不扣积分。
+- `scripts/text-gen-node-contract-test.ts` 白名单长度断言 5→6、面板模型 6→7。
+- 验证：`npm run build` ✅；`npx vitest run` 513/513 ✅；`npm run test:gate` ✅；契约脚本 48/48 ✅。
+
+### 16.5 风险与后续
+- 🟡 真实 API 形态需浏览器实测一次：2.5 normal 参考生、video_edit（adaptive + duration -1）、video_extend 三条链路各跑一次，确认网关接受 `taskType` 顶层字段与 adaptive 比例。
+- 🟢 2.0/1.5 链路零改动逻辑（仅白名单追加），test:gate 全绿无回归。
+- 后续可选：参考视频时长 4-30s（edit）/2-30s（extend）的前端预检当前未做（API 会校验报错）；如需可补 `getVideoDurationSeconds` 已有能力做拦截。
+
+### 16.6 2026-08-20 补充：成片 HEVC 无法在线播放诊断 + 素材上限对齐官方文档
+
+**播放问题诊断（API 侧，非我方代码）**：
+- 症状：2.5 video_extend 成片 COS 链（`videosGenerations/videosGenerations/….mp4`）浏览器无法在线播放，下载后 VLC 可播。
+- 证据：ffprobe 实测 `codec_name=hevc`、`pix_fmt=yuv420p10le`（H.265 10bit）；COS 响应头 200 / `Content-Type: video/mp4` / `Accept-Ranges: bytes` 均正常。
+- 结论：Chrome/Edge 不支持 MP4 容器内 HEVC 解码，属上游模型/网关输出编码问题；路径 doubled（`videosGenerations/videosGenerations/`）也是上游转存路径怪异但对象可访问，无实际影响。
+- 建议：① 向 AiTop/火山反馈要求 2.5 编辑/延长任务输出 H.264（官方文档称 mov 输出为 H.264+yuv444p+PCM）；② 如需产品内兜底，可在服务端用 ffmpeg 转码 H.264 再存 COS（未实施，待决策）。
+
+**素材上限对齐官方文档 82379/2607688**：
+- 面板警告文案按模型区分：2.0（9图/3视频/3音频，单段 2-15s 总 ≤15s）/ 2.5（30图/10视频/10音频，单段 2-30s、视频编辑 4-30s、总 ≤30s）；视频单文件大小修正为 < 200MB（原文案 50MB 与 AiTop 文档不符）。
+- 槽位上限同步放开（`NodeInspector.tsx` `seedanceMaxRefImages/Movs/Audios`）：本地拖入、中键拖入、URL 加槽三路径均生效。
+- `collectReferencedMediaFromPrompt`（`promptMediaRefs.ts`）@引用收集上限同步 30/10/10。
+- 运行时首条参考视频时长校验（FlowEditor）：2.0 保持 2-15s；2.5 改为 2-30s（video_edit 4-30s）。
+- 验证：`npm run build` ✅；`npx vitest run` 513/513 ✅；`npm run test:gate` ✅。
+- 风险：🟢 2.0 路径常量化后数值不变，无行为变化；🟡 2.5 超 9 图/3 视频的 @图片10+ 原生标记链路（resolveSeedancePromptToNativeImageTokens 按 API 顺序生成 图片N）需真实多素材运行验证一次。
+
+### 16.7 2026-08-21 部署前审计：隐藏 bug 修复（5 处）
+
+| # | 文件 | 问题 | 修复 |
+|---|---|---|---|
+| 1 | `components/ChatPanel.tsx` L1294 | 聊天面板「选中文本设为负面提示词」白名单缺 2.5，三 tab 的 negativePrompt 不会同步 | 白名单加 `'seedance2.5'` |
+| 2 | `components/FlowEditor.tsx` `OUTPUT_NODE_INHERIT_KEYS` | OUTPUT/MOV 继承白名单缺 `seedanceTaskType`，输出节点面板丢失任务模式 | 加入字段 |
+| 3 | `components/FlowEditor.tsx` `framePersistModels` | 首尾帧持久化白名单缺 2.5（2.5 图生模式首尾帧运行后不保留） | 加入模型 |
+| 4 | `utils/storyboardTableSpawn.ts` | 分镜表时长应用 `formatSeedanceDurationLabel(sec)` 默认钳位 15s，2.5 延长 30s 会被截断 | 2.5 传 maxSec=30 |
+| 5 | **`services/aitop.ts` + FlowEditor（预存 bug，2.0 起就有）** | 面板「联网搜索」开关从未传给 API——payload 无 `tools` 字段，开关形同虚设 | `DoubaoSeedanceVideoTaskOptions.tools` + payload 顶层 `tools:{type:'web_search'}`（仅参考生 tab 开关开启时传，2.0/2.5 均生效） |
+
+- mock 测试新增场景 6（tools 下发/不下发），共 31 条断言全过。
+- 验证：`npm run build` ✅；`npx vitest run` 513/513 ✅；`npm run test:gate` ✅；`test:seedance25-api-mock` 31/31 ✅。
+- 审计确认无问题项：persistSanitize.mjs 无模型白名单（通用剥离）；localNodeMediaStore IDB 键 2.5 独立（符合独立快照决策）；`buildSeedanceReferenceImagesApiPayload` 无额外截断（上限由收集层 30/10/10 控制）；`resolveSeedancePromptToNativeImageTokens` 按 imageIndex 生成「图片N」天然支持多位数。
+
+### 16.8 2026-08-21 二次复核：参考音频误拦截（预存 bug）
+
+- **现象**：`services/aitop.ts` `createDoubaoSeedanceVideoTask` 原有校验「referenceAudios 不能单独使用，必须同时提供 referenceVideos」，会误拦截 AiTop 文档明确允许的「文本 + 图片 + 音频」合法组合（用户只 @图片 + @音频、无 @视频 时被拦）。
+- **修复**：校验放宽为「音频既无参考视频也无参考图片时才拦截」（纯音频）；图片+音频组合正常放行。
+- **影响面**：仅放宽，不放宽场景行为不变；2.0/2.5 均受益。
+- mock 测试新增场景 7（图片+音频合法 / 纯音频拦截），共 34 条断言全过。
+- 复核确认上次 16.7 的 5 处修复均正确：联网搜索 `tools:{type:'web_search'}` 顶层下发、OUTPUT 继承 seedanceTaskType、framePersistModels、storyboardTableSpawn 30s、ChatPanel 白名单。
+- 验证：`npm run build` ✅；`npx vitest run` 513/513 ✅；`npm run test:gate` ✅；`test:seedance25-api-mock` 34/34 ✅。
+
+### 16.9 2026-08-21 图片极端宽高比不再前端裁切（按用户要求）
+
+- **需求**：上传宽高比极端（>2.5 或 <0.4）的图片时，不要前端居中裁切改变构图，改为等比缩放后**原样上传，由豆包 API 侧校验宽高比并返回错误**。
+- **改动**（`utils/seedanceImageUpload.ts`）：
+  - 删除 `prepareImageForSeedanceModelUpload` 内的极端宽高比居中裁切逻辑（原 `ar > 2.5` / `ar < 0.4` 分支）；
+  - 删除已无引用的 `SEEDANCE_IMAGE_MIN_ASPECT` / `SEEDANCE_IMAGE_MAX_ASPECT` 常量；
+  - 保留等比缩放（最长边 1536 + 边长 301~5999 钳位），此为边长约束而非裁切，不改变构图。
+- **影响面**：仅极端宽高比图片行为变化（由「前端裁切」变为「API 报错」）；正常图片（0.4~2.5 内）仍只等比缩放，无任何变化。`targetRatioLabel` 裁切路径仍保留但所有 Seedance 调用传 `null`，不触发。
+- 验证：`npm run build` ✅；`npx vitest run` 513/513 ✅；`npm run test:gate` ✅。
+
+### 16.10 2026-08-21 全模型图片零裁切（彻底移除裁切代码）
+
+- **需求**：确保所有模型都不在客户端裁切上传图片，保留原构图。
+- **核查结论**：全项目唯一具备客户端裁切能力的函数是 `prepareImageForSeedanceModelUpload`；其余模型（即梦/可灵/Nano/image2/MJ）图片上传均不经过任何裁切（即梦为服务端裁切+面板仅提醒，客户端不裁）。
+- **改动**：
+  - `utils/seedanceImageUpload.ts`：彻底删除 `targetRatioLabel` 裁切段 + `TARGET_RATIO_BY_LABEL` + `targetAspectFromLabel`；函数签名移除 `options` 参数；`drawImage` 固定用全图源矩形 `(0,0,sw,sh)`；`resized` 仅比较缩放前后尺寸。
+  - `components/FlowEditor.tsx`：`prepareLocalImageSrc` 移除三处 `{targetRatioLabel: ...}` 传参，签名 `extra` 改为 `_extra`（保留兼容避免改调用方）；注释更新为「不做宽高比裁切」。
+- **结果**：Seedance 图片上传只做等比缩放（最长边 1536 + 边长 301~5999 钳位），任何图片（含极端比例）都不裁切，比例问题交由豆包 API 报错。
+- 验证：`npm run build` ✅；`npx vitest run` 513/513 ✅；`npm run test:gate` ✅。
+
+### 16.11 2026-08-21 Seedance 2.5 官方 @videoN/@imageN 原生引用修复
+
+- **现象**：Seedance 2.5 视频编辑 prompt `@主视频中增加一个角色@资产:卷卷` 提交后 body prompt 变成「中增加一个角色图片1」——`@主视频` 被 2.0 逻辑移除、`@资产:卷卷` 转成中文「图片1」，导致视频编辑/延长丢失视频引用，网关报「请求参数错误」。
+- **根因**：`FlowEditor` seedance 分支把 `seedance2.5` 并入 `isSeedance20Model`，导致 2.5 复用了 2.0 的 `resolveSeedancePromptToNativeImageTokens`（@主视频移除 + 图片转「图片N」中文），但 2.5 官方（火山 82379/2607688）要求 `@videoN`/`@imageN`（英文带 @）。
+- **修复**：
+  - `utils/promptMediaRefs.ts` 新增 `resolveSeedance25PromptToNativeTokens`：`@主视频→@videoN`（无 map 兜底 @video1，主视频即 referenceVideos[0]）、`@视频N/@视频→@videoN`、`@图片N/@主图/@主体/@资产:名/@图片→@imageN`、`@音频N→@audioN`、`@首帧图/尾帧图→起始画面/结束画面`、未命中保留原样。
+  - `components/FlowEditor.tsx`：seedance 分支 `isSeedance25Model(model)` 时改调新函数，2.0 仍走旧函数，1.5 走 `resolvePromptPlaceholders`。
+- **测试**：新增 `src/test/utils/resolveSeedance25PromptToNativeTokens.test.ts`（8 条：@主视频+@资产→@video1+@image1、@主视频 兜底、多视频、延长关键词、图片/音频、首尾帧、无标记保留）。
+- **验证**：`npm run build` ✅；`npx vitest run` 521/521 ✅；`npm run test:gate` ✅。
+- **风险**：🟢 仅影响 `seedance2.5` 的 prompt 提交形态，2.0/1.5 分支不变；需真实 API 运行一次确认网关接受 `@video1/@image1`。
+
+### 16.12 2026-08-21 vidu 2.0 prompt 引用修复（清理遗留隐患）
+
+- **现象**：vidu 2.0（已下线，旧工程可能残留节点）图生视频分支仍走 `resolvePromptPlaceholders`，把 `@主图/@首帧图` 展开成「（面板参考…视作 [图N]）」长文本，污染 vidu 官方要求的纯自然语言 prompt（图片应走 images 首帧/尾帧字段）。
+- **修复**：
+  - `utils/promptMediaRefs.ts` 新增 `resolveViduPromptStripImageTokens`：`@首帧图→起始画面`、`@尾帧图→结束画面`，其余 `@主图/@主体/@图片/@图片N/@主视频/@视频N/@音频N/@资产:名` 移除。
+  - `components/FlowEditor.tsx` vidu 分支由 `resolvePromptPlaceholders` 改调新函数。
+- **测试**：新增 `src/test/utils/resolveViduPromptStripImageTokens.test.ts`（5 条）。
+- **验证**：`npm run build` ✅；`npx vitest run` 526/526 ✅；`npm run test:gate` ✅。
+- **风险**：🟢 仅影响已下线 vidu 2.0（残留节点的 prompt 形态），其余模型不变。
+
+### 16.13 2026-08-21 Seedance 2.5 视频编辑/延长禁用联网搜索（实测确认）
+
+- **现象**：Seedance 2.5 视频编辑 `taskType=video_edit` + 面板开「联网搜索」时，请求 body 携带 `tools:{type:"web_search"}`，网关报「请求参数错误」；关闭联网搜索后请求成功。
+- **根因**：Seedance 2.5 的**视频编辑/延长任务官方不支持联网搜索工具**（`tools` 为 2.0 系列参考生视频专有参数），2.5 编辑/延长模式网关不接受该字段。联网搜索功能本身是我 16.7 新增的（修复 2.0 预存 bug），2.5 编辑/延长场景下误传。
+- **修复**（双重防护）：
+  1. **面板隐藏**：`NodeInspector.tsx` 联网搜索开关渲染条件由 `isSeedance20 && seedanceMode === 'reference'` 收紧为 `(!isSeedance25Model(...) || seedanceTaskType === 'normal')`，2.5 视频编辑/延长模式下隐藏开关（2.0 参考生 / 2.5 常规生成 normal 仍显示）。
+  2. **payload 兜底**：`FlowEditor.tsx` `seedanceWebSearchOn` 增加 `seedance25TaskType === 'normal'` 条件，非 normal 任务模式无论开关状态都强制不传 `tools`。
+- **实测**：联网搜索开 + video_edit 报错 → 关闭后通过（用户确认）。
+- **验证**：`npm run build` ✅；`npx vitest run` 526/526 ✅；`npm run test:gate` ✅。
+- **风险**：🟢 仅收紧联网搜索的展示/传递范围，normal 和 2.0 参考生行为不变。
+
+### 16.14 2026-08-21 门禁收尾：mock 场景 6 补齐 taskType 联动禁用回归防护
+
+- **背景**：16.13 修复点在 `FlowEditor.tsx` `seedanceWebSearchOn` 四层条件（`isSeedance20Model && reference模式 && 开关 && taskType==='normal'`，L10580-L10584）。收尾审计发现 mock 场景 6 此前只验证 `aitop.ts` 层「tools 传了就下发」，未模拟 FlowEditor 层条件——若未来有人删掉 `taskType==='normal'` 子条件，video_edit 会再次误传 `tools` 报「请求参数错误」，而门禁全绿不报警（回归盲区）。
+- **改动**（仅测试脚本 `scripts/seedance25-tasktype-api-mock-test.ts`，零生产代码）：
+  - `simulateRun` 新增 `seedanceMode`（默认 reference）/ `webSearchEnabled`（默认 false）参数，按 FlowEditor L10580-L10584 原样模拟 `seedanceWebSearchOn` 后组装 tools；
+  - 场景 6 由 2 条扩展为 6 条断言：normal+参考生+开→下发；normal+关→不下发；**video_edit+开→强制不下发**；**video_extend+开→强制不下发**；文生 tab+开→不下发（seedanceMode 条件防护）。
+- **门禁登记确认**：`scripts/test-gate.mjs` L72-L73 已登记 `seedance25-api-mock`（§16 全链路：taskType 下发/参数覆写/校验拦截/联网搜索禁用），`package.json` `test:seedance25-api-mock` 脚本在位。
+- **用例数**：34 → 38（+4）。
+- **验证**：`npm run test:seedance25-api-mock` 38/38 ✅。
+- **风险**：🟢 零生产代码改动；2.0/1.5/其余模型链路不变。
+- **遗留盲区说明（可接受）**：16.9/16.10 图片零裁切（`seedanceImageUpload.ts` 依赖浏览器 canvas，node 环境无法单测，属纯删除代码）；16.7 的 ChatPanel/OUTPUT 继承/framePersist/storyboardTableSpawn 四处白名单追加（一次性审计修复，面板类回归由 test:gate 既有 panel 门禁兜底）。
+
+### 16.15 2026-08-21 Node Details 参考图跨节点泄漏修复（视频延长 movNode）
+
+- **现象**：用户对倒数第二节点（movNode）执行 Seedance 2.5 视频延长（`@主视频向后延长`，未引用任何图片）运行成功后，Node Details 却显示「Reference Images (7)」——7 张图（大牙-有牙/原始丛林小路/图片1~7）全是**上游第一个节点**（Input Picture Node）的面板参考图配置；URL 列表中空槽经 IDB 恢复成 blob 并回退标注为当前节点名 `Video_667.mov`。
+- **根因**：`FlowEditor.tsx` seedance 参考生分支（L15149 起）。本节点本次运行快照是干净的（`gp` 无 `referenceImages`、`data.referenceImages=[]`）→ `hasAnyRef=false` → 走到祖先回退分支：`panelSource = { ...ancestorData, ... }`（`resolveNearestInputAncestorData` BFS 向上找到带 7 槽参考图的第一个节点）→ `buildNodeDetailsReferencePreview` 从 `panelSource.referenceImages` 构建出 7 张图，泄漏到本节点 Details。该回退原意是给「无自己运行快照的纯输出节点/老工程」兜底显示来源面板，但 movNode **自带本次运行快照**（`gp.taskId === data.taskId`），快照才是真相。
+- **修复**（最小变更，仅 `FlowEditor.tsx` 一处守卫，L15181-L15193）：`hasAnyRef=false` 且 `gp.taskId` 非空且与 `data.taskId` 一致时，以快照为准直接返回空（`referenceImages: []` + `referenceImageDetailItems: []`），不回退祖先；快照缺失（无 taskId）的老工程仍保留祖先回退兜底。
+- **不影响的既有链路**：① 正常运行带图场景 `gp.referenceImages` 有快照走 `hasAnyRef=true` 快照分支；② 快照空槽由 §11.68 槽位补回逻辑处理（`hasAnyRef=true`，不触发守卫）；③ 纯 OUTPUT 透传节点有图走快照分支、无图显示空（语义正确——那次运行本就没传图）。
+- **验证**：`npm run build` ✅；`npx vitest run` 526/526 ✅；`npm run test:gate` ✅；真实工程文件 `E:\问题\0821\视频延长.json` 场景按守卫逻辑推演确认显示「No Reference Images」+ Reference Videos (1)。
+- **风险**：🟢 单点守卫、仅收紧回退条件；其余模型分支（可灵/即梦/vidu/MJ/Nano/image2）与 `nodeDetailsPreview.ts` 零改动。
+- **复盘（潜在隐患）**：同类「祖先回退」模式在可灵 Omni 分支（L14676-L14679 panelSourceFrames、L14703 buildOmniPanelSourceForNodeDetails）也存在，但 Omni 分支快照收集路径不同（omniSnapRefs 回退 baseRefs），本次未发现同类泄漏实测案例；如后续用户反馈 OUTPUT 类节点参考图异常，优先按本守卫模式排查对应分支。
+
+### 16.16 2026-08-21 Node Details SOURCE 与主视频同 URL（gp.outputUrl 残留）修复
+
+- **现象**：movNode 上跑视频延长（如 30s）成功后，Node Details 的「Reference Videos 主视频」URL 与「SOURCE URL」完全相同，看似"主视频被错写成了最终成片"；左侧播放的 30 秒视频实为**输入源视频**（上次延长成片），真成片只在派生节点/generatedThumbnails 中。
+- **根因**：运行成功回写运行节点快照时（`buildUpdatedRunNodeData`）用 `{ ...旧gp, ...新gp }` **合并**（L11628），而新构建的 `generationParams`（L11144-L11160）**不含 `outputUrl` 字段** → 旧 gp 里派生 OUTPUT 时写入的 `outputUrl`（L11512，=上次成片=本次输入源视频）**残留不被覆盖**。Node Details 的 SOURCE 优先读 `gp.outputUrl`（L14516-L14518，残留=源视频），Reference Videos 主视频读 `gp.referenceMovs` 快照（正确=源视频）→ 两者同 URL 引用户误解。
+- **修复**（最小变更，仅 L11628-L11634）：合并 gp 时若本次有生成结果（`generatedImages[0]`）显式写入 `outputUrl` = 本次真实成片 URL（与派生 OUTPUT 节点 L11512 同源），覆盖旧残留；无结果时保持现状不动。
+- **不影响的既有链路**：首次运行节点（旧 gp 无 outputUrl）新写入正确值、显示更准确；图片/视频全模型统一受益；轮询提取（`pickVideoResourceUrlFromTaskStatus`）、gp 构建、派生节点逻辑零改动。
+- **历史数据说明**：已污染节点（如《视频延长.json》节点3/4）**重新运行一次即自动刷新**；不重跑仅 SOURCE 显示旧残留值，不影响功能。
+- **验证**：`npm run build` ✅；`npx vitest run` 526/526 ✅；`npm run test:gate` ✅。
+- **风险**：🟢 单字段补丁，仅在有新成片时覆盖，语义与派生 OUTPUT 节点一致。
+
+### 16.17 2026-08-22 新增 seedance2.0 (4k版) 模型
+
+- **需求**：在下拉模型添加 seedance2.0(4k版)，排在 seedance2.5 之前，面板完全参考 seedance 高质量版，唯独分辨率改为 4K，其他面板和生节点逻辑完全一致。
+- **实现**：
+  - `types.ts`：新增 `MODEL_SEEDANCE_2_0_4K = 'seedance2.0 (4k版)'`，加入 `INSPECTOR_SELECTABLE_MODELS`（排在 seedance2.5 前）和 `TEXT_GEN_NODE_MODELS`；`NodeData['modelConfigs']` 新增 `'seedance2.0 (4k版)'` 配置（与高质量版一致，分辨率上限 1080p）。
+  - `utils/seedance20ModelSwitch.ts`：`SEEDANCE20_VARIANT_MODELS` 新增 `'seedance2.0 (4k版)'`，型号切换逻辑自动复用。
+  - `utils/seedanceAspectRatio.ts`：`SEEDANCE20_MODELS` 新增 4k 版；`getSeedanceDefaultResolution` 返回 `'1080p'`；`getSeedanceDefaultAspectRatio` 返回 `'16:9'`。
+  - `components/FlowEditor.tsx`：所有 seedance2.0 判断（约 15 处）添加 `'seedance2.0 (4k版)'`；API 调用映射新增 `'seedance2.0 (4k版)' → 'DOUBAO_SEEDANCE_2_0_4K'`。
+  - `components/NodeInspector.tsx`：`isSeedance20` / `isSeedance20HighQuality` 判断添加 4k 版；分辨率选项自动包含 1080p（因 `isSeedance20HighQuality` 为 true）。
+  - `services/aitop.ts`：`DoubaoSeedanceVideoTaskOptions.model` 类型新增 `'DOUBAO_SEEDANCE_2_0_4K'`；`modelLabel` 显示 `'Seedance 2.0 4K'`。
+- **验证**：`npm run build` ✅；`npm run test:gate` ✅。
+- **风险**：🟢 纯增量改动，完全复用 seedance2.0 高质量版逻辑；未修改现有模型行为。
+
+### 16.18 2026-08-22 seedance2.0 (4k版) 分辨率修正（4k 选项）
+
+- **问题**：根据火山官方文档（https://docs.volcengine.com/docs/82379/2607688），Seedance 2.0 标准版（对应 4k 版）支持 **480p, 720p, 1080p, 4k** 四种分辨率，但面板只显示了 480p/720p/1080p，缺少 **4k** 选项。
+- **官方文档分辨率对照**：
+  | 模型 | 支持分辨率 |
+  |------|-----------|
+  | Seedance 2.5 | 480p, 720p |
+  | **Seedance 2.0（标准版/4k版）** | **480p, 720p, 1080p, 4k** |
+  | Seedance 2.0 fast | 480p, 720p |
+  | Seedance 2.0 mini | 480p, 720p |
+- **修复**：
+  - `components/NodeInspector.tsx`：新增 `isSeedance204k` 判断；分辨率选项为 4k 版显示 `['480p', '720p', '1080p', '4k']`；1080p/4k 纠正逻辑仅对非高质量/非4k版生效。
+  - `types.ts`：`seedanceResolution` 类型扩展为 `'480p' | '720p' | '1080p' | '4k'`；`modelConfigs['seedance2.0 (4k版)']` 分辨率类型同步扩展。
+  - `utils/seedanceAspectRatio.ts`：`getSeedanceDefaultResolution` 对 4k 版返回 `'4k'`；`getSeedance20PanelDefaultsPatch` 类型扩展支持 4k。
+  - `utils/seedance20ModelSwitch.ts`：切换模型时 1080p → 4k 版自动升级为 `'4k'`；4k → 急速/1.5 降级为 `'720p'`。
+  - `components/FlowEditor.tsx`：API 调用分辨率类型扩展支持 `'4k'`；4k 分辨率仅 4k 版透传，其他型号 fallback 到 1080p/720p。
+  - `services/aitop.ts`：`resolution` 类型扩展为 `'480p' | '720p' | '1080p' | '4k'`。
+- **验证**：`npm run build` ✅；`npm run test:gate` ✅。
+- **风险**：🟢 纯增量改动，仅扩展分辨率选项；现有模型行为不变。
+
+### 16.19 2026-08-22 seedance2.0 (4k版) 分辨率精简（仅保留 4k）
+
+- **需求**：Seedance 2.0（标准版/4k版）去掉 480p, 720p, 1080p，只保留 **4k** 分辨率选项。
+- **修复**：
+  - `components/NodeInspector.tsx`：4k 版分辨率选项由 `['480p', '720p', '1080p', '4k']` 改为 `['4k']`；切换模型时 4k 版固定 `seedanceResolution = '4k'`。
+  - `types.ts`：`modelConfigs['seedance2.0 (4k版)'].seedanceResolution` 类型由 `'480p' | '720p' | '1080p' | '4k'` 收窄为 `'4k'`。
+  - `utils/seedanceAspectRatio.ts`：`getSeedanceDefaultResolution` 对 4k 版返回 `'4k'`（仅支持 4k）。
+  - `utils/seedance20ModelSwitch.ts`：切换/恢复到 4k 版时固定 `seedanceResolution = '4k'`。
+  - `components/FlowEditor.tsx`：API 调用分辨率对 4k 版固定为 `'4k'`（不再 fallback）。
+- **验证**：`npm run build` ✅；`npm run test:gate` ✅。
+- **风险**：🟢 仅收窄 4k 版分辨率选项；其他模型（高质量版 1080p / 急速版 720p / 2.5 1080p）行为不变。
+
+### 16.20 2026-08-22 Seedance 全系列模型互切（4k版/高质量版/急速版/2.5）
+
+- **需求**：Seedance 全系列模型（4k版、高质量版、急速版、2.5）支持互切，切换时保留输入的图片、文字和参数配置。
+- **实现**：
+  - `utils/seedance20ModelSwitch.ts`：`SEEDANCE20_VARIANT_MODELS` 新增 `'seedance2.5'`，四个型号全部纳入互切范围；`buildSeedanceModelConfigSnapshot` 和 `resolveSeedanceConfigForModelSwitch` 添加全系列分辨率适配逻辑：
+    - → 4k版：固定 `'4k'`
+    - → 2.5：4k → 1080p，其他保持
+    - → 高质量版：4k → 1080p，其他保持
+    - → 急速版/1.5：1080p/4k → 720p
+  - `components/NodeInspector.tsx`：保存旧模型配置时 `isSeedance20VariantModel` 已包含 2.5（无需单独判断）；切换目标模型时分辨率适配逻辑同上。
+- **互切行为**：
+  | 从 ↓ 切换到 → | 4k版 | 高质量版 | 急速版 | 2.5 |
+  |-------------|------|---------|--------|-----|
+  | **4k版** | - | 1080p | 720p | 1080p |
+  | **高质量版** | 4k | - | 720p | 1080p |
+  | **急速版** | 4k | 1080p | - | 1080p |
+  | **2.5** | 4k | 1080p | 720p | - |
+- **验证**：`npm run build` ✅；`npm run test:gate` ✅。
+- **风险**：🟢 仅扩展互切范围；现有急速↔高质量互切行为不变。
+
+### 16.21 2026-08-22 Seedance 2.5 常规生成时长修正（30s）
+
+- **问题**：根据火山官方文档（https://docs.volcengine.com/docs/82379/2607688），Seedance 2.5 的输出时长为 **4~30 秒**，但面板时长滑杆上限仍为 15s。
+- **根因**：`NodeInspector.tsx` 中 `seedanceDurationMax` 仅在 `video_extend` 模式下设为 30，未覆盖 2.5 常规生成（normal）场景。
+- **修复**：
+  - `components/NodeInspector.tsx`：`seedanceDurationMax` 改为 `isSeedance25Model ? (video_edit ? 15 : 30) : 15`，2.5 常规生成/视频延长均为 30s，视频编辑保持 15s（固定 -1 由 API 控制）。
+  - `components/FlowEditor.tsx`：API 调用时长上限同步调整，`model === 'seedance2.5' && taskType !== 'video_edit'` 时 `maxSec = 30`。
+  - `types.ts`：注释更新，明确 2.5 常规生成/视频延长为 4s–30s。
+- **验证**：`npm run build` ✅；`npm run test:gate` ✅。
+- **风险**：🟢 仅放开 2.5 常规生成时长上限；视频编辑固定 -1、视频延长 30s 行为不变。
+
+### 16.22 2026-08-25 seedance2.0 (4k版) 网关报错 20001 修复（resolution 大小写）+ 分镜衍生时长写入修复
+
+- **问题 1**：seedance2.0 (4k版) 创建任务报「该模型不支持该参数组合」（AiTop code 20001），急速版同参数正常。
+- **根因 1**：AiTop 网关 resolution 枚举对 4K **大小写敏感**，必须传大写 `"4K"`（网关文档 `2_0_4K：4K`）；代码对 4k 版固定发小写 `'4k'` 被拒。经 5 组二分实测（时长/参考图/音频均无关）确诊。
+- **修复 1**：`services/aitop.ts` `createDoubaoSeedanceVideoTask` 的 `parameters` 组装处，发送前映射 `resolution === '4k' ? '4K' : resolution`。面板/存储/types.ts 内部值 `'4k'` 不动，仅在 API 边界层转换协议格式。
+- **问题 2**：4K 版模板分镜批量衍生时，分镜表时长列不写入节点（用户面板 14s、节点顶层残留 4s）。
+- **根因 2**：`utils/storyboardTableSpawn.ts` `isSeedanceModel` 漏 `'seedance2.0 (4k版)'`（§16.17 新增模型时漏同步），衍生时 `applyShotDurationToNodeData` 判定非 seedance 模型返回空 patch。
+- **修复 2**：`isSeedanceModel` 增加 `'seedance2.0 (4k版)'`；时长 clamp 走默认 [4,15]，与 4K 版面板一致。
+- **验证**：`npm run build` ✅；`npm run test:gate`（38 通过 / 0 失败）✅；实测大写 `"4K"` 创建任务成功（taskId 1985892，PROCESSING）✅。
+- **风险**：🟢 两处均为单行增量改动；其他型号（480p/720p/1080p）不经映射分支，分镜衍生其他模型路径零影响。
+
+### 16.23 2026-08-25 Seedance 2.5 面板移除联网搜索功能
+
+- **需求**：seedance2.5 面板去掉联网搜索开关；2.0 系列（4k版/高质量版/急速版）保留。
+- **依据**：AiTop 文档 `tools` 为「2.0 专有参数」，2.5 本就不支持联网搜索；此前仅禁用 2.5 视频编辑/延长（§16.13），常规生成（normal）开关仍在。
+- **修复**：
+  - `components/NodeInspector.tsx`：联网开关显示条件去掉「2.5 normal 也显示」分支，2.5 一律隐藏；2.0 参考生 tab 照常显示。
+  - `components/FlowEditor.tsx`：`seedanceWebSearchOn` 增加 `!isSeedance25Model(model)` 条件，2.5 历史快照 `seedanceReferenceWebSearch=true` 的节点同样强制不下发 tools（防御存量脏数据）。
+  - `scripts/seedance25-tasktype-api-mock-test.ts`：场景 6a 原预期「2.5 normal+开联网→下发」反转为「2.0 normal+开联网→下发（保住 2.0 防回归）」+ 新增「2.5 normal+开联网→强制不下发」；模拟函数同步模型判断。
+- **数据兼容**：`seedanceReferenceWebSearch` 字段保留在 modelConfigs/快照（S 级数据结构不变），仅运行时对 2.5 忽略；切到 2.0 系列时开关仍可见可用。
+- **验证**：`npm run build` ✅；`npm run test:gate`（39 通过 / 0 失败，新增 1 条 2.5 强制不下发用例）✅；服务已重启 3001 ✅。
+- **风险**：🟢 2 行条件 + 测试预期调整；2.0 系列联网功能不变，其余 taskType/@引用/参数覆写路径零影响。
+
+### 16.24 2026-08-25 4K HEVC 成片在线播放修复（预览转码版 / 下载原版）
+
+- **问题**：seedance2.0 (4k版) 成分为 **HEVC Main 10 + yuv420p10le**（火山官方"4k（10bit 位深）"档位），Chrome/Edge 无法解码 MP4 内 HEVC，应用内预览黑屏；下载后 VLC 可播。
+- **网关行为（实测 1985892 / 1988249 确诊）**：AiTop 仅对 HEVC 源任务返回 `transcodedVideo`（H.264 High / 1080p / 8bit，videoJobStatus=FINISHED）；H.264 原生任务该字段为 null（videoJobStatus=IGNORE）。取数策略：**预览 = transcodedVideo ?? resourceUrl；下载 = resourceUrl 始终原版**。
+- **修复**：
+  - `types.ts`：`GenerationParams` 新增 `transcodedVideoUrl?: string`（S 级结构新增可选字段）。
+  - `utils/taskStatusVideoUrl.ts`：新增 `pickTranscodedVideoUrlFromTaskStatus()`。
+  - `components/FlowEditor.tsx`：`seedanceTranscodedByFinalUrl` Map（7079 公共作用域）在 pollSeedanceTask 两个成功分支提取转码版；新建 OUTPUT/MOV（11531）与 gp 合并回写（11658）写入 gp；Node Details 主预览（15396，仅 hero 为视频时替换）与分镜连播列表（5607）读取优先转码版。
+  - `components/nodes/CustomNode.tsx`：`mainVideoUrl` 播放源优先 `gp.transcodedVideoUrl`（附带修复：HEVC 截帧 poster 此前同样失败）。
+  - 恢复路径：`utils/runRecovery.ts`（fetchCompletedAiTopTaskUrls 第 4 参回调 + applyRecoveryToOutputNode 第 5 参写 gp）、`utils/aitopTaskRecovery.ts`（PollAiTopTaskOptions.onTranscodedVideo）、`hooks/useAiTopRunRecovery.ts`（收集并传入）。
+- **不改**：下载链路读 `imagePreview`/`outputUrl` 原版 4K（用户下载拿原片）✅；链式引用 imagePreview 原版素材质量不受损 ✅；非 4K 任务 transcodedVideo=null 自动回退原版，行为与旧版一致 ✅。
+- **测试**：新增 `scripts/transcoded-video-url-test.ts`（12 断言：提取 7 + 恢复写入 5），注册 `test:transcoded-video-url` 并入 test:gate steps。
+- **验证**：`npm run build` ✅；`npm run test:gate` 全绿（含新测试 12/12）✅；服务已重启 3001 ✅。
+- **风险**：🟡 中低——改动集中在读取优先级；历史存量 4K 节点（gp 无该字段）回退原版仍黑屏，重新运行一次即生效。
+
+### 16.25 2026-08-25 4K 转码版"抢跑"修复（网关异步转码）+ 存量节点免重跑补救
+
+- **问题**：§16.24 上线后用户实测 4K 节点仍无法播放——gp 无 `transcodedVideoUrl`（taskId 1989489）。
+- **根因**：**网关转码是异步的**——`TRANSFER_SUCCESS`（原片转存完成）时 `transcodedVideo` 常为 null，转码完成滞后 1~4 分钟（实测：13:50:59 轮询成功时 null，13:55:05 后 FINISHED）。§16.24 验证时因查询时机晚（创建后 5 分钟）误判为"TRANSFER_SUCCESS 时转码版已就绪"，前端轮询拿到 TRANSFER_SUCCESS 即返回，错过转码版。
+- **修复①（轮询等待）**：`components/FlowEditor.tsx` pollSeedanceTask TRANSFER_SUCCESS 分支——`seedance2.0 (4k版)` 且 transcodedVideo 为空且 `videoJobStatus !== 'IGNORE'` 时 continue 继续轮询（`transcodedWaitAttempts` 上限 18 次 ≈ 3 分钟），就绪后再返回；超时兜底按原版返回（不死等）。其他模型 videoJobStatus=IGNORE 直接放行，零等待。
+- **修复②（存量补救）**：`components/nodes/CustomNode.tsx` 新增补查 effect——4K 节点 gp 无 `transcodedVideoUrl` 且存在 taskId 时，自动调一次 `getTaskStatus` 补取转码版写回 gp（`transcodedBackfillTriedRef` 防重），写回后 `mainVideoUrl` 自动切换转码版即可播放；补查失败静默。**存量 4K 节点免重跑（省 3300 积分/个）**。
+- **验证**：`npm run build` ✅；`npm run test:gate` 全绿 ✅；服务已重启 3001 ✅。
+- **风险**：🟢 低——修复①仅 4K 分支多等转码（本来就要跑数分钟）；修复②只读 API + 一次性 gp 写回，不影响下载/链式（仍走 outputUrl 原版）。
+- **复盘教训**：验证上游异步字段时，单次延迟观察不能推断就绪时机；对"状态机 + 异步副产物"应设计"等待/兜底"双路径而非假设同步就绪。
+- **2026-08-25 补充（2.5 实测扩展）**：任务 1990262（2.5 video_extend）实测成片 **hevc Main 10 / yuv420p10le / 1920×1080**（无法在线播放、下载正常，与用户判断一致），且网关**同样返回 transcodedVideo**（videoJobStatus=FINISHED，转码机制与 4K 一致）。轮询等待条件由仅 4K 版扩为 `4k版 || seedance2.5`（FlowEditor pollSeedanceTask）；存量补查白名单同步扩为 4K 版/2.5（CustomNode `isHevcModel`）。2.5 常规生成若为 H.264 任务，videoJobStatus=IGNORE 自动放行零等待。1.5-pro / 2.0 其他型号 videoJobStatus 语义未实测，保守不动。
+- **2026-08-25 补充②（长片转码超时 + 补查重试）**：任务 1990866（14s 4K）实测转码耗时约 **6 分钟**，超过原 18 次（3 分钟）等待上限导致兜底无转码版；且节点刚生成时一次性补查恰逢转码未完成，防重标记后不再重试。修复：① 轮询等待上限 18→**48 次（≈8 分钟）**；② 补查 effect 改为**自动延迟重试**（转码未就绪且 videoJobStatus≠IGNORE 时每 60s 重试 × 最多 5 次，查询异常同样重试，组件卸载清理 timer）。覆盖窗口：轮询 8 分钟 + 补查 5 分钟 ≈ 13 分钟。
+
+### 16.26 2026-08-25 MOV 中间节点运行中刷新恢复被覆盖修复（5555.json）
+
+- **问题**：MOV 节点已有成片（播放上游生成视频），在其上配置 2.5 视频延长并运行，**运行途中刷新页面** → 恢复后中间 MOV 的视频被新产出覆盖、与下游节点内容重复（用户期望中间节点保持播放第一节点生成的原视频）。
+- **根因**：恢复逻辑 `useAiTopRunRecovery.ts` 的 `isOutputVideo` 判定把 MOV 节点一律归为"写回自身"，`applyRecoveryToOutputNode` 无条件用新产出覆盖 imagePreview。已验证正常完成路径无此问题（buildUpdatedRunNodeData 对 MOV 不覆盖 imagePreview、新建下游节点；`buildRecoveryGraphUpdates` 对视频模型的 previewPatch 返回 undefined 同样不覆盖）。
+- **修复**：`utils/runRecovery.ts` 新增 `shouldWriteRecoveryIntoRunNode(node)`——MOV 已有成片（imagePreview 为视频 URL）时返回 false，恢复改走 buildRecoveryGraphUpdates 新建下游节点（MOV 原视频保留，gp.outputUrl 与正常完成路径一致更新为新产出）；空 MOV 占位 / OUTPUT 视频节点维持写回自身。`hooks/useAiTopRunRecovery.ts` isOutputVideo 判定改调该函数。
+- **测试**：新增 `scripts/mov-recovery-keep-original-test.ts`（14 断言：判定矩阵 7 + 端到端"新建下游+原视频保留"6 + 空 MOV 写回 1），注册 `test:mov-recovery-keep-original` 并入 test:gate steps。
+- **验证**：`npm run build` ✅；`npm run test:gate` 全绿（含新测试 14/14）✅；服务已重启 3001 ✅。
+- **风险**：🟢 低——单条件细化；空 MOV 写回、INPUT/PROCESSOR 恢复、无刷新正常完成路径均不变。存量已被覆盖的节点（如 5555.json 的 node_37）原视频 URL 仍可从其 gp.referenceMovs / 上游节点找回，属历史数据问题不在本次代码修复范围。
+
+### 16.27 2026-08-25 转码版"张冠李戴"修复（6666.json：MOV 再生成误播新产出）
+
+- **问题**：MOV 中间节点（imagePreview=480p h264 原视频，可播）再生成后，**播放的**变成与下游节点一样的新产出——用户误以为又被覆盖。实测数据层完好（imagePreview 未覆盖，§16.26 已生效），但 gp.transcodedVideoUrl 记录的是**本次新产出**的转码版，§16.24 播放逻辑"转码版无条件优先 imagePreview"导致误播新产出。
+- **根因**：gp.transcodedVideoUrl 的语义在 MOV 再生成场景错位——它既是"本次运行产出的转码版"（gp 快照语义），又被播放逻辑当作"imagePreview 的转码版"（播放语义）；INPUT/PROCESSOR 上两者统一（imagePreview=本次产出），MOV 再生成（imagePreview=原视频≠本次产出）则分裂。
+- **修复**：
+  - `utils/taskStatusVideoUrl.ts` 新增 `isTranscodedPairOfOriginal(transcoded, original)`：同源校验（网关命名规律 `transcode-{uuid}.mp4 ↔ {uuid}.mp4`，实测 5 例稳定）。
+  - `components/nodes/CustomNode.tsx` 播放源：imagePreview 为视频时转码版仅同源才优先，不同源回退 imagePreview；imagePreview 非视频（INPUT/PROCESSOR 图片主图）保持现状直接用。
+  - `components/FlowEditor.tsx`：Node Details 主预览替换、分镜连播（5607）同步加同源校验；**运行节点 gp.transcodedVideoUrl 不覆盖旧值**（MOV/OUTPUT 已有值时保留"imagePreview 原片的转码版"，INPUT/PROCESSOR 始终写入本次产出）。
+- **测试**：`transcoded-video-url-test.ts` 追加场景 3（同源校验 9 断言，含 6666.json 错位场景），共 21/21 ✅。
+- **验证**：`npm run build` ✅；`npm run test:gate` 全绿 ✅；服务已重启 3001 ✅。
+- **风险**：🟢 低——仅读取优先级修正；MOV 首次生成（转码版与原片同源）的 §16.24 播放意图完整保留。
 

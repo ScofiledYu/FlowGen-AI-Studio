@@ -1592,15 +1592,17 @@ export async function createViduVideoTask(options: ViduVideoTaskOptions): Promis
 
 /** 豆包 Seedance 1.5 Pro 图生视频 API（参考 doubao_video_test.py） */
 export interface DoubaoSeedanceVideoTaskOptions {
-  /** Seedance 模型：1.5 / 2.0 FAST / 2.0（高质量） */
-  model?: 'DOUBAO_SEEDANCE_1_5_PRO' | 'DOUBAO_SEEDANCE_2_0_FAST' | 'DOUBAO_SEEDANCE_2_0';
+  /** Seedance 模型：1.5 / 2.0 FAST / 2.0（高质量）/ 2.0 4K / 2.5 */
+  model?: 'DOUBAO_SEEDANCE_1_5_PRO' | 'DOUBAO_SEEDANCE_2_0_FAST' | 'DOUBAO_SEEDANCE_2_0' | 'DOUBAO_SEEDANCE_2_0_4K' | 'DOUBAO_SEEDANCE_2_5';
+  /** Seedance 2.5 专有：normal 常规生成（默认）/ video_edit 视频编辑 / video_extend 视频延长；其他模型按 normal 处理 */
+  taskType?: 'normal' | 'video_edit' | 'video_extend';
   prompt?: string;
   negativePrompt?: string;
   /** 图生视频：首帧图片 URL（必填，需先上传）；文生/参考生视频可不传 */
   startImage?: string;
   /** 图生视频：尾帧图片 URL（可选） */
   endImage?: string;
-  resolution?: '480p' | '720p' | '1080p';
+  resolution?: '480p' | '720p' | '1080p' | '4k';
   /** ratio 由网关校验：图生时需与首帧比例一致；参考生视频建议与参考视频一致 */
   ratio?: string; // 21:9、16:9、4:3、1:1、3:4、9:16、9:21
   /** 2.0 支持 2～15s；1.5 常用 5/10。这里统一用 number 透传。 */
@@ -1614,6 +1616,8 @@ export interface DoubaoSeedanceVideoTaskOptions {
   referenceVideos?: string[];
   /** Seedance 2.0 参考生视频：参考图片 URL（先上传） */
   referenceImages?: string[];
+  /** Seedance 2.0/2.5 专有：联网搜索工具（AiTop 文档 tools.type=web_search）；不传即关闭 */
+  tools?: { type?: 'web_search' };
   generateNum?: number;
   clientBatchIndex?: number;
   clientBatchTotal?: number;
@@ -1630,7 +1634,7 @@ export async function createDoubaoSeedanceVideoTask(options: DoubaoSeedanceVideo
     negativePrompt,
     startImage,
     endImage,
-    resolution = '720p',
+    resolution = '720p' as '480p' | '720p' | '1080p' | '4k',
     ratio = '1:1',
     duration = 5,
     camerafixed = false,
@@ -1639,23 +1643,33 @@ export async function createDoubaoSeedanceVideoTask(options: DoubaoSeedanceVideo
     referenceAudios,
     referenceVideos,
     referenceImages,
+    taskType,
+    tools,
     generateNum = 1,
     clientBatchIndex,
     clientBatchTotal,
   } = options;
-  const modelLabel = model === 'DOUBAO_SEEDANCE_1_5_PRO' ? 'Seedance 1.5 Pro' : 'Seedance 2.0';
+  const modelLabel =
+    model === 'DOUBAO_SEEDANCE_1_5_PRO'
+      ? 'Seedance 1.5 Pro'
+      : model === 'DOUBAO_SEEDANCE_2_5'
+        ? 'Seedance 2.5'
+        : model === 'DOUBAO_SEEDANCE_2_0_4K'
+          ? 'Seedance 2.0 4K'
+          : 'Seedance 2.0';
 
   // 兼容：1.5 pro 仍必须有首帧；2.0 的文生/参考生视频允许不传 startImage
   if (model === 'DOUBAO_SEEDANCE_1_5_PRO' && !startImage) {
     return null;
   }
-  // 参考音频不能单独使用：必须同时提供 referenceVideos
+  // 参考音频不能完全单独使用（既无参考视频也无参考图片）：AiTop 文档允许「文本 + 图片 + 音频」组合
   if (
     referenceAudios &&
     referenceAudios.length > 0 &&
-    (!referenceVideos || referenceVideos.length === 0)
+    (!referenceVideos || referenceVideos.length === 0) &&
+    (!referenceImages || referenceImages.length === 0)
   ) {
-    throw new Error(`**❌ ${modelLabel} 参数错误**\n**错误：** referenceAudios 不能单独使用，必须同时提供 referenceVideos`);
+    throw new Error(`**❌ ${modelLabel} 参数错误**\n**错误：** referenceAudios 不能单独使用，必须同时提供 referenceVideos 或 referenceImages`);
   }
 
   const payload: Record<string, unknown> = {
@@ -1663,7 +1677,8 @@ export async function createDoubaoSeedanceVideoTask(options: DoubaoSeedanceVideo
     generateNum,
     prompt: prompt || '镜头缓缓推进，人物自然走动',
     parameters: {
-      resolution,
+      // AiTop 网关 4K 枚举为大写「4K」（小写 4k 被拒：20001 该模型不支持该参数组合，2026-08-25 实测）
+      resolution: resolution === '4k' ? '4K' : resolution,
       ratio,
       duration,
       seed,
@@ -1679,6 +1694,14 @@ export async function createDoubaoSeedanceVideoTask(options: DoubaoSeedanceVideo
   if (referenceAudios && referenceAudios.length > 0) payload.referenceAudios = referenceAudios;
   if (referenceVideos && referenceVideos.length > 0) payload.referenceVideos = referenceVideos;
   if (referenceImages && referenceImages.length > 0) payload.referenceImages = referenceImages;
+  // Seedance 2.5 专有：taskType 为顶层参数，仅 2.5 传（其他模型按 normal 处理，不传）
+  if (model === 'DOUBAO_SEEDANCE_2_5' && taskType && taskType !== 'normal') {
+    payload.taskType = taskType;
+  }
+  // Seedance 2.0/2.5 专有：联网搜索工具（tools.type=web_search）；面板「联网搜索」开关驱动
+  if (tools && tools.type) {
+    payload.tools = tools;
+  }
   if (clientBatchTotal != null && clientBatchTotal > 1) {
     payload.clientBatchIndex = clientBatchIndex ?? 1;
     payload.clientBatchTotal = clientBatchTotal;
