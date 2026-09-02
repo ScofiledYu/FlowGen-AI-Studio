@@ -1,15 +1,31 @@
 # FlowGen AI Studio
 
-基于 React + ReactFlow 的可视化 AI 工作流编辑器：画布编排、多模型视频/图像生成、Node Inspector、侧边栏多模型聊天（Gemini / Claude / Qwen）、MySQL 关系型存储与 Windows/Nginx 生产部署。
+基于 React + ReactFlow 的可视化 AI 工作流编辑器：画布编排、多模型视频/图像生成（集成 **AITOP100 API**）、Node Inspector、侧边栏多模型聊天（Gemini / Claude / Qwen）、MySQL 关系型存储与 Windows/Nginx 生产部署。
 
 > 从 GitHub 克隆时，本工程位于仓库子目录 `FlowGen-AI-Studio/flowgen-ai-studio/`。请先 `cd` 到该目录再执行下文命令。仓库级说明见上级 [README](../README.md)。
+
+---
+
+## 项目标准说明书
+
+**修改任何代码前必读 [skill.md](skill.md)** ——项目唯一标准说明书，记录：
+- 全部功能用途、入参、出参、调用示例
+- 模块稳定性分级（S/A/B/C 级，**S 级禁改业务逻辑/接口/字段语义**）
+- 历史迭代优化点与风险说明
+- 回归门禁规则
+
+每次新增/修改功能、bug 修复完成后，**必须同步更新 skill.md**（补充变更记录、风险说明）。
 
 ---
 
 ## 功能概览
 
 - 可视化节点编排（输入 / 处理 / 输出 / 视频节点）
-- 多模型生成：可灵、即梦、Vidu、Seedance、Nano 等
+- 多模型生成：可灵（含 Omni 多参考）、即梦、Vidu、Seedance 2.0/2.5（含 4K 版）、Nano Banana 等
+- **AITOP100 API 集成**：任务创建、轮询、转码版回写、COS 视频兜底
+- **Seedance 模型族**：@元素引用、视频编辑、视频延长、图生视频；2.5 面板已移除联网功能
+- **4K H.265 视频播放**：网关转码版自动轮询（等待上限 8 分钟 + 5 次自动重试）+ 同源校验防止"张冠李戴"
+- **MOV 中间节点链式生成**：已有成片保留原视频，新产出写入下游节点，避免刷新覆盖
 - **Node Inspector**：参考图/视频、参数、生成结果预览
 - **聊天面板**：会话历史、联网检索、思考过程卡片、主模型失败自动 fallback（Claude/Gemini → Qwen）
 - 项目 / 用户 workspace 隔离，支持 **MySQL relational** 持久化
@@ -127,6 +143,26 @@ npm run build && npm start
 
 ---
 
+## 门禁与回归测试
+
+| 命令 | 说明 |
+|------|------|
+| `npm run test:gate` | **日常门禁**（~20s）：覆盖面板/引用/Details/运行链路，改 A 级模块必跑 |
+| `npm run test:transcoded-video-url` | 4K 转码版同源校验（防"张冠李戴"） |
+| `npm run test:mov-recovery-keep-original` | MOV 恢复保留原视频防回归 |
+| `npm run test:seedance25-api-mock` | Seedance 2.5 taskType/参数合规 |
+| `npm run test:delivery-all` | 全量引用交付链路回归（发版前） |
+| `npm run test:final` | 引用 + Details + 全模型最终测试 |
+
+**发版门禁**（用户说"发布/发版/上线"时自动执行）：
+```bash
+npm run test:gate → npm run test:project-json-details → npm run test:delivery-all → npm run build
+```
+
+修改 panel/generation results/drag-and-drop/Node Details 必须 `test:gate` 通过。新增专项测试需同步加入 `scripts/test-gate.mjs`。
+
+---
+
 ## 推送到 GitHub（本机开发目录）
 
 若使用配套克隆目录 `D:\aaa\_fg_push_repo`：
@@ -161,6 +197,10 @@ git push origin main
 - **下载视频 403**：签名 URL 过期或防盗链，走服务端代理/任务下载。
 - **Node 启动 `ERR_MODULE_NOT_FOUND`**：勿随意整包替换 `node_modules`；用与 `package-lock.json` 匹配的离线包或 `npm ci`。
 - **端口占用**：默认 `3001`，`netstat -ano | findstr :3001` 查占用进程。
+- **4K 视频无法播放**：Seedance 2.0 4K 为 H.265，浏览器不直接支持。网关会异步转码为 H.264，前端轮询写入 `gp.transcodedVideoUrl`。若 6 分钟仍未就绪，可能超过等待上限，刷新后会触发恢复重试。播放源已加同源校验，避免转码版"张冠李戴"。
+- **刷新后中间 MOV 节点视频被覆盖**：MOV 节点已有成片时，恢复逻辑会新建下游节点写入新产出，不再覆盖原视频（[shouldWriteRecoveryIntoRunNode](utils/runRecovery.ts)）。存量被覆盖的节点可从 `gp.referenceMovs` 或上游节点手动恢复 `imagePreview`。
+- **Seedance 2.5 任务报"不支持该参数组合"**：2.5 不支持 `tools` 参数，面板已隐藏联网开关；2.0 4K 的 `resolution` 必须大写 `4K`（网关大小写敏感）。
+- **Node Details 引用图与面板标签不一致**：仅显示 prompt 中 `@` 显式引用的素材；`preferPromptLabels` 仅在标签全为通用名（图片1/主图）时重排，含具体资产名（如"石头"）不重排。
 
 ---
 
